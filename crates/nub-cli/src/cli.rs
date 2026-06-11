@@ -5135,12 +5135,18 @@ mod tests {
         // `["--","a","b","c"]`: the first `--` after the script positional is the
         // conventional end-of-options separator (npm/pnpm/yarn/cargo all drop it).
         // Only that first `--` is consumed; a later `--` is a literal argument.
-        let (_, suffix) =
-            split_subcommand_argv(["run", "build", "--", "a", "b", "c"].map(String::from).to_vec());
+        let (_, suffix) = split_subcommand_argv(
+            ["run", "build", "--", "a", "b", "c"]
+                .map(String::from)
+                .to_vec(),
+        );
         assert_eq!(suffix, ["a", "b", "c"]);
 
-        let (_, suffix) =
-            split_subcommand_argv(["run", "build", "--", "a", "--", "b"].map(String::from).to_vec());
+        let (_, suffix) = split_subcommand_argv(
+            ["run", "build", "--", "a", "--", "b"]
+                .map(String::from)
+                .to_vec(),
+        );
         assert_eq!(suffix, ["a", "--", "b"]);
 
         // No separator: args forward verbatim, including a literal `--` mid-stream.
