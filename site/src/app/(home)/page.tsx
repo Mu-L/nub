@@ -846,9 +846,9 @@ function NubxBand() {
 
 const COMPAT = [
   { name: 'Node 25.8', rate: 100, tests: '4,366 / 4,366', us: false, dim: false },
-  { name: 'Nub', rate: 98.7, tests: '4,309 / 4,366', us: true, dim: false },
+  { name: 'Nub', rate: 98.7, tests: '4,308 / 4,366', us: true, dim: false },
   { name: 'Deno 2.8', rate: 76.7, tests: '3,347 / 4,366', us: false, dim: true },
-  { name: 'Bun 1.3.14', rate: 40.2, tests: '1,754 / 4,366', us: false, dim: true },
+  { name: 'Bun 1.3.14', rate: 40.2, tests: '1,756 / 4,366', us: false, dim: true },
 ];
 
 function Compatibility() {
