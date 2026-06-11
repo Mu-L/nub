@@ -2869,13 +2869,20 @@ fn is_node_bin(path: &Path) -> bool {
         _ => {}
     }
     // Peek the shebang: `#!/usr/bin/env node`, `#!/usr/local/bin/node`, etc.
+    // Match only on the shebang LINE — a `#!/bin/sh` shim (e.g. aube's `.bin`
+    // entries) routinely names node in its body (`NODE_PATH=…`, `exec …/node …`),
+    // and running such a script through `node` parses sh-as-JS (SyntaxError).
     let Ok(mut f) = std::fs::File::open(path) else {
         return false;
     };
     let mut buf = [0u8; 128];
     let n = std::io::Read::read(&mut f, &mut buf).unwrap_or(0);
     let head = &buf[..n];
-    head.starts_with(b"#!") && head.windows(4).any(|w| w == b"node")
+    let shebang = match head.iter().position(|&b| b == b'\n') {
+        Some(i) => &head[..i],
+        None => head,
+    };
+    shebang.starts_with(b"#!") && shebang.windows(4).any(|w| w == b"node")
 }
 
 /// Build the OS launcher for a non-node `.bin` entry. Windows `.cmd`/`.bat` need
@@ -4880,6 +4887,36 @@ mod tests {
         // Name the async entry point so the seam (not just the options struct)
         // must resolve and link.
         let _entry = aube::commands::install::run;
+    }
+
+    #[test]
+    fn is_node_bin_classifies_by_shebang_line_not_body() {
+        // aube's `.bin` entries are `#!/bin/sh` shim scripts whose BODY mentions
+        // node (`NODE_PATH=…`, `exec "$basedir/node" …`). Those must run via the sh
+        // interpreter (the kernel honors the shebang), NOT through `node <shim>` —
+        // feeding the sh script to node throws `SyntaxError: Invalid or unexpected
+        // token`. is_node_bin must key off the shebang LINE naming node, not any
+        // occurrence of "node" in the first 128 bytes.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let sh_shim = dir.path().join("cowsay");
+        std::fs::write(
+            &sh_shim,
+            "#!/bin/sh\n# aube-bin-shim v1\nexport NODE_PATH=\"$basedir/..\"\nexec \"$basedir/node\" \"$basedir/../cli.js\" \"$@\"\n",
+        )
+        .expect("write sh shim");
+        assert!(
+            !is_node_bin(&sh_shim),
+            "#!/bin/sh shim that references node in its body must NOT run under node"
+        );
+
+        let node_shim = dir.path().join("tsc");
+        std::fs::write(&node_shim, "#!/usr/bin/env node\nconsole.log(1)\n")
+            .expect("write node shim");
+        assert!(
+            is_node_bin(&node_shim),
+            "#!/usr/bin/env node entry must run under node"
+        );
     }
 
     #[cfg(unix)]
