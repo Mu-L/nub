@@ -1452,9 +1452,13 @@ mod tests {
                 .find(|(key, _)| key == OsString::from(k).as_os_str())
                 .map(|(_, v)| v.to_string_lossy().into_owned())
         };
+        let expected_shim_node = std::path::Path::new("/shim")
+            .join(if cfg!(windows) { "node.exe" } else { "node" })
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(
             find("NODE").as_deref(),
-            Some("/shim/node"),
+            Some(expected_shim_node.as_str()),
             "NODE must point at the shim, not the raw binary"
         );
         assert_eq!(

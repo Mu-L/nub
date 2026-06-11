@@ -1210,6 +1210,7 @@ fn user_node_options_localstorage_file_is_not_clobbered() {
 ///      duplicate boolean is idempotent; must exit 0 with the feature ENABLED.
 ///   4. a value-bearing user `--disable-warning=DeprecationWarning` alongside nub's
 ///      `=ExperimentalWarning` — repeatable/additive; must exit 0, nub not stomping.
+///
 /// All four must exit 0 (the directive's "no crash" half) AND land the expected
 /// feature state (the "user disablement wins" half).
 #[test]
