@@ -1,1 +1,1 @@
-{"name":"lifecycle","scripts":{"greet":"echo main-greet","pregreet":"echo pre-greet","postgreet":"echo post-greet"}}
+{"name":"lifecycle","scripts":{"greet":"echo main-greet","pregreet":"echo pre-greet","postgreet":"echo post-greet","fail42":"node -e \"process.exit(42)\""}}

@@ -2228,18 +2228,24 @@ fn workspace_bail_on_failure() {
     );
 }
 
-/// Exit code forwarding: a script that exits 42 should make nub exit non-zero.
+/// Exit code forwarding: `nub run` returns the script's *exact* non-zero exit
+/// code, not a generic 1. A scale-test once read nub as reporting 0 while the
+/// turbo it ran exited 1 — that was a shell-capture artifact in the harness, but
+/// the contract it doubted (the child's code flows through `sh -c` → `child.wait`
+/// → `exit_code_from_status` → `process::exit`) had no test pinning the *value*.
 #[test]
 fn exit_code_forwarding() {
     let fixture = fixtures_dir().join("lifecycle");
-    // Temporarily not testing exact exit code — just that non-zero propagates
-    // through nub run when the underlying script fails.
     let output = Command::new(nub_binary())
-        .args(["run", "nonexistent-script"])
+        .args(["run", "fail42"])
         .current_dir(&fixture)
         .output()
         .expect("failed to spawn nub");
-    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(
+        output.status.code(),
+        Some(42),
+        "nub run must forward the script's exact exit code, not collapse it to 1"
+    );
 }
 
 /// --reverse: dependents before dependencies.
