@@ -135,6 +135,59 @@ pub fn provision_pm(
     })
 }
 
+/// Provision an EXACT, already-resolved version into the store from a tarball the
+/// caller has **already downloaded and verified** — the single-download path for
+/// `nub pm use` / `nub pm update` (the pin flow that fetched the tarball once to
+/// compute the `+sha512.<hex>` pin hash, and feeds those same bytes in here rather
+/// than re-downloading them; the double-download this kills was the cold-cache bug,
+/// 2026-06-11).
+///
+/// Same cache posture and store layout as [`provision_pm`], minus the network: the
+/// exact version cache-checks `<store_root>/pm/<pm>/<version>/` first and returns a
+/// silent hit (a warm `use` re-pin stays zero-cost — the lockfile/declaration
+/// writes the caller does afterward are unchanged); a miss extracts+places the
+/// supplied `tarball` (already integrity-verified by the caller, so this path does
+/// NOT re-verify — see the contract below) into the version-addressed store.
+///
+/// CONTRACT — the caller MUST, before calling:
+///   1. resolve `dist` against the same registry config provisioning would use
+///      (`registry_config(project_root)` — the authed/mirror path), and
+///   2. download `tarball` from `dist.tarball` and verify it against
+///      `dist.integrity` (and, where a pin hash exists, it was computed from these
+///      same verified bytes). This function trusts the file; it re-verifies
+///      nothing. It exists ONLY to avoid a second download of bytes the caller
+///      already has and already verified — every other caller must keep using the
+///      network [`provision_pm`] entry, which downloads + verifies itself.
+///
+/// No `Using…/Installing…/Installed…` block is printed: the caller (`nub pm use`)
+/// already announced the fetch with its own `Fetching <pm> <version> (N MB)…` line,
+/// so a second announce here would duplicate it. Output stays the caller's.
+pub fn provision_pm_from_tarball(
+    pm: super::Pm,
+    dist: &VersionDist,
+    tarball: &Path,
+    store_root: &Path,
+) -> Result<ProvisionedPm> {
+    let pm_store = store_root.join("pm").join(pm.to_string());
+    let final_dir = pm_store.join(&dist.version);
+    let bin = final_dir.join("package").join(&dist.bin_subpath);
+
+    // Cache hit on the exact resolved version → done, zero work (the warm re-pin
+    // case: `use` on a version already in the store extracts nothing).
+    if bin.is_file() {
+        return Ok(ProvisionedPm {
+            bin,
+            version: dist.version.clone(),
+        });
+    }
+
+    place_verified_tarball(pm, dist, &pm_store, &final_dir, tarball)?;
+    Ok(ProvisionedPm {
+        bin,
+        version: dist.version.clone(),
+    })
+}
+
 /// The runnable bin of an already-installed `<pm_store>/<version>/`, or `None`
 /// when the version isn't cached (or its install is unreadable/incomplete —
 /// callers then take the network path, whose installer treats an existing
@@ -242,12 +295,57 @@ fn install(
     registry::verify_integrity(&tarball, &dist.integrity)
         .with_context(|| format!("verifying {pm} {}", dist.version))?;
 
+    extract_and_place(pm, dist, pm_store, final_dir, &tarball)?;
+
+    // \r + clear-to-EOL rewrites the Installing line on a TTY (it was printed
+    // without a newline there); non-TTY just gets a third line.
+    let rewrite = if tty { "\r\x1b[K" } else { "" };
+    eprintln!(
+        "{rewrite}Installed in {:.1}s",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+/// Extract a verified `.tgz` into the store and atomically place it — the tail
+/// shared by the networked [`install`] (which downloads + verifies first) and the
+/// pre-downloaded [`provision_pm_from_tarball`] path (whose caller already
+/// downloaded + verified). VERIFICATION IS THE CALLER'S JOB: this runs no integrity
+/// check, so every path into it must have verified the tarball against
+/// `dist.integrity` (and any pin hash) first. The extraction normalizes the
+/// publisher's top dir to `package/` and the rename keeps a concurrent install's
+/// result if one beat us.
+fn extract_and_place(
+    pm: super::Pm,
+    dist: &VersionDist,
+    pm_store: &Path,
+    final_dir: &Path,
+    tarball: &Path,
+) -> Result<()> {
+    // A sibling work dir on the same filesystem → the place is an atomic rename.
+    // (The networked `install` already has one for the download; this stands up
+    // its own so the pre-downloaded path is self-contained.) Guard cleans up.
+    let work = pm_store.join(format!(
+        ".tmp-place-{}-{}",
+        dist.version,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).with_context(|| {
+        format!(
+            "cannot create the package-manager store dir {} — its parent is missing or \
+             read-only (set XDG_CACHE_HOME to a writable path)",
+            work.display()
+        )
+    })?;
+    let _guard = WorkGuard(work.clone());
+
     // Extract into a clean sibling, then normalize its single top dir to
     // `package/`; renaming `staging` into place makes the install root
     // `<final_dir>/package/…` (the bin path callers expect) regardless of the
     // publisher's tarball root.
     let staging = work.join("staging");
-    let top = extract_tgz(&tarball, &staging)?;
+    let top = extract_tgz(tarball, &staging)?;
     normalize_top_dir(&staging, &top)?;
 
     // Atomic place. If a concurrent run already installed it, keep theirs.
@@ -265,15 +363,20 @@ fn install(
             }
         }
     }
-
-    // \r + clear-to-EOL rewrites the Installing line on a TTY (it was printed
-    // without a newline there); non-TTY just gets a third line.
-    let rewrite = if tty { "\r\x1b[K" } else { "" };
-    eprintln!(
-        "{rewrite}Installed in {:.1}s",
-        started.elapsed().as_secs_f64()
-    );
     Ok(())
+}
+
+/// The silent (no announce, no `Installed` line) extract+place for the
+/// pre-downloaded pin path — a thin name over [`extract_and_place`] so
+/// [`provision_pm_from_tarball`] reads at the same level as `install`.
+fn place_verified_tarball(
+    pm: super::Pm,
+    dist: &VersionDist,
+    pm_store: &Path,
+    final_dir: &Path,
+    tarball: &Path,
+) -> Result<()> {
+    extract_and_place(pm, dist, pm_store, final_dir, tarball)
 }
 
 /// Rename an extracted tarball's single top-level dir to `package/` when the
@@ -483,6 +586,72 @@ mod tests {
         let prov = provision_pm(&pin, &store, &store, None).expect("offline cache hit");
         assert_eq!(prov.version, "9.5.0");
         assert!(prov.bin.ends_with("9.5.0/package/bin/pnpm.cjs"));
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    /// Author a `package/`-rooted pnpm-shaped `.tgz` (gzip + tar) on disk — what
+    /// the registry serves and what `nub pm use` downloads once, then hands to
+    /// [`provision_pm_from_tarball`]. Same shape `extract.rs` authors in its own
+    /// tests; restated here (three lines) rather than crossing the module seam.
+    fn write_pnpm_tgz(archive: &Path) {
+        use flate2::{Compression, write::GzEncoder};
+        let manifest = br#"{ "name": "pnpm", "bin": { "pnpm": "bin/pnpm.cjs" } }"#;
+        let bin = b"// fake pnpm launcher\n";
+        let gz = GzEncoder::new(std::fs::File::create(archive).unwrap(), Compression::fast());
+        let mut tar = tar::Builder::new(gz);
+        for (path, body) in [
+            ("package/package.json", manifest.as_slice()),
+            ("package/bin/pnpm.cjs", bin.as_slice()),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o644);
+            tar.append_data(&mut h, path, body).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn provision_from_tarball_installs_without_a_second_download_and_warm_hits_silently() {
+        // The single-download contract: `nub pm use`/`update` fetch + verify the
+        // tarball ONCE (for the pin hash), then install into the store FROM THAT
+        // FILE — never re-downloading. This is the pre-downloaded entry. The
+        // dead-registry `.npmrc` in the store proves no network is consulted: any
+        // fetch would error against 127.0.0.1:1, so a passing run means the supplied
+        // tarball alone produced a runnable install.
+        let store = offline_store_with("from-tarball", "0.0.0-unused"); // seeds a dead .npmrc
+        let _ = std::fs::remove_dir_all(store.join("pm")); // drop the seed install; we install fresh
+
+        let tgz = store.join("pnpm-9.12.0.tgz");
+        write_pnpm_tgz(&tgz);
+        let dist = VersionDist {
+            version: "9.12.0".to_string(),
+            // A bogus tarball URL: if the pre-downloaded path ever tried to fetch,
+            // it would hit this and fail — it must not.
+            tarball: "http://127.0.0.1:1/never-fetched.tgz".to_string(),
+            integrity: registry::Integrity::Sha512("unused-caller-already-verified".to_string()),
+            bin_subpath: PathBuf::from("bin/pnpm.cjs"),
+        };
+
+        // Cold: extracts the supplied tarball into the version-addressed store.
+        let cold = provision_pm_from_tarball(Pm::Pnpm, &dist, &tgz, &store)
+            .expect("install from the pre-downloaded tarball, no network");
+        assert_eq!(cold.version, "9.12.0");
+        assert!(
+            cold.bin.ends_with("9.12.0/package/bin/pnpm.cjs") && cold.bin.is_file(),
+            "the installed bin lands at the store layout and is runnable"
+        );
+
+        // Warm re-pin: the version is already in the store, so this is a silent
+        // cache hit that extracts nothing — it doesn't even need the tarball. Delete
+        // the file first to prove the warm path never touches it.
+        std::fs::remove_file(&tgz).unwrap();
+        let warm = provision_pm_from_tarball(Pm::Pnpm, &dist, &tgz, &store)
+            .expect("warm cache hit needs neither network nor the tarball");
+        assert_eq!(
+            warm, cold,
+            "the warm hit returns the identical bin + version"
+        );
         let _ = std::fs::remove_dir_all(&store);
     }
 

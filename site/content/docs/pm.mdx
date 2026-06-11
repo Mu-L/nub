@@ -52,6 +52,7 @@ $ nub pm use pnpm
 Fetching pnpm 11.5.3 (4 MB)...
 using pnpm@11.5.3
   package.json: packageManager = pnpm@11.5.3 (+sha512)
+  package.json: devEngines.packageManager = { name: "pnpm", version: "^11.5.3", onFail: "warn" }
   pnpm-lock.yaml: written (converted from package-lock.json)
   package-lock.json: removed (migrated)
 ```
@@ -71,9 +72,6 @@ Bump the pin: resolve the newest version satisfying the `devEngines` range (or t
 ```sh
 $ nub pm update
 Fetching pnpm 9.15.9 (4 MB)...
-Using pnpm 9.15.9
-Installing... (4 MB)
-Installed in 1.8s
 updated pnpm 9.15.4 → 9.15.9
 ```
 

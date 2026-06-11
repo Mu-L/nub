@@ -3984,14 +3984,14 @@ fn split_pm_arg(arg: &str) -> Result<(&str, Option<&str>)> {
 ///
 ///   1. resolve the raw spec (exact / range / dist-tag) against the registry to
 ///      a concrete version — never a range into `packageManager`;
-///   2. fetch the resolved tarball, verify it against the registry dist
+///   2. fetch the resolved tarball ONCE, verify it against the registry dist
 ///      integrity, and sha512 the verified bytes (pin-implies-fetch: the
 ///      committed hash is computed from the artifact, never copied out of
 ///      registry metadata, so the pin is a registry-independent trust anchor);
-///   3. provision the exact version into nub's store (a cache hit is free; a
-///      fresh install re-verifies its download against the just-computed hash).
-///      Skipped for bun: nub declares it but doesn't provision or run it
-///      (out of scope for v0.x);
+///   3. provision the exact version into nub's store FROM THAT SAME verified
+///      tarball — no second download (a warm store is a silent cache hit that
+///      extracts nothing). Skipped for bun: nub declares it but doesn't provision
+///      or run it (out of scope for v0.x);
 ///   4. write the declaration via [`nub_core::pm::resolve::write_declared_pm`]
 ///      — `packageManager: <name>@<exact>+sha512.<hex>` plus, when
 ///      `maintain_dev_engines`, `devEngines.packageManager {name, ^range,
@@ -4001,10 +4001,12 @@ fn split_pm_arg(arg: &str) -> Result<(&str, Option<&str>)> {
 ///      shape, which moves with the pin.
 ///
 /// yarn >= 2 (Berry) refuses before anything is written — berry isn't the npm
-/// `yarn` tarball, so a pin nub can't provision would be a lie. The double
-/// download on an uncached version (hash fetch + provision's own fetch) is
-/// accepted: use/update are rare, explicit, online actions, and
-/// `provision_pm` owns its download internally.
+/// `yarn` tarball, so a pin nub can't provision would be a lie. A cold-cache run
+/// downloads the tarball EXACTLY ONCE: [`fetch_verify_and_hash_tarball`] fetches +
+/// verifies it for the pin hash, and [`provision::provision_pm_from_tarball`]
+/// installs from that same verified file rather than re-downloading (the prior
+/// double download — hash fetch + provision's own fetch — was a real cold-cache
+/// bug, fixed 2026-06-11).
 fn resolve_provision_declare(
     name: &str,
     spec: &str,
@@ -4051,20 +4053,27 @@ fn resolve_provision_declare(
         other => unreachable!("split_pm_arg admits only npm/pnpm/yarn/bun, got {other}"),
     };
 
-    let hex = fetch_and_hash_tarball(name, &dist, cfg.auth.as_ref())
+    // ONE download serves both the pin hash and the store install: fetch + verify
+    // the tarball here, compute the sha512 from the verified bytes, then hand that
+    // same file to the provisioner instead of letting it re-download. (`dist` was
+    // resolved against the project's authed/mirror registry config above — the
+    // contract `provision_pm_from_tarball` requires.)
+    let fetched = fetch_verify_and_hash_tarball(name, &dist, cfg.auth.as_ref())
         .map_err(|e| humanize_transport_error(e, &cfg.base))?;
+    let hex = &fetched.hex;
 
     if let Some(pm) = pm {
         let store = pm_store_root()?;
-        let pin = resolve::PmPin {
-            pm,
-            version: Some(format!("{}+sha512.{hex}", dist.version)),
-        };
-        provision::provision_pm(&pin, &store, cwd, None)
+        // No pin-hash re-verify is needed: the tarball was already checked against
+        // dist.integrity, and `hex` was computed from those exact bytes, so a pin
+        // check here would compare the file to its own digest. The provisioner
+        // extracts from `fetched.path` and prints nothing — the `Fetching…` line
+        // above is the whole install announce.
+        provision::provision_pm_from_tarball(pm, &dist, &fetched.path, &store)
             .map_err(|e| humanize_transport_error(e, &cfg.base))?;
     }
 
-    let write = resolve::write_declared_pm(name, &dist.version, &hex, cwd, maintain_dev_engines)?;
+    let write = resolve::write_declared_pm(name, &dist.version, hex, cwd, maintain_dev_engines)?;
     Ok((dist.version, write))
 }
 
@@ -4207,24 +4216,45 @@ fn run_pm_use(name: &str, spec: &str, cwd: &Path) -> Result<i32> {
     Ok(0)
 }
 
-/// Download the resolved tarball to a temp file, verify it against the registry
-/// dist integrity, and return the sha512 hex of the verified bytes — the digest
-/// `write_declared_pm` commits. This fetch happens even when the version is already
-/// in nub's store: an honest hash needs the bytes (pin-implies-fetch), and the
-/// store keeps extracted trees, not tarballs.
-fn fetch_and_hash_tarball(
+/// The verified tarball of a resolved PM version, held on disk so the SAME bytes
+/// serve both the pin hash and the store install — the single-download artifact of
+/// the pin flow (the cold-cache double download was the bug: hash fetch + provision
+/// fetch downloaded identical bytes twice, 2026-06-11). `_dir` is the owning temp
+/// dir: dropping it deletes `path`, so a `FetchedTarball` must outlive every use of
+/// `path`.
+struct FetchedTarball {
+    /// sha512 hex of the verified bytes — the digest `write_declared_pm` commits.
+    hex: String,
+    /// The on-disk tarball, already verified against `dist.integrity`. Fed to
+    /// [`provision::provision_pm_from_tarball`] so the store install re-uses these
+    /// bytes instead of re-downloading.
+    path: PathBuf,
+    /// Owns `path`'s lifetime — kept as a field, never read.
+    _dir: tempfile::TempDir,
+}
+
+/// Download the resolved tarball ONCE to a temp file, verify it against the registry
+/// dist integrity, and return the verified file plus the sha512 hex of its bytes —
+/// the digest `write_declared_pm` commits. The fetch happens even when the version
+/// is already in nub's store (an honest hash needs the bytes: pin-implies-fetch, and
+/// the store keeps extracted trees, not tarballs); the returned file then feeds the
+/// store install directly, so a cold-cache `use` downloads exactly once. The
+/// `Fetching <pm> <version> (N MB)…` line IS the install's progress announce — the
+/// provision-from-tarball path that follows prints nothing, so there is no duplicate
+/// `Using/Installing` block.
+fn fetch_verify_and_hash_tarball(
     name: &str,
     dist: &nub_core::pm::registry::VersionDist,
     auth: Option<&nub_core::version_management::download::Auth>,
-) -> Result<String> {
+) -> Result<FetchedTarball> {
     use sha2::{Digest, Sha512};
 
-    let tmp = tempfile::tempdir().context("creating a temp dir for the pin fetch")?;
-    let tarball = tmp.path().join("pm.tgz");
+    let dir = tempfile::tempdir().context("creating a temp dir for the pin fetch")?;
+    let path = dir.path().join("pm.tgz");
     let mut announced = false;
     nub_core::version_management::download::download_to_file_auth(
         &dist.tarball,
-        &tarball,
+        &path,
         auth,
         |_done, total| {
             if !announced {
@@ -4239,11 +4269,15 @@ fn fetch_and_hash_tarball(
         },
     )
     .with_context(|| format!("downloading {name} {}", dist.version))?;
-    nub_core::pm::registry::verify_integrity(&tarball, &dist.integrity)
+    nub_core::pm::registry::verify_integrity(&path, &dist.integrity)
         .with_context(|| format!("verifying {name} {}", dist.version))?;
-    let bytes =
-        std::fs::read(&tarball).with_context(|| format!("reading {}", tarball.display()))?;
-    Ok(nub_core::pm::hex_lower(&Sha512::digest(&bytes)))
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let hex = nub_core::pm::hex_lower(&Sha512::digest(&bytes));
+    Ok(FetchedTarball {
+        hex,
+        path,
+        _dir: dir,
+    })
 }
 
 /// The leading numeric major of a version/spec (`4.2.2` → 4, `9` → 9; `^9` /
