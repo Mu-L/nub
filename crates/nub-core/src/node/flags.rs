@@ -22,11 +22,34 @@ const MIN_DISABLE_WARNING: NodeVersion = NodeVersion::new(20, 11, 0);
 /// on this floor (the compat tier 18.19–22.3 simply runs without webstorage).
 pub const MIN_WEBSTORAGE: NodeVersion = NodeVersion::new(22, 4, 0);
 
-/// Whether the target Node supports `--experimental-webstorage`. Callers gate the
-/// webstorage flag injection on this so older compat-tier Node isn't handed a flag
-/// it rejects.
+/// `--experimental-webstorage` was unflagged (defaults on) in Node 25.0.0 (PR
+/// nodejs/node#57666). At/above this version the `localStorage`/`sessionStorage`
+/// globals are installed without the experimental flag — only `--localstorage-file`
+/// is still required for them to actually exist (Node 26+ leaves the global
+/// undefined, and throws on access, when no file is provided). So nub injects the
+/// EXPERIMENTAL flag only on 22.4–24.x; on 25+ it's a no-op alias (still accepted,
+/// not a "bad option") and is left out. The `--localstorage-file` path, by
+/// contrast, is injected on EVERY supported version >= 22.4 — that's what makes
+/// webstorage present and persistent. Verified empirically on Node 26.2.0 and
+/// against .repos/node (v27 pre): `--localstorage-file` alone exposes a working,
+/// persistent `localStorage`; the flag without the file does not.
+pub const MIN_WEBSTORAGE_NATIVE: NodeVersion = NodeVersion::new(25, 0, 0);
+
+/// Whether the target Node has Web Storage at all (the version floor where
+/// `--experimental-webstorage` / `--localstorage-file` exist). Callers gate the
+/// `--localstorage-file` injection on this so older compat-tier Node isn't handed a
+/// flag it rejects. True for every Node >= 22.4 — including 25/26 where the global
+/// is native (it still needs the file to materialize).
 pub fn webstorage_supported(node_version: &NodeVersion) -> bool {
     *node_version >= MIN_WEBSTORAGE
+}
+
+/// Whether nub must inject the `--experimental-webstorage` FLAG (as opposed to just
+/// the `--localstorage-file` path). Only on the 22.4–24.x band where the feature is
+/// still flag-gated; on 25+ the flag defaults on, so injecting it is unnecessary
+/// (and we leave it off to stay close to plain-Node argv).
+pub fn webstorage_flag_needed(node_version: &NodeVersion) -> bool {
+    *node_version >= MIN_WEBSTORAGE && *node_version < MIN_WEBSTORAGE_NATIVE
 }
 
 /// `--test-coverage-exclude=<glob>` landed in Node 22.5.0. Below it the flag does
@@ -60,14 +83,12 @@ const UNFLAG_TABLE: &[UnflagEntry] = &[
         min: NodeVersion::new(22, 15, 0),
         unflagged_at: None,
     },
-    // webstorage requires --localstorage-file=<path> to be set alongside it.
-    // Injecting the flag without the path causes ERR_INVALID_ARG_VALUE.
-    // Defer to when we have a default storage path per wiki/runtime/webstorage-unflag.md.
-    // UnflagEntry {
-    //     flag: "--experimental-webstorage",
-    //     min: NodeVersion::new(22, 15, 0),
-    //     unflagged_at: None,
-    // },
+    // webstorage is NOT in this static table on purpose. It needs a runtime-computed
+    // `--localstorage-file=<path>` injected alongside the flag (the path is keyed on
+    // the workspace, so it can't be a &'static str), and the experimental flag is
+    // version-BANDED (22.4–24.x only — native on 25+) rather than min-gated. Both
+    // pieces live in spawn.rs, gated on `webstorage_supported` / `webstorage_flag_needed`
+    // + `compute_localstorage_path`. See wiki/runtime/webstorage-unflag.md.
     UnflagEntry {
         flag: "--experimental-sqlite",
         min: NodeVersion::new(22, 15, 0),
@@ -180,7 +201,9 @@ mod tests {
         let flags = compute_inject_flags(v(22, 15, 0), &[], None, false);
         assert!(flags.contains(&"--experimental-vm-modules"));
         assert!(flags.contains(&"--experimental-eventsource"));
-        // webstorage deferred — requires --localstorage-file alongside it
+        // webstorage is NOT in this static set — it needs a runtime-computed
+        // --localstorage-file and version-banded flag logic, handled in spawn.rs.
+        assert!(!flags.contains(&"--experimental-webstorage"));
         assert!(flags.contains(&"--experimental-sqlite"));
     }
 
@@ -250,14 +273,33 @@ mod tests {
     }
 
     #[test]
-    fn webstorage_gated_to_22_4() {
-        // --experimental-webstorage is "bad option" below 22.4 — callers must gate.
+    fn webstorage_supported_floor_is_22_4() {
+        // Below 22.4 the webstorage flags don't exist ("bad option") — so the
+        // --localstorage-file injection (and webstorage entirely) is skipped. At/above
+        // 22.4 it's supported on EVERY version, including the native 25/26 (the file is
+        // still required there for the global to materialize).
         assert!(!webstorage_supported(&v(18, 19, 0)));
         assert!(!webstorage_supported(&v(20, 11, 0)));
         assert!(!webstorage_supported(&v(22, 3, 0)));
         assert!(webstorage_supported(&v(22, 4, 0)));
         assert!(webstorage_supported(&v(22, 13, 0)));
         assert!(webstorage_supported(&v(24, 0, 0)));
+        assert!(webstorage_supported(&v(25, 0, 0)));
+        assert!(webstorage_supported(&v(26, 2, 0)));
+    }
+
+    #[test]
+    fn experimental_webstorage_flag_only_needed_on_22_4_through_24() {
+        // The --experimental-webstorage FLAG is only needed where the feature is
+        // flag-gated. It was unflagged (defaults on) in Node 25.0.0, so on 25+ nub
+        // injects only --localstorage-file, not the experimental flag.
+        assert!(!webstorage_flag_needed(&v(22, 3, 0))); // flag doesn't exist yet
+        assert!(webstorage_flag_needed(&v(22, 4, 0))); // floor: flag needed
+        assert!(webstorage_flag_needed(&v(22, 15, 0)));
+        assert!(webstorage_flag_needed(&v(24, 0, 0)));
+        assert!(webstorage_flag_needed(&v(24, 99, 0))); // still flagged through 24.x
+        assert!(!webstorage_flag_needed(&v(25, 0, 0))); // native — flag not needed
+        assert!(!webstorage_flag_needed(&v(26, 2, 0)));
     }
 
     #[test]
