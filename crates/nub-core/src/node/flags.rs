@@ -82,6 +82,30 @@ pub fn test_coverage_exclude_supported(node_version: &NodeVersion) -> bool {
 ///
 /// `show_warnings`: if true, suppress the `--disable-warning=ExperimentalWarning`
 /// injection (Nub's `--show-warnings` flag).
+///
+/// ## Verified conflict semantics (probed on real Node 18.19 / 22.15 / 25.8 / 26.2)
+///
+/// nub injects its positive flags into BOTH the child argv (in `spawn.rs`, AHEAD
+/// of the user's argv) and the inherited NODE_OPTIONS. Node's resolution is
+/// **argv last-wins, and argv beats NODE_OPTIONS**. That asymmetry is exactly why
+/// a plain "is it a crash?" check is not enough — a user's *disable* can be
+/// silently OVERRIDDEN even when nothing crashes. The Stage-2/3 subtraction below
+/// is the uniform fix: every user negation (positive or `--no-…`, argv or env) is
+/// removed from nub's inject set, so nub never emits a positive that competes with
+/// a user disable. Probe results, per scenario:
+///
+/// | flag class                        | scenario                                  | raw Node behavior            | nub mechanism                |
+/// |-----------------------------------|-------------------------------------------|------------------------------|------------------------------|
+/// | boolean experimental (`vm`, …)    | dup positive (argv×2; argv+NODE_OPTIONS)  | exit 0, ENABLED (idempotent) | safe-duplicate, no action    |
+/// | boolean experimental              | `--no-x` argv, nub `+x` argv (after user) | exit 0, disabled (argv last) | also subtracted → not emitted|
+/// | boolean experimental              | `--no-x` in NODE_OPTIONS, nub `+x` in argv| exit 0, **ENABLED** (argv>env: nub OVERRIDES user disable) | **subtracted**: `collect_negations` scans NODE_OPTIONS → `+x` dropped |
+/// | `--enable-source-maps`            | `--no-enable-source-maps` (any channel)   | exit 0; disables when it wins| **subtracted** via `--no-enable-` prefix |
+/// | value-bearing (`--disable-warning`,| user `=<other value>` alongside nub's     | exit 0; repeatable, additive | safe-duplicate: nub adds its own value, never stomps the user's (Node accepts multiple) |
+/// | `--test-coverage-exclude`)        |                                           |                              |                              |
+/// | below-floor flags (18.19)         | `--experimental-webstorage`, `--disable-warning`, `--test-coverage-exclude` | **exit 9 "bad option"** | band-gated OUT (never injected there) |
+///
+/// (Webstorage's flag/file pair is injected in `spawn.rs`, not here — its
+/// suppression is granular and lives in `user_webstorage_ownership`; see there.)
 pub fn compute_inject_flags(
     node_version: NodeVersion,
     user_argv: &[String],
@@ -267,6 +291,49 @@ mod tests {
         );
         assert!(!flags.contains(&"--experimental-sqlite"));
         assert!(flags.contains(&"--experimental-vm-modules"));
+    }
+
+    #[test]
+    fn no_enable_source_maps_wins_over_always_inject() {
+        // `--enable-source-maps` is in ALWAYS_INJECT, but a user's explicit
+        // `--no-enable-source-maps` must clobber it — nub never re-enables over a
+        // user disable (the maintainer, 2026-06-11). Verified on real Node 22.15: the
+        // `--no-` form is accepted (exit 0) and disables source maps when it wins;
+        // since nub injects the positive into argv AHEAD of the user's, an unsub-
+        // tracted positive would re-enable it. Subtraction is the fix, in BOTH
+        // channels (argv and NODE_OPTIONS).
+        let argv = vec!["--no-enable-source-maps".to_string()];
+        assert!(
+            !compute_inject_flags(v(22, 15, 0), &argv, None, false)
+                .contains(&"--enable-source-maps"),
+            "user --no-enable-source-maps (argv) must suppress nub's always-inject"
+        );
+        assert!(
+            !compute_inject_flags(v(22, 15, 0), &[], Some("--no-enable-source-maps"), false)
+                .contains(&"--enable-source-maps"),
+            "user --no-enable-source-maps (NODE_OPTIONS) must suppress it too"
+        );
+    }
+
+    #[test]
+    fn user_disable_warning_with_a_different_value_is_not_stomped() {
+        // `--disable-warning` is value-bearing and REPEATABLE in Node (verified:
+        // two `--disable-warning=<diff>` coexist, exit 0). nub injects its own
+        // `=ExperimentalWarning` ADDITIVELY — it must not drop or replace a user's
+        // `--disable-warning=DeprecationWarning`. The subtraction path only removes
+        // `--no-…` negations, so a positive value-bearing user flag passes through
+        // untouched (it rides in the user's own argv/NODE_OPTIONS) while nub's
+        // value is still injected.
+        let flags = compute_inject_flags(
+            v(22, 15, 0),
+            &["--disable-warning=DeprecationWarning".to_string()],
+            None,
+            false,
+        );
+        assert!(
+            flags.contains(&"--disable-warning=ExperimentalWarning"),
+            "nub injects its own warning suppression alongside the user's different value"
+        );
     }
 
     #[test]

@@ -290,14 +290,19 @@ pub fn spawn_node(config: &SpawnConfig<'_>) -> Result<SpawnResult> {
         //     leaves `localStorage` undefined (and throws on access) regardless of
         //     the experimental flag. The path is workspace-keyed so members of one
         //     workspace share a store and unrelated projects stay isolated.
-        // Respect the user, granularly: a user-supplied `--localstorage-file`
-        // (argv or inherited NODE_OPTIONS) suppresses only nub's FILE — the
-        // banded `--experimental-webstorage` is still injected so the user's
-        // store actually materializes on 22.4–24.x. Explicit
-        // `--experimental-webstorage` / `--no-experimental-webstorage` takes
-        // manual control of the whole feature (nub injects nothing). Below 22.4
-        // both flags are "bad option" — the compat tier runs without them.
-        // (These are argv, not NODE_OPTIONS, so no quoting is needed.)
+        // `--experimental-webstorage` is part of the nub contract — injected
+        // UNCONDITIONALLY within band, EXCEPT when the user explicitly disabled
+        // the feature (the maintainer, 2026-06-11). Respect the user, granularly:
+        //   • `--localstorage-file` (argv or NODE_OPTIONS) suppresses only nub's
+        //     FILE — the banded flag is still injected so the user's store
+        //     materializes on 22.4–24.x.
+        //   • `--no-experimental-webstorage` suppresses BOTH (their disable wins;
+        //     a file alone is a dead store under it).
+        //   • a POSITIVE user `--experimental-webstorage` suppresses NOTHING — a
+        //     duplicate boolean flag is idempotent (verified), so nub's copy
+        //     rides alongside harmlessly.
+        // Below 22.4 both flags are "bad option" — the compat tier runs without
+        // them. (These are argv, not NODE_OPTIONS, so no quoting is needed.)
         let own = user_webstorage_ownership(config.user_args, node_options.as_deref());
         if !own.flag && flags::webstorage_flag_needed(&config.node.version) {
             cmd.arg("--experimental-webstorage");
@@ -807,11 +812,13 @@ pub fn compute_augmentation_env(
     // the whitepaper promise and `spawn_node`. Same two-piece gating: the
     // experimental flag only on 22.4–24.x (native at 25+), the --localstorage-file
     // on every Node >= 22.4 (it's what actually exposes + persists the global).
-    // Suppressed entirely when the user already controls webstorage via argv OR
-    // their inherited NODE_OPTIONS (e.g. exported `--localstorage-file=…`) — nub
-    // must not clobber the user's own store. Below 22.4 both flags are "bad
-    // option" and abort the process — so version-gated. The value is quoted so a
-    // spacey cache path survives Node's NODE_OPTIONS tokenizer (finding 1/3).
+    // Granular user suppression (same rule as `spawn_node`, see
+    // `user_webstorage_ownership`): a user `--localstorage-file` (argv/NODE_OPTIONS)
+    // suppresses only nub's file; `--no-experimental-webstorage` suppresses both;
+    // a positive `--experimental-webstorage` suppresses nothing (idempotent dup).
+    // Below 22.4 both flags are "bad option" and abort the process — so
+    // version-gated. The value is quoted so a spacey cache path survives Node's
+    // NODE_OPTIONS tokenizer (finding 1/3).
     let own = user_webstorage_ownership(&[], existing_node_options.as_deref());
     if !own.flag && flags::webstorage_flag_needed(&node_version) {
         node_opts_parts.push("--experimental-webstorage".to_string());
@@ -1093,29 +1100,33 @@ fn node_options_quote(value: &str) -> String {
     }
 }
 
-/// Whether the user has already taken control of webstorage — via argv OR the
-/// inherited NODE_OPTIONS env — and nub must therefore NOT inject its own
-/// `--localstorage-file` / `--experimental-webstorage`. Scans BOTH surfaces for
-/// `--localstorage-file`, `--experimental-webstorage`, and
-/// `--no-experimental-webstorage` (any spelling, `=`-joined or two-token).
+/// Which webstorage pieces nub must SUPPRESS because the user already controls
+/// them — scanned across BOTH surfaces (argv + inherited NODE_OPTIONS).
 ///
-/// Why NODE_OPTIONS matters: a user who exports
-/// `NODE_OPTIONS=--localstorage-file=/my/store.sqlite` and runs `nub script.js`
-/// expects THEIR file to back localStorage. nub's argv-injected
-/// `--localstorage-file` would win (last-wins, argv beats env), silently
-/// redirecting persistence to nub's workspace store — the owner explicitly
-/// demanded no clobbering. Suppressing when the env carries any webstorage flag
-/// hands control back to the user.
-/// Which webstorage pieces the user already controls (argv or NODE_OPTIONS).
-/// Granular, because the pieces compose: a user-supplied `--localstorage-file`
-/// suppresses nub's FILE (never clobber the user's store) while nub still
-/// injects the version-banded `--experimental-webstorage` — otherwise on
-/// 22.4–24.x the global never materializes and the user's file is dead (the
-/// all-or-nothing version of this check failed exactly that way on every CI
-/// leg). An explicit `--experimental-webstorage` / `--no-experimental-webstorage`
-/// means the user took manual control of the whole feature: nub injects nothing,
-/// matching what plain `node` would do with their flags.
-struct WebstorageOwnership {
+/// `--experimental-webstorage` is part of the nub contract (the maintainer, 2026-06-11):
+/// within its version band nub injects it UNCONDITIONALLY, *except* when the user
+/// explicitly disabled the feature with `--no-experimental-webstorage`. The three
+/// user spellings map as follows:
+///
+/// - **`--no-experimental-webstorage`** (argv or NODE_OPTIONS) — the user
+///   explicitly disabled Web Storage. Suppress BOTH the flag AND nub's file: a
+///   `--localstorage-file` alongside `--no-experimental-webstorage` leaves
+///   `localStorage` undefined anyway (verified: Node 22.15 AND native 26.2 both
+///   report `undefined` for `--no-experimental-webstorage --localstorage-file`),
+///   so the file would only be a dead store. nub injects nothing → plain-Node
+///   behavior with their flag.
+/// - **`--localstorage-file`** (argv or NODE_OPTIONS) — the user named their own
+///   store. Suppress only nub's FILE (never clobber the user's store); nub STILL
+///   injects the banded `--experimental-webstorage` so the user's file actually
+///   materializes on 22.4–24.x (without the flag, file alone → `localStorage`
+///   undefined there — verified on 22.15).
+/// - **`--experimental-webstorage`** (POSITIVE, user-supplied) — no longer
+///   suppresses anything. A duplicate boolean flag is idempotent in Node
+///   (verified: argv×2 and argv+NODE_OPTIONS both exit 0, feature ENABLED), so
+///   nub's own injection rides harmlessly alongside the user's and the file is
+///   still injected to materialize the global. This reverses the prior
+///   "positive flag = manual control = suppress both" semantics.
+struct WebstorageSuppress {
     file: bool,
     flag: bool,
 }
@@ -1123,8 +1134,8 @@ struct WebstorageOwnership {
 fn user_webstorage_ownership(
     user_args: &[String],
     node_options: Option<&str>,
-) -> WebstorageOwnership {
-    let mut own = WebstorageOwnership {
+) -> WebstorageSuppress {
+    let mut own = WebstorageSuppress {
         file: false,
         flag: false,
     };
@@ -1132,10 +1143,16 @@ fn user_webstorage_ownership(
         if tok.starts_with("--localstorage-file") {
             own.file = true;
         }
-        if tok == "--experimental-webstorage" || tok == "--no-experimental-webstorage" {
+        if tok == "--no-experimental-webstorage" {
+            // Explicit disable: nub injects nothing (a file alone leaves
+            // localStorage undefined under --no-experimental-webstorage anyway).
             own.flag = true;
-            own.file = true; // manual control of the feature: nub injects nothing
+            own.file = true;
         }
+        // A POSITIVE `--experimental-webstorage` is intentionally NOT handled:
+        // it no longer suppresses nub's injection (duplicate boolean is
+        // idempotent — verified). nub injects the flag unconditionally within
+        // band; the user's copy is a harmless duplicate.
     };
     for a in user_args {
         scan(a);
@@ -1387,21 +1404,40 @@ mod tests {
     }
 
     #[test]
-    fn user_webstorage_ownership_is_granular() {
+    fn webstorage_suppression_follows_the_contract_semantics() {
+        // The nub contract (the maintainer, 2026-06-11): `--experimental-webstorage` is
+        // injected UNCONDITIONALLY within band, EXCEPT when the user disabled the
+        // feature with `--no-experimental-webstorage`. So suppression is granular:
+        //   • a POSITIVE user `--experimental-webstorage` suppresses NOTHING
+        //     (idempotent duplicate — reversed from the prior "manual control"),
+        //   • `--no-experimental-webstorage` suppresses BOTH flag and file,
+        //   • a user `--localstorage-file` suppresses ONLY nub's file.
         let own = |args: &[&str], env: Option<&str>| {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             user_webstorage_ownership(&args, env)
         };
 
-        // Baseline: nothing set → nub owns both pieces.
+        // Baseline: nothing set → nub injects both pieces.
         let o = own(&[], None);
         assert!(!o.file && !o.flag, "nothing set: nub injects flag + file");
         let o = own(&["script.js"], Some("--enable-source-maps"));
         assert!(!o.file && !o.flag);
 
+        // POSITIVE user flag (argv or NODE_OPTIONS) suppresses NOTHING — nub still
+        // injects its own copy (a duplicate boolean is an idempotent no-op).
+        for o in [
+            own(&["--experimental-webstorage"], None),
+            own(&[], Some("--experimental-webstorage")),
+        ] {
+            assert!(
+                !o.file && !o.flag,
+                "a positive --experimental-webstorage must NOT suppress nub's injection"
+            );
+        }
+
         // A user file (argv `=` form, argv two-token form, or NODE_OPTIONS env)
-        // owns the FILE only — nub must still inject the banded experimental flag
-        // so the user's store materializes on 22.4–24.x (the CI-caught case).
+        // suppresses the FILE only — nub must still inject the banded experimental
+        // flag so the user's store materializes on 22.4–24.x (the CI-caught case).
         for o in [
             own(&["--localstorage-file=/my/store.sqlite"], None),
             own(&["--localstorage-file", "/my/store.sqlite"], None),
@@ -1414,14 +1450,14 @@ mod tests {
             assert!(!o.flag, "user file must NOT suppress the flag");
         }
 
-        // Explicit flag control (positive or negation, argv or env) → manual
-        // control of the whole feature: nub injects nothing.
+        // Explicit DISABLE (argv or env) → nub injects nothing: a file alone
+        // leaves localStorage undefined under --no-experimental-webstorage anyway
+        // (verified on 22.15 AND native 26.2), so the file would be a dead store.
         for o in [
             own(&["--no-experimental-webstorage"], None),
             own(&[], Some("--no-experimental-webstorage")),
-            own(&["--experimental-webstorage"], None),
         ] {
-            assert!(o.file && o.flag, "explicit flag control suppresses both");
+            assert!(o.file && o.flag, "explicit disable suppresses both");
         }
     }
 

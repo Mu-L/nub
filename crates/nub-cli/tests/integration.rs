@@ -1118,6 +1118,108 @@ fn user_node_options_localstorage_file_is_not_clobbered() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// nub injects its positive flags into the child argv (ahead of the user's) AND
+/// into NODE_OPTIONS; Node resolves argv last-wins and argv-beats-NODE_OPTIONS. So
+/// a user's explicit DISABLE must still win and nothing must crash, across the
+/// channel asymmetry. This drives the built nub on the PATH Node through the
+/// nastiest verified-safe combos in one shot (probe transcripts in
+/// `flags::compute_inject_flags`'s conflict-semantics table):
+///   1. user `--no-experimental-vm-modules` in NODE_OPTIONS while nub injects
+///      `--experimental-vm-modules` into argv — the raw-Node bug is that argv beats
+///      env, so nub's positive would OVERRIDE the disable (verified ENABLED on
+///      stock Node 22.15). The subtraction must make the user's disable win →
+///      vm.SourceTextModule undefined.
+///   2. user `--no-enable-source-maps` (argv) vs nub's always-injected
+///      `--enable-source-maps` — the user's disable must win → sourceMapsEnabled
+///      false.
+///   3. a POSITIVE user `--experimental-vm-modules` alongside nub's own — a
+///      duplicate boolean is idempotent; must exit 0 with the feature ENABLED.
+///   4. a value-bearing user `--disable-warning=DeprecationWarning` alongside nub's
+///      `=ExperimentalWarning` — repeatable/additive; must exit 0, nub not stomping.
+/// All four must exit 0 (the directive's "no crash" half) AND land the expected
+/// feature state (the "user disablement wins" half).
+#[test]
+fn injected_flags_never_crash_and_never_override_a_user_disable() {
+    // vm-modules exists across the whole supported floor, so this needs no version
+    // gate; source-maps likewise. Skip only if no usable Node (shouldn't happen).
+    if target_node_version() < (18, 19, 0) {
+        eprintln!("skipping: needs a supported Node");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("nub-flagconflict-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"name":"flag-conflict"}"#).unwrap();
+    let cache = dir.join("cache");
+
+    // Reports both feature states on one line so a single run answers each combo.
+    std::fs::write(
+        dir.join("state.js"),
+        "const vm = require('vm');\n\
+         const vmOn = typeof vm.SourceTextModule === 'function';\n\
+         console.log('VM:' + (vmOn ? 'on' : 'off') + ' SRC:' + (process.sourceMapsEnabled === true ? 'on' : 'off'));",
+    )
+    .unwrap();
+
+    let run = |args: &[&str], node_options: Option<&str>| {
+        let mut cmd = Command::new(nub_binary());
+        cmd.args(args)
+            .current_dir(&dir)
+            .env("XDG_CACHE_HOME", &cache);
+        if let Some(opts) = node_options {
+            cmd.env("NODE_OPTIONS", opts);
+        }
+        let out = cmd.output().expect("failed to spawn nub");
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            out.status.code().unwrap_or(-1),
+        )
+    };
+
+    // (1) user disable in NODE_OPTIONS must beat nub's argv positive.
+    let (out, err, code) = run(&["state.js"], Some("--no-experimental-vm-modules"));
+    assert_eq!(code, 0, "combo 1 crashed: stderr={err}\nstdout={out}");
+    assert!(
+        out.contains("VM:off"),
+        "user --no-experimental-vm-modules (NODE_OPTIONS) must win over nub's argv inject; got {out:?}"
+    );
+
+    // (2) user --no-enable-source-maps (argv) must beat nub's always-inject.
+    let (out, err, code) = run(&["--no-enable-source-maps", "state.js"], None);
+    assert_eq!(code, 0, "combo 2 crashed: stderr={err}\nstdout={out}");
+    assert!(
+        out.contains("SRC:off"),
+        "user --no-enable-source-maps must win over nub's always-injected source maps; got {out:?}"
+    );
+
+    // (3) positive duplicate of an injected boolean — harmless, feature ON.
+    let (out, err, code) = run(&["--experimental-vm-modules", "state.js"], None);
+    assert_eq!(
+        code, 0,
+        "combo 3 (duplicate positive flag) must not crash: stderr={err}\nstdout={out}"
+    );
+    assert!(
+        out.contains("VM:on"),
+        "a duplicate positive --experimental-vm-modules stays enabled; got {out:?}"
+    );
+
+    // (4) value-bearing user flag with a DIFFERENT value coexists with nub's.
+    // Gated to >= 20.11: below that `--disable-warning` does not exist in Node at
+    // all, so the USER's own flag here is itself a "bad option" (nub correctly
+    // band-gates its own copy out on 18.19–20.10 — verified) and this combo isn't
+    // expressible on the floor.
+    if node_at_least((20, 11, 0)) {
+        let (out, err, code) = run(&["--disable-warning=DeprecationWarning", "state.js"], None);
+        assert_eq!(
+            code, 0,
+            "combo 4 (different --disable-warning value) must not crash: stderr={err}\nstdout={out}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Workspace topological ordering: core (no deps) before utils (depends
 /// on core) before app (depends on utils).
 #[test]
