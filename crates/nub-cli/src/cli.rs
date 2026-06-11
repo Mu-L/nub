@@ -783,7 +783,6 @@ fn run_nub() -> Result<i32> {
     let mut compat = false;
     let mut rest: Vec<String> = Vec::new();
     let mut subcommand_found = false;
-    let mut eval_tempfile: Option<tempfile::NamedTempFile> = None;
     let mut env_file_vars: std::collections::HashMap<String, String> = Default::default();
 
     let mut i = 0;
@@ -849,41 +848,37 @@ fn run_nub() -> Result<i32> {
                 }
             }
             "-e" | "--eval" | "-p" | "--print" => {
-                // Intercept eval: write code to a temp .ts file so our
-                // preload hooks can transpile non-erasable syntax.
-                let is_print = arg == "-p" || arg == "--print";
-                i += 1;
-                if i < raw_args.len() {
-                    let code = &raw_args[i];
-                    let wrapped = if is_print {
-                        format!("console.log({code})")
-                    } else {
-                        code.clone()
-                    };
-                    match tempfile::Builder::new().suffix(".ts").tempfile() {
-                        Ok(mut tmp) => {
-                            use std::io::Write;
-                            let _ = tmp.write_all(wrapped.as_bytes());
-                            let path = tmp.path().to_string_lossy().to_string();
-                            rest.push(path);
-                            rest.extend(raw_args[i + 1..].iter().cloned());
-                            eval_tempfile = Some(tmp);
-                            break;
-                        }
-                        Err(_) => {
-                            // Fallback: pass through to node as-is
-                            rest.push(arg.clone());
-                            rest.push(raw_args[i].clone());
-                        }
-                    }
-                } else {
-                    // No code argument — pass the bare flag through to Node so it
-                    // produces the native behavior: `-e`/`--eval` error with
-                    // "<prog>: -e requires an argument" and exit 9, while
-                    // `-p`/`--print` read the program from stdin. (Previously the
-                    // flag was dropped, leaving an empty argv → help + exit 0.)
-                    rest.push(arg.clone());
+                // Pass eval flags THROUGH to Node verbatim — `nub -e '<code>'`
+                // becomes `node -e '<code>'`. This is what preserves Node's
+                // `[eval]` process identity byte-for-byte: `process.argv` has no
+                // script path, `process.argv[1]` is `undefined`, `require.main`
+                // is `undefined`, `__filename`/`module.id` are `[eval]`,
+                // `__dirname` is `.`, and Error stack frames read `at [eval]:…`.
+                //
+                // The previous implementation wrote the code to a temp `.ts` file
+                // and ran THAT file so the preload hooks could transpile
+                // non-erasable TS (enums, namespaces, parameter properties). But
+                // running a real file leaked the tempfile path into every one of
+                // those identity surfaces (a clear violation of the "drop-in
+                // `node`" contract) AND broke `--input-type=module -e` entirely
+                // (a real file can't carry `--input-type`, so Node threw
+                // ERR_INPUT_TYPE_NOT_ALLOWED). Node's own `-e` does strip-only TS
+                // — erasable type syntax works, non-erasable does not — and the
+                // `-`/stdin path already behaves the same way, so passing through
+                // is consistent with both Node and nub's other eval surface.
+                //
+                // Augmentation (fetch, the version-gated globals, env loading)
+                // rides on the `--import` preload + injected NODE_OPTIONS, NOT on
+                // the tempfile, so it is unaffected by this change. Forward the
+                // flag, its code argument (if any), and the remaining argv. With
+                // no code argument the bare flag still goes through so Node
+                // produces its native behavior (`-e`/`--eval` → exit 9 "requires
+                // an argument"; `-p`/`--print` reads from stdin).
+                rest.push(arg.clone());
+                if i + 1 < raw_args.len() {
+                    rest.extend(raw_args[i + 1..].iter().cloned());
                 }
+                break;
             }
             _ => {
                 // Check if this is the first positional and matches a subcommand
@@ -909,7 +904,6 @@ fn run_nub() -> Result<i32> {
         }
         i += 1;
     }
-    let _eval_guard = eval_tempfile;
 
     // Capture --env-file vars for per-child Command::env application (A19): no
     // process-env mutation, so no `unsafe { env::set_var }` and no data race if a

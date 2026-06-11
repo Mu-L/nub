@@ -2514,6 +2514,72 @@ fn eval_without_argument_errors_like_node() {
 }
 
 #[test]
+fn eval_preserves_node_eval_identity() {
+    // `nub -e` must keep Node's `[eval]` process identity byte-for-byte — no
+    // tempfile path may leak into argv / require.main / __filename / __dirname /
+    // module.id / the Error stack. (Regression: nub used to run the eval code from
+    // a temp `.ts` file, which leaked that path into every one of these surfaces.)
+    let probe = "console.log(JSON.stringify({\
+        argvLen: process.argv.length,\
+        argv1: process.argv[1],\
+        requireMain: require.main,\
+        filename: __filename,\
+        dirname: __dirname,\
+        moduleId: module.id,\
+        stackHasEval: new Error().stack.includes('[eval]'),\
+        stackHasTmp: /\\.tmp|\\.ts:/.test(new Error().stack)\
+    }))";
+    let output = Command::new(nub_binary())
+        .args(["-e", probe])
+        .output()
+        .expect("failed to spawn nub");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last = stdout.lines().last().unwrap_or("");
+    // Node's `-e` identity: argv has only [node] (len 1), argv[1] absent,
+    // require.main undefined (serializes to absent in JSON.stringify), __filename
+    // and module.id are "[eval]", __dirname is ".", stack names `[eval]`.
+    assert!(
+        last.contains("\"argvLen\":1"),
+        "argv must hold only the node path, no script: {stdout:?}"
+    );
+    assert!(
+        !last.contains("argv1") && !last.contains("requireMain"),
+        "argv[1] and require.main must be undefined (omitted by JSON.stringify): {stdout:?}"
+    );
+    assert!(
+        last.contains("\"filename\":\"[eval]\"") && last.contains("\"moduleId\":\"[eval]\""),
+        "__filename and module.id must be [eval]: {stdout:?}"
+    );
+    assert!(
+        last.contains("\"dirname\":\".\""),
+        "__dirname must be \".\": {stdout:?}"
+    );
+    assert!(
+        last.contains("\"stackHasEval\":true") && last.contains("\"stackHasTmp\":false"),
+        "stack frames must name [eval], never a tempfile: {stdout:?}"
+    );
+}
+
+#[test]
+fn eval_module_input_type_does_not_crash() {
+    // `nub --input-type=module -e '<code>'` must run like Node (import.meta is
+    // available, prints a `file://…/[eval…]` URL) — NOT throw
+    // ERR_INPUT_TYPE_NOT_ALLOWED. (Regression: the tempfile path made Node see a
+    // real file, which can't carry --input-type, so it hard-errored.)
+    let output = Command::new(nub_binary())
+        .args(["--input-type=module", "-e", "console.log(import.meta.url)"])
+        .output()
+        .expect("failed to spawn nub");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr:?}");
+    assert!(
+        stdout.contains("file://") && stdout.contains("[eval"),
+        "import.meta.url under --input-type=module must be the [eval] URL: {stdout:?} / {stderr:?}"
+    );
+}
+
+#[test]
 fn print_without_argument_reads_stdin_like_node() {
     // `-p`/`--print` with no code reads the program from stdin (Node behavior).
     // Empty stdin evaluates to `undefined` and exits 0 — not help, not an error.
