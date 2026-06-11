@@ -18,10 +18,10 @@ $ nub node install 26      # manage Node.js versions
 
 ## Why?
 
-Node is the gold standard for server-side JavaScript. It defines the stdlib the whole ecosystem is built on and sets the bar for stability and trust. That reputation is earned the slow way — strict compatibility guarantees, careful governance — and the same caution means Node can't chase modern DX. So the day-to-day toolchain grew up around it, one tool at a time:
+Node is the gold standard for server-side JavaScript. It defines the stdlib the whole ecosystem is built on and sets the bar for stability and trust. That reputation comes from strict compatibility guarantees and careful governance — the same caution that means Node can't chase modern DX. So the day-to-day toolchain grew up around it, one tool at a time:
 
 - **`node`** — runs files. Recently added limited TypeScript support.
-- **`npm run`** (or `pnpm run`, `yarn run`) — the "script runner." Node kicked the can on package management, so third-party package managers became the frontend for almost everything you do in a Node project.
+- **`npm run`** (or `pnpm run`, `yarn run`) — the "script runner." Node never shipped package management, so third-party package managers became the frontend for almost everything you do in a Node project.
 - **`npx`** (or `pnpm exec`) — the "bin runner," for CLIs your dependencies ship into `node_modules/.bin`.
 - **`tsx` / `ts-node`** — TypeScript support, bolted on.
 - **`dotenv`** — `.env` file loading.
@@ -184,7 +184,7 @@ nub node uninstall 22   # remove a version
 
 ## Modern APIs
 
-These work on every Node version Nub supports — polyfilled where Node hasn't shipped them, unflagged where Node gates them. Credit where it's due: Node has been closing this gap itself. The table is a moving target by design: as your Node floor rises, the polyfills feature-detect and step aside. Same code, no migration.
+These work on every Node version Nub supports — polyfilled where Node hasn't shipped them, unflagged where Node gates them. Node has been closing this gap itself. The table is a moving target by design: as your Node floor rises, the polyfills feature-detect and step aside. Same code, no migration.
 
 **Native** — Node ships it; Nub steps aside entirely. **Unflagged** — Node implements it behind an `--experimental-*` flag; Nub injects the flag. **Polyfilled** — Nub preloads an established community polyfill until your Node floor reaches the native line.
 
@@ -354,7 +354,7 @@ $ nub -r run build      # every workspace package, topo-ordered
   ]}
 />
 
-The work didn't get faster; the wrapper got out of the way. Methodology: `hyperfine --warmup 3 --runs 20`, Apple M1 Max, Node 24.14.0 — the numbers are machine-specific, the ratios are the portable claim. Reproduce with [`benchmarks/`](https://github.com/nubjs/nub/tree/main/benchmarks).
+The benchmarked command is identical on every row — the delta is pure wrapper overhead. Methodology: `hyperfine --warmup 3 --runs 20`, Apple M1 Max, Node 24.14.0 — the numbers are machine-specific, the ratios are the portable claim. Reproduce with [`benchmarks/`](https://github.com/nubjs/nub/tree/main/benchmarks).
 
 ### Workspace-aware
 
@@ -446,7 +446,7 @@ There are no Nub-specific APIs.
 - No `NUB_*` environment variables
 - No `"nub"` field in `package.json`
 
-The brand stops at the binary boundary. Everything Nub ships is a web platform standard (WHATWG / W3C / WinterTC), a TC39 proposal, an unflagged Node.js feature, or a pragmatic affordance for ecosystem compatibility (usually TypeScript). Remove Nub tomorrow and your code keeps working, unchanged.
+The name `nub` never appears in your code, your config, or your environment. Everything Nub ships is a web platform standard (WHATWG / W3C / WinterTC), a TC39 proposal, an unflagged Node.js feature, or a pragmatic affordance for ecosystem compatibility (usually TypeScript). Remove Nub tomorrow and your code keeps working, unchanged.
 
 ## FAQ
 
@@ -506,7 +506,7 @@ Plenty more answered on the [FAQ page](/docs/faq):
 
 ## A note on Node
 
-None of this is a criticism of Node.js. Node is an exceptionally well-managed project, and its caution about breaking changes is the right caution — the day Node stops being predictable is the day the ecosystem cracks. That same caution means Node can't ship opinionated modern defaults. The extension surface it has shipped over the last three years means it no longer has to. Nub is the layer on top.
+None of this is a criticism of Node.js. Node is an exceptionally well-managed project, and its caution about breaking changes is the right caution — the whole ecosystem depends on Node staying predictable. That same caution means Node can't ship opinionated modern defaults. The extension surface it has shipped over the last three years means it no longer has to. Nub is the layer on top.
 
 ---
 

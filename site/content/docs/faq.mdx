@@ -140,7 +140,7 @@ That's the entire kit. There is no patched Node binary, no vendored `libnode`, n
 
 ## Why doesn't Node ship these defaults natively?
 
-Node is an exceptionally well-managed open source project, with a release cadence and stability story that's frankly miraculous for software this load-bearing. The Node team's caution about breaking changes is the right caution — Node is the substrate that thousands of production deployments rely on, and the day it stops being predictable is the day the ecosystem cracks.
+Node is an exceptionally well-managed open source project, with a release cadence and stability story few projects this load-bearing match. The Node team's caution about breaking changes is the right caution — Node is the substrate that thousands of production deployments rely on, and it has to stay predictable.
 
 By the same logic, Node can't ship the kinds of changes that would bring plain `node` into alignment with modern developer-tooling expectations — opinionated defaults, integrated TypeScript, eager `.env` loading, a workspace-aware script runner. Collectively those would shift the meaning of "running on Node," and breaking that contract isn't worth it.
 
@@ -192,7 +192,7 @@ Node itself shipped a built-in script runner in 22.0 (`node --run`, April 2024).
 
 Your codebase keeps working on plain Node, unchanged.
 
-Nub adds no APIs to your code. No `globalThis.nub`. No `nub:*` module namespace. No `@nub/*` npm scope (with the single TypeScript-ecosystem exception of `@types/nub` on DefinitelyTyped). No `NUB_*` environment variables. No `"nub"` field in `package.json`. The brand stops at the binary boundary. Your `package.json` doesn't mention Nub. Your imports don't reference Nub. Your runtime checks don't gate on Nub.
+Nub adds no APIs to your code. No `globalThis.nub`. No `nub:*` module namespace. No `@nub/*` npm scope (with the single TypeScript-ecosystem exception of `@types/nub` on DefinitelyTyped). No `NUB_*` environment variables. No `"nub"` field in `package.json`. Your `package.json` doesn't mention Nub. Your imports don't reference Nub. Your runtime checks don't gate on Nub.
 
 If Nub disappeared tomorrow, the worst case is: TypeScript files need a separate compile step or a tsx-equivalent loader; `.env` files need `dotenv-cli` or `import "dotenv/config"` again; you're back to whatever toolchain you had before. The code itself doesn't change.
 

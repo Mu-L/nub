@@ -493,7 +493,7 @@ import { host, port } from "./config.yaml" // named exports`}
           <Feature
             accent="ember"
             reverse
-            eyebrow="The brand stops at the binary"
+            eyebrow="No Nub-specific APIs"
             title="Zero lock-in"
             body={
               <>
