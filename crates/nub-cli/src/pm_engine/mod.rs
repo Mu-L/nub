@@ -529,26 +529,26 @@ pub(crate) fn run_node_gyp_bootstrap(args: &[String]) -> Result<i32> {
     let [project_dir] = args else {
         anyhow::bail!("usage: nub __node-gyp-bootstrap <project-dir>");
     };
-    // FLAG (see report): the engine's node-gyp bootstrap entry
-    // (`commands::install::node_gyp_bootstrap::{print_bootstrapped_binary,
-    // ensure_cached}`) is unreachable at the pinned aube API — the
-    // `node_gyp_bootstrap` MODULE is `pub(crate)` with no public re-export, so
-    // neither the wrapper nor `ensure_cached` can be called from nub. This
-    // re-entry verb is invoked by the engine's own lazy node-gyp shims
-    // (`AUBE_NODE_GYP_EXE __node-gyp-bootstrap <dir>`, where `current_exe()` is
-    // nub), so the path IS live and this is a regression from the refactor (the
-    // old pin had `pub mod node_gyp_bootstrap`). Restoring it needs ONE of:
-    // (a) a one-line visibility widening in vendor/aube
-    // (`pub(crate) mod node_gyp_bootstrap` → `pub`, or a `pub use … ensure_cached`)
-    // — a vendor edit out of this task's scope; or (b) reproducing the full
-    // bootstrap (lock, npmrc propagation, recursive install spawn) in nub. Both
-    // are design calls for the human, so this errors honestly rather than
-    // silently mis-bootstrapping.
-    anyhow::bail!(
-        "nub: node-gyp lazy bootstrap for `{project_dir}` is unavailable against the current \
-         aube engine API (`node_gyp_bootstrap` is not publicly reachable) — see pm_engine FLAG. \
-         Install node-gyp globally as a workaround."
-    );
+    // Register nub's static identity FIRST so the bootstrap's cache lands under
+    // nub's namespace (`$XDG_CACHE/nub/pm/tools/node-gyp`, via the `set_cache_root`
+    // the identity carries) rather than aube's. This re-entry runs as a fresh
+    // child process spawned by the engine's lazy shim (`AUBE_NODE_GYP_EXE
+    // __node-gyp-bootstrap <dir>`, where `current_exe()` is nub) before any other
+    // preflight, so the namespace registration has to happen here.
+    engine_brand_preflight();
+    // The bootstrap entry (`pub`-widened in vendor/aube @ b1a90d5: `pub mod
+    // node_gyp_bootstrap` + `pub async fn {ensure_cached, print_bootstrapped_binary}`)
+    // resolves/bootstraps the cached node-gyp and prints its executable path on
+    // stdout for the shim to exec. Drive it on a fresh runtime; route any failure
+    // through the brand rewrite like every other engine report.
+    let rt = build_runtime()?;
+    let project = std::path::Path::new(project_dir);
+    match rt
+        .block_on(aube::commands::install::node_gyp_bootstrap::print_bootstrapped_binary(project))
+    {
+        Ok(()) => Ok(0),
+        Err(report) => Ok(present::emit_report(&report)),
+    }
 }
 
 /// The shared stub error for registered-but-unwired verbs: names the verb
