@@ -4391,6 +4391,15 @@ fn run_pm_use(name: &str, spec: &str, cwd: &Path) -> Result<i32> {
 
     let plan = use_align::plan_alignment(&root, name)?;
 
+    // Refuse a conversion the target format can't faithfully represent
+    // (today: `use yarn` over a `workspace:`-protocol graph) BEFORE touching
+    // the manifest — a half-switch that pins yarn but writes no lockfile is
+    // exactly the silent-broken state we must avoid. The brand preflight must
+    // be registered first: the source parse reads workspace config, whose
+    // names freeze on first read.
+    crate::pm_engine::engine_brand_preflight();
+    use_align::refuse_unconvertible(&root, name, &plan)?;
+
     let (version, write) = resolve_provision_declare(name, spec, cwd, true)?;
 
     // A committed Berry release outranks packageManager in resolution —

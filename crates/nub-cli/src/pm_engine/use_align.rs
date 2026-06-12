@@ -180,6 +180,76 @@ pub(crate) fn plan_alignment(root: &Path, target: &str) -> Result<AlignPlan> {
     })
 }
 
+/// The name of the first dependency in `graph` declared with the
+/// `workspace:` protocol (`workspace:*`, `workspace:^`, …), if any. yarn v1
+/// cannot express this protocol, so a `use yarn` conversion of a graph that
+/// carries it must refuse rather than write a lockfile yarn rejects. The
+/// `specifier` field is populated by the pnpm-v9 and bun readers (the
+/// formats that actually use the protocol); npm/yarn lockfiles never carry
+/// it, so this is `None` for them by construction.
+fn workspace_protocol_consumer(graph: &aube_lockfile::LockfileGraph) -> Option<String> {
+    graph
+        .importers
+        .values()
+        .flatten()
+        .find(|dep| {
+            dep.specifier
+                .as_deref()
+                .is_some_and(|s| s.starts_with("workspace:"))
+        })
+        .map(|dep| format!("{}@{}", dep.name, dep.specifier.as_deref().unwrap_or("")))
+}
+
+/// Pure pre-write refusal: reject a `use <target>` whose planned action
+/// would convert a source lockfile into a target format that cannot
+/// faithfully represent it. Called BEFORE the manifest is touched (the
+/// spec's "refuse before writing" contract — a half-switch that pins yarn
+/// in package.json but writes no lockfile is exactly what we avoid).
+///
+/// Today the only such case is `use yarn` over a graph that uses the
+/// `workspace:` protocol: yarn v1 has no `workspace:` support and
+/// hard-rejects a lockfile that needs it ("Couldn't find any versions for
+/// <pkg> that matches workspace:*"). Parsing the source here is one cheap
+/// read-and-parse that only runs for a converting `use yarn`; every other
+/// plan is a no-op. Berry, npm, pnpm, and bun all round-trip the protocol,
+/// so the refusal is classic-yarn-specific.
+pub(crate) fn refuse_unconvertible(root: &Path, target: &str, plan: &AlignPlan) -> Result<()> {
+    if target != "yarn" {
+        return Ok(());
+    }
+    let AlignPlan::Convert {
+        from, from_kind, ..
+    } = plan
+    else {
+        return Ok(());
+    };
+    // Only pnpm/bun lockfiles carry `workspace:` specifiers; skip the parse
+    // for npm sources (npm has no workspace protocol) — but parsing any of
+    // them is cheap and the importer scan is the authoritative check.
+    let manifest = aube_manifest::PackageJson::from_path(&root.join("package.json"))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("reading package.json for the yarn conversion preflight")?;
+    let graph = match from_kind {
+        LockfileKind::Pnpm | LockfileKind::Aube => aube_lockfile::pnpm::parse(from),
+        LockfileKind::Npm | LockfileKind::NpmShrinkwrap => aube_lockfile::npm::parse(from),
+        LockfileKind::Yarn | LockfileKind::YarnBerry => aube_lockfile::yarn::parse(from, &manifest),
+        LockfileKind::Bun => aube_lockfile::bun::parse(from),
+    }
+    .map_err(|e| anyhow::anyhow!("{}", super::present::rewrite(&e.to_string())))
+    .with_context(|| format!("parsing {}", from.display()))?;
+    if let Some(pkg) = workspace_protocol_consumer(&graph) {
+        bail!(
+            "yarn v1 does not support the `workspace:` protocol, but this project \
+             uses it (e.g. `{pkg}`). Converting to a yarn.lock would produce a \
+             lockfile yarn rejects (\"Couldn't find any versions … that matches \
+             workspace:*\"). Replace the `workspace:` specifiers with a version \
+             range or `*` in the consuming package.json files before \
+             `nub pm use yarn`, or pick another manager: nub pm use pnpm | npm | bun."
+        );
+    }
+    Ok(())
+}
+
 /// The [`LockfileKind`] of a conversion source file (content-refined for
 /// yarn.lock, mirroring the engine's `refine_yarn_kind`).
 fn source_kind(path: &Path) -> LockfileKind {
@@ -505,6 +575,39 @@ mod tests {
             body.contains("sha512-8ND1j3y9"),
             "the integrity must survive the conversion:\n{body}"
         );
+    }
+
+    #[test]
+    fn use_yarn_refuses_a_workspace_protocol_graph_before_touching_the_manifest() {
+        // A pnpm workspace where one member depends on another via
+        // `workspace:*`. yarn v1 cannot express the protocol, so the
+        // converting `use yarn` must refuse in the pure preflight — no
+        // yarn.lock, manifest untouched.
+        let dir = root("ws-proto", &[]);
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"app","version":"1.0.0","private":true}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("pnpm-lock.yaml"),
+            "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n\n  packages/a:\n    dependencies:\n      b:\n        specifier: workspace:*\n        version: link:../b\n\n  packages/b: {}\n",
+        )
+        .unwrap();
+
+        let plan = plan_alignment(&dir, "yarn").unwrap();
+        assert!(matches!(plan, AlignPlan::Convert { .. }));
+        let err = refuse_unconvertible(&dir, "yarn", &plan)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("workspace:") && err.contains("b@workspace:*"),
+            "the refusal must name the protocol and the offending dep, got: {err}"
+        );
+
+        // A non-yarn target converts the same graph fine (pnpm round-trips
+        // the protocol): no refusal.
+        assert!(refuse_unconvertible(&dir, "pnpm", &plan).is_ok());
     }
 
     #[test]
