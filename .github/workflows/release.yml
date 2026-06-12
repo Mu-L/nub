@@ -338,6 +338,15 @@ jobs:
               archive="nub-$platform.zip"
               (cd "$PKG" && zip -qr "$GITHUB_WORKSPACE/release-archives/$archive" bin runtime)
             else
+              # Re-apply +x BEFORE tarring: the build job's chmod (assemble step)
+              # does NOT survive the upload-artifact → download-artifact round-trip
+              # (it strips Unix mode bits), so the binaries arrive here at 0644. A
+              # tarball built from those is non-executable — install.sh heals it
+              # with its own chmod, but `nub upgrade`'s self-owned path extracts and
+              # runs the binary directly, so a 0644 archive breaks every self-upgrade
+              # ("command not found" after upgrade). Ship 0755 in the archive so both
+              # the curl|sh installer and `nub upgrade` get an executable binary.
+              chmod +x "$PKG/bin/nub" "$PKG/bin/nubx"
               archive="nub-$platform.tar.gz"
               tar -czf "release-archives/$archive" -C "$PKG" bin runtime
             fi

@@ -14,6 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// the brand boundary holds and the codes read identically to the engine's.
 const ERR_NUB_MANIFEST_UNREADABLE: &str = "ERR_NUB_MANIFEST_UNREADABLE";
 const ERR_NUB_MANIFEST_PARSE: &str = "ERR_NUB_MANIFEST_PARSE";
+/// No `package.json` at or above the cwd. The install path surfaces the same root
+/// cause as a coded miette diagnostic from the engine; `nub run` reuses this code
+/// so both spellings read consistently (was a bare `Error: no package.json found`).
+const ERR_NUB_NO_MANIFEST: &str = "ERR_NUB_NO_MANIFEST";
 
 static SHOW_WARNINGS: AtomicBool = AtomicBool::new(false);
 /// `--silent` suppresses Nub's own preamble (the `$ <command>` script echo),
@@ -952,12 +956,17 @@ fn run_nub() -> Result<i32> {
         // does (`echo 'code' | node` runs the code). This is the no-positional,
         // non-TTY case only — reuse the existing `nub -` stdin path by injecting
         // the `-` positional and routing to the same runner. The interactive-TTY
-        // case (bare `nub` at a terminal) still shows help; Node would start a
-        // REPL there, which nub deliberately does not implement yet.
+        // case (bare `nub` at a terminal) shows the top-level help so a first-time
+        // user gets oriented to nub's verbs; Node would start a REPL there, which
+        // nub deliberately does not implement yet.
         if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             return run_file_with_compat(&["-".to_string()], compat);
         }
-        Cli::parse_from(["nub", "--help"]);
+        // Orient the first-time user instead of exiting silently. `run_help(None)`
+        // prints the same listing as `nub --help` (clap's `try_parse_from`), so
+        // bare `nub` and `nub --help` agree — and it returns cleanly rather than
+        // `parse_from`'s process-exit.
+        run_help(None);
         Ok(0)
     } else {
         let first = &rest[0];
@@ -1541,8 +1550,8 @@ fn run_script(
     // unparseable would otherwise be swallowed by detect_project into the
     // misleading "no package.json found" below. Surface the real, coded cause.
     check_manifest_json(&cwd)?;
-    let project = nub_core::workspace::detect::detect_project(&cwd)
-        .ok_or_else(|| anyhow::anyhow!("no package.json found"))?;
+    let project =
+        nub_core::workspace::detect::detect_project(&cwd).ok_or_else(|| no_manifest_error(&cwd))?;
 
     // No script name (`nub run`): list available scripts instead of a raw clap
     // "required argument" error — same shape as the missing-named-script path.
@@ -1635,8 +1644,8 @@ fn run_workspace_target(
     // See run_script: surface an unreadable/unparseable manifest with its coded
     // cause instead of the misleading "no package.json found".
     check_manifest_json(&cwd)?;
-    let project = nub_core::workspace::detect::detect_project(&cwd)
-        .ok_or_else(|| anyhow::anyhow!("no package.json found"))?;
+    let project =
+        nub_core::workspace::detect::detect_project(&cwd).ok_or_else(|| no_manifest_error(&cwd))?;
     let project = &project;
     let ws_root = project
         .workspace_root
@@ -3427,6 +3436,15 @@ fn perform_selfowned_upgrade(install_dir: &Path, version_spec: &str) -> Result<(
         bail!("nub upgrade: swapped bin/ but failed to swap runtime/: {e}");
     }
 
+    // The release tarball ships `bin/nub` (and `bin/nubx`) at mode 0644 — the
+    // upload-artifact → download-artifact round-trip in CI strips the executable
+    // bit, so the published archive is non-executable. install.sh heals fresh
+    // installs with its own `chmod +x`; the self-owned upgrade path must do the
+    // same or every upgrade leaves `~/.nub/bin/nub` as `-rw-r--r--` and the next
+    // invocation is "command not found" / a silent fall-back to a stale npm binary.
+    // Set +x on the freshly-swapped-in binary before it can be invoked.
+    ensure_bin_executable(&install_dir.join("bin").join("nub"))?;
+
     // The release tarball ships only `bin/nub`; recreate the `nubx` alias that
     // install.sh creates (relative symlink → nub; the CLI dispatches on argv[0],
     // so the alias name is what matters — see Argv0::detect). Without this, every
@@ -3467,6 +3485,27 @@ fn swap_dir(install_dir: &Path, name: &str, new_src: &Path) -> Result<()> {
     } else {
         std::fs::rename(new_src, &dest)
             .with_context(|| format!("could not install {}", dest.display()))?;
+    }
+    Ok(())
+}
+
+/// Set the executable bit (0o755) on a freshly-installed binary. The release
+/// archive ships the binary at 0o644 — CI's upload/download-artifact round-trip
+/// strips the +x install.sh would otherwise rely on — so the self-owned upgrade
+/// path must re-apply it or the upgraded `nub` is non-executable. No-op on
+/// Windows (executability is by extension, not a mode bit).
+#[cfg_attr(windows, allow(unused_variables, clippy::unnecessary_wraps))]
+fn ensure_bin_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(path, perms).with_context(|| {
+            format!(
+                "nub upgrade: failed to set executable permissions on {}",
+                path.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -3706,6 +3745,18 @@ fn pm_store_root() -> Result<PathBuf> {
     nub_core::node::discovery::cache_dir().ok_or_else(|| {
         anyhow::anyhow!("could not locate nub's cache directory (no $HOME / $XDG_CACHE_HOME)")
     })
+}
+
+/// The coded "no package.json" error for the script-run paths (`nub run`), so a
+/// missing manifest reads with the same `ERR_NUB_*` framing the install path
+/// surfaces for the same root cause — not a bare `Error: no package.json found`.
+/// `nub run` only consults `package.json#scripts`, so this names the manifest
+/// (not the workspace-yaml the install path also accepts).
+fn no_manifest_error(cwd: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{ERR_NUB_NO_MANIFEST}: no package.json found in {} or any parent directory",
+        cwd.display()
+    )
 }
 
 /// Preflight a project's `package.json` for parseability. Resolution treats an
@@ -5435,6 +5486,49 @@ mod tests {
             Some(Command::Upgrade { dry_run, .. }) => assert!(dry_run),
             other => panic!("expected Upgrade, got {other:?}"),
         }
+    }
+
+    // P0 regression guard: a self-owned upgrade must leave bin/nub EXECUTABLE.
+    // The release tarball ships the binary at 0644 (CI's artifact round-trip
+    // strips +x), so after the staging-extract + swap_dir the freshly-installed
+    // `nub` is non-executable until ensure_bin_executable re-applies the mode —
+    // omit that step and every `nub upgrade` ends in "command not found". This
+    // replays the swap sequence on a 0644 staged binary and asserts the mode bit.
+    #[cfg(unix)]
+    #[test]
+    fn self_owned_upgrade_makes_binary_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let install = tempfile::tempdir().expect("install dir");
+        // A prior install already has a (executable) bin/ in place, so the swap
+        // exercises the move-aside branch of swap_dir, matching a real upgrade.
+        let old_bin = install.path().join("bin");
+        std::fs::create_dir_all(&old_bin).unwrap();
+        std::fs::write(old_bin.join("nub"), b"#!old\n").unwrap();
+
+        // Staged new bin/, as `tar -xzf` lands it from a 0644 archive.
+        let staged_bin = install.path().join("staged-bin");
+        std::fs::create_dir_all(&staged_bin).unwrap();
+        let staged_nub = staged_bin.join("nub");
+        std::fs::write(&staged_nub, b"#!new\n").unwrap();
+        std::fs::set_permissions(&staged_nub, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        swap_dir(install.path(), "bin", &staged_bin).expect("swap bin");
+        let live_nub = install.path().join("bin").join("nub");
+        // Precondition: the swapped-in binary really is non-executable (0644) —
+        // proves the bug exists absent the fix, not a vacuous pass.
+        assert_eq!(
+            std::fs::metadata(&live_nub).unwrap().permissions().mode() & 0o111,
+            0,
+            "staged 0644 binary must arrive non-executable before the chmod"
+        );
+
+        ensure_bin_executable(&live_nub).expect("chmod +x");
+        assert_ne!(
+            std::fs::metadata(&live_nub).unwrap().permissions().mode() & 0o100,
+            0,
+            "after upgrade, bin/nub must have the owner-execute bit set"
+        );
     }
 
     // BLOCKER regression guard: the npm-channel upgrade must target the scoped
