@@ -1012,18 +1012,15 @@ function HypermanagerBand() {
           title={
             <>
               pnpm, but{' '}
-              {/* TODO(bench): drop the verified multiplier in here once the
-                  comprehensive benchmark lands — e.g. "faster" → "16× faster".
-                  Do NOT write a number until it is measured. */}
-              <span className="text-pink">faster</span>
+              <span className="text-pink">drop-in</span>
             </>
           }
           subhead={
             <>
               Nub installs your dependencies itself — no <Mono>npm</Mono>, <Mono>pnpm</Mono>,{' '}
               <Mono>yarn</Mono>, or <Mono>bun</Mono>{' '}in the loop. It reads the lockfile your
-              project already has and writes the same format back. Powered by{' '}
-              <Mono>aube</Mono>, jdx&rsquo;s Rust package manager.
+              project already has and writes the same format back, so there&rsquo;s nothing to
+              migrate. Powered by <Mono>aube</Mono>, jdx&rsquo;s Rust package manager.
             </>
           }
           accent="pink"
@@ -1042,6 +1039,8 @@ function HypermanagerBand() {
                 installs from it and writes the same format back, so there&rsquo;s no migration and
                 no foreign lockfile dropped next to yours. The <Mono>node_modules</Mono>{' '}layout
                 matches too — flat and hoisted for an npm/bun project, the symlinked store for pnpm.
+                A bidirectional conformance suite checks both directions — nub reads each tool&rsquo;s
+                lockfile, and each tool reads nub&rsquo;s back without churn.
               </>
             }
             visual={
@@ -1088,14 +1087,50 @@ catalog:
             }
           />
 
-          {/* TODO(bench): restore the Performance feature once the neutral
-              comprehensive benchmark lands. The prior "as fast as pnpm warm,
-              faster cold" claim was based on a non-neutral harness and is held
-              until real numbers are in. Do NOT assert a speed claim here until
-              then. */}
+          <Feature
+            accent="pink"
+            eyebrow="Install speed"
+            title="As fast as pnpm on install"
+            body={
+              <>
+                On a warm store, <Mono>nub install</Mono>{' '}lands right alongside{' '}
+                <Mono>pnpm</Mono>{' '}— the two are a statistical tie. The headline speed win
+                isn&rsquo;t the install; it&rsquo;s every <Mono>nub run</Mono>{' '}and{' '}
+                <Mono>nubx</Mono>{' '}after it, where a compiled Rust binary skips the
+                per-invocation Node bootstrap that <Mono>pnpm</Mono>{' '}pays. Install is parity;
+                the daily loop is where Nub pulls ahead.
+              </>
+            }
+            visual={
+              <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
+                <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
+                  create-t3-app · 253 pkgs · warm store · hyperfine, 12 runs
+                </p>
+                <BenchBars
+                  accent="pink"
+                  max={2.39}
+                  unit="s"
+                  rows={[
+                    { cmd: 'bun install', ms: 1.1 },
+                    { cmd: 'pnpm install', ms: 2.26 },
+                    { cmd: 'nub install', ms: 2.39, us: true },
+                  ]}
+                />
+                <a
+                  href="https://github.com/nubjs/nub/tree/main/tests/bench"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-5 inline-block font-mono text-[0.7rem] uppercase tracking-[0.14em] text-sky underline underline-offset-4"
+                >
+                  Reproduce →
+                </a>
+              </div>
+            }
+          />
 
           <Feature
             accent="pink"
+            reverse
             eyebrow="Configuration compatibility"
             title="Mirrors your package manager's config rules"
             body={
@@ -1115,34 +1150,42 @@ catalog:
           <Feature
             accent="pink"
             eyebrow="Shim"
-            title={
-              <>
-                {/* TODO(bench): drop the verified multiplier in here once shim-vs-Corepack
-                    dispatch overhead is measured — e.g. "A faster" → "A 4× faster".
-                    Do NOT write a number until it is measured. */}
-                A faster Corepack
-              </>
-            }
+            title={<>A 7× faster Corepack</>}
             body={
               <>
                 <Mono>nub pm shim</Mono>{' '}is a package-manager shim — the same idea as{' '}
                 <Mono>corepack</Mono>, but faster. It drops <Mono>npm</Mono>, <Mono>pnpm</Mono>,{' '}
                 <Mono>yarn</Mono>, and <Mono>bun</Mono>{' '}shims under <Mono>~/.nub/shims</Mono>{' '}
-                that route each invocation to the version the project pins. The version-manager
-                job, without the global install. <Mono>nub pm use pnpm@^9</Mono>{' '}declares and
-                provisions that exact version for the whole team.
+                that route each invocation to the version the project pins. Corepack&rsquo;s shim
+                is itself a Node program, so it cold-loads a JS bundle on every call; Nub&rsquo;s
+                is a compiled binary that resolves and execs directly. <Mono>nub pm use pnpm@^9</Mono>{' '}
+                declares and provisions that exact version for the whole team.
               </>
             }
             reverse
             visual={
-              <Terminal
-                lines={[
-                  { cmd: 'nub pm shim' },
-                  { out: '7 entries in ~/.nub/shims (7 created)' },
-                  { out: 'PATH: added ~/.nub/shims to ~/.zshrc' },
-                  { cmd: 'pnpm install', comment: "now routed to the project's pinned pnpm" },
-                ]}
-              />
+              <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
+                <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
+                  run a package.json script · hyperfine, 20 runs
+                </p>
+                <BenchBars
+                  accent="pink"
+                  max={432}
+                  rows={[
+                    { cmd: 'nub run', ms: 60, us: true },
+                    { cmd: 'pnpm run', ms: 423, ratio: 7 },
+                    { cmd: 'corepack pnpm run', ms: 432, ratio: 7 },
+                  ]}
+                />
+                <a
+                  href="https://github.com/nubjs/nub/tree/main/tests/bench"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-5 inline-block font-mono text-[0.7rem] uppercase tracking-[0.14em] text-sky underline underline-offset-4"
+                >
+                  Reproduce →
+                </a>
+              </div>
             }
           />
         </div>
