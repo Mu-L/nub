@@ -751,6 +751,17 @@ mod tests {
     /// boundary is environment-dependent and stays untested.)
     #[test]
     fn engine_root_replicas_resolve_like_the_engine() {
+        // `find_workspace_root` discovers `pnpm-workspace.yaml` only when the
+        // engine context's `read_branded_pnpm_config` posture is on (the
+        // upstream default). That posture is process-global (a last-write-wins
+        // RwLock) and other tests in this binary flip it to `false` by driving
+        // `engine_brand_preflight` through a family dispatch. Serialize against
+        // them on the shared lock and set the posture true while we hold it, so
+        // the global state is stable for this test's reads.
+        let _guard = crate::pm_engine::ENGINE_GLOBAL_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        aube_util::update_engine_context(|c| c.read_branded_pnpm_config = true);
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
             root.path().join("pnpm-workspace.yaml"),

@@ -440,7 +440,6 @@ dependencies = [
 name = "aube-settings"
 version = "1.19.0"
 dependencies = [
- "aube-util",
  "serde",
  "toml 1.1.2+spec-1.1.0",
  "yaml_serde",

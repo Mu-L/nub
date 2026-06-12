@@ -19,16 +19,117 @@
 //! lockfile kind (fallback) — the same precedence identity resolution and
 //! the lifecycle UA use.
 //!
-//! This module is pure policy: it filters the neutral source-tagged
-//! override list aube exposes ([`aube_manifest::PackageJson::tagged_overrides`])
-//! down to the role-honored sources, folds the survivors back with aube's
-//! native precedence, and reports which fields it dropped. The aube seam
-//! (`set_embedder_overrides`, `set_trusted_dependencies_honored`) carries
-//! no role logic — all of it lives here.
+//! This module is pure policy: it gathers the manifest's override entries as
+//! a neutral source-tagged list ([`gather_tagged_overrides`]), filters that
+//! list down to the role-honored sources, folds the survivors back with the
+//! native precedence ([`fold_tagged_overrides`]), and reports which fields it
+//! dropped. The result is handed to the engine via the `EngineContext`
+//! (`embedder_overrides`, `trusted_dependencies_honored`) — the engine's
+//! `PackageJson::overrides_map` returns that scoped map verbatim. The tagging /
+//! folding lives here in nub, not in aube: the upstream engine consumes only
+//! the final map and assigns no policy to the sources, so the per-dialect
+//! breakdown is nub's concern (it was previously exposed by aube-manifest's
+//! `tagged_overrides` / `fold_tagged_overrides`, removed in the embedder
+//! refactor when aube stopped needing it).
 
 use aube_lockfile::LockfileKind;
-use aube_manifest::{OverrideSource, TaggedOverride};
+use aube_manifest::PackageJson;
 use std::collections::BTreeMap;
+
+/// Which top-level / namespaced source a dependency-override entry came from.
+/// Preserved un-merged so the per-dialect scoping policy can keep only the
+/// active package manager's native field before folding back with precedence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverrideSource {
+    /// yarn-style top-level `resolutions`.
+    Resolutions,
+    /// Namespaced `pnpm.overrides` (the only branded namespace nub scopes;
+    /// nub's own config home is the manifest root, not an `aube`/`nub` object).
+    NamespacedOverrides,
+    /// Top-level `overrides` (npm / pnpm / bun).
+    Overrides,
+}
+
+/// One override entry tagged with the manifest source it came from. `key` is
+/// the raw selector string, `value` the raw version/spec string. No merge,
+/// precedence, or `$name` resolution is applied.
+#[derive(Debug, Clone)]
+pub(crate) struct TaggedOverride {
+    pub(crate) source: OverrideSource,
+    pub(crate) key: String,
+    pub(crate) value: String,
+}
+
+/// Gather the manifest's override entries as a flat, source-tagged list — no
+/// merge, no precedence, no `$name` resolution. Order within each source is
+/// declaration order; order across sources is `resolutions`, then
+/// `pnpm.overrides`, then top-level `overrides` (matching the engine's own
+/// fold precedence). Malformed keys (empty) and non-string values are dropped.
+/// Reads the manifest's raw `extra` map directly — the neutral seam the engine
+/// used to expose as `PackageJson::tagged_overrides`.
+pub(crate) fn gather_tagged_overrides(manifest: &PackageJson) -> Vec<TaggedOverride> {
+    let mut out: Vec<TaggedOverride> = Vec::new();
+    let push = |out: &mut Vec<TaggedOverride>,
+                source: OverrideSource,
+                obj: &serde_json::Map<String, serde_json::Value>| {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str()
+                && !k.is_empty()
+            {
+                out.push(TaggedOverride {
+                    source,
+                    key: k.clone(),
+                    value: s.to_string(),
+                });
+            }
+        }
+    };
+
+    // yarn `resolutions` (lowest priority).
+    if let Some(obj) = manifest
+        .extra
+        .get("resolutions")
+        .and_then(|v| v.as_object())
+    {
+        push(&mut out, OverrideSource::Resolutions, obj);
+    }
+    // Branded `pnpm.overrides`. Gathered so the scoping policy can DROP it
+    // under a non-pnpm role (brand-symmetry); under pnpm it's honored.
+    if let Some(obj) = manifest
+        .extra
+        .get("pnpm")
+        .and_then(|v| v.as_object())
+        .and_then(|p| p.get("overrides"))
+        .and_then(|v| v.as_object())
+    {
+        push(&mut out, OverrideSource::NamespacedOverrides, obj);
+    }
+    // Top-level `overrides` (npm / pnpm / bun) — highest priority.
+    if let Some(obj) = manifest.extra.get("overrides").and_then(|v| v.as_object()) {
+        push(&mut out, OverrideSource::Overrides, obj);
+    }
+    out
+}
+
+/// Fold a source-tagged list back into a precedence map: `resolutions`
+/// (lowest), then `pnpm.overrides`, then top-level `overrides` (highest).
+/// A stable sort by rank keeps within-source declaration order, then
+/// later-wins on key collision reproduces a sequential per-source insert —
+/// byte-identical to the engine's historical fold.
+pub(crate) fn fold_tagged_overrides(tagged: Vec<TaggedOverride>) -> BTreeMap<String, String> {
+    let rank = |s: OverrideSource| match s {
+        OverrideSource::Resolutions => 0u8,
+        OverrideSource::NamespacedOverrides => 1,
+        OverrideSource::Overrides => 2,
+    };
+    let mut tagged = tagged;
+    tagged.sort_by_key(|t| rank(t.source));
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for t in tagged {
+        out.insert(t.key, t.value);
+    }
+    out
+}
 
 /// The active package manager whose config dialect nub mirrors. Resolved
 /// declaration-first (the `packageManager`/`devEngines` pin names the
@@ -166,8 +267,8 @@ pub(crate) struct IgnoredField {
 /// pins the block held. The fix clause names the role-native field the user
 /// should move the pins to.
 ///
-/// Precedence: the survivors keep aube's role-native ordering via
-/// [`aube_manifest::PackageJson::fold_tagged_overrides`]. For a single
+/// Precedence: the survivors keep the role-native ordering via
+/// [`fold_tagged_overrides`]. For a single
 /// surviving source that's a straight key→value map; for bun (both
 /// `overrides` and `resolutions` honored) top-level `overrides` wins, which
 /// is exactly bun's documented precedence and aube's fold rank.
@@ -184,7 +285,7 @@ pub(crate) fn scope_overrides(
     };
 
     let kept: Vec<TaggedOverride> = tagged.iter().filter(|t| keep(t.source)).cloned().collect();
-    let effective = aube_manifest::PackageJson::fold_tagged_overrides(kept);
+    let effective = fold_tagged_overrides(kept);
 
     // Which graph-shaping *fields* were present but dropped. Branded
     // `pnpm.overrides` under a non-pnpm role is the user's own pnpm-tutorial

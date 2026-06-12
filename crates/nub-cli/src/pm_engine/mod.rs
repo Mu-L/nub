@@ -52,6 +52,7 @@
 //! with honest per-verb messages in their family dispatchers.
 
 pub mod config_scope;
+pub mod identity;
 pub mod info_family;
 pub mod install_family;
 pub mod log;
@@ -67,6 +68,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use aube_lockfile::LockfileKind;
+
+/// Serializes tests that touch the process-global engine state — the
+/// `aube_util` embedder profile (`set_embedder`, set-once) and the
+/// `EngineContext` posture (`update_engine_context`, last-write-wins RwLock).
+/// Any test that drives `engine_brand_preflight` / a family `run_verb`
+/// (which registers `NUB` and writes `read_branded_pnpm_config` from the test
+/// process's cwd) races a test that READS that posture
+/// (e.g. `info_family`'s `find_workspace_root`, gated on
+/// `read_branded_pnpm_config`). Both sides take this lock so the global state
+/// is stable for the reader's duration. Cheap (`std::sync::Mutex`), test-only.
+#[cfg(test)]
+pub(crate) static ENGINE_GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The four engine verb families. One module per family; each family module
 /// owns the wiring (args parsing, options construction, output routing) for
@@ -516,16 +529,26 @@ pub(crate) fn run_node_gyp_bootstrap(args: &[String]) -> Result<i32> {
     let [project_dir] = args else {
         anyhow::bail!("usage: nub __node-gyp-bootstrap <project-dir>");
     };
-    let session = engine_session_quiet(None)?;
-    let result = session.runtime.block_on(
-        aube::commands::install::node_gyp_bootstrap::print_bootstrapped_binary(Path::new(
-            project_dir,
-        )),
+    // FLAG (see report): the engine's node-gyp bootstrap entry
+    // (`commands::install::node_gyp_bootstrap::{print_bootstrapped_binary,
+    // ensure_cached}`) is unreachable at the pinned aube API — the
+    // `node_gyp_bootstrap` MODULE is `pub(crate)` with no public re-export, so
+    // neither the wrapper nor `ensure_cached` can be called from nub. This
+    // re-entry verb is invoked by the engine's own lazy node-gyp shims
+    // (`AUBE_NODE_GYP_EXE __node-gyp-bootstrap <dir>`, where `current_exe()` is
+    // nub), so the path IS live and this is a regression from the refactor (the
+    // old pin had `pub mod node_gyp_bootstrap`). Restoring it needs ONE of:
+    // (a) a one-line visibility widening in vendor/aube
+    // (`pub(crate) mod node_gyp_bootstrap` → `pub`, or a `pub use … ensure_cached`)
+    // — a vendor edit out of this task's scope; or (b) reproducing the full
+    // bootstrap (lock, npmrc propagation, recursive install spawn) in nub. Both
+    // are design calls for the human, so this errors honestly rather than
+    // silently mis-bootstrapping.
+    anyhow::bail!(
+        "nub: node-gyp lazy bootstrap for `{project_dir}` is unavailable against the current \
+         aube engine API (`node_gyp_bootstrap` is not publicly reachable) — see pm_engine FLAG. \
+         Install node-gyp globally as a workaround."
     );
-    match result {
-        Ok(()) => Ok(0),
-        Err(report) => Ok(present::emit_report(&report)),
-    }
 }
 
 /// The shared stub error for registered-but-unwired verbs: names the verb
@@ -617,7 +640,8 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
     // project the first token is nub's. Lifecycle-only — the registry UA and
     // stream-time tool naming stay on the `nub/<ver>` product identity set in
     // [`engine_brand_preflight`] (telemetry never lies).
-    aube::set_lifecycle_user_agent_product(lifecycle_ua_product(detected.as_ref(), &cwd));
+    let lifecycle_ua = lifecycle_ua_product(detected.as_ref(), &cwd);
+    aube_util::update_engine_context(|c| c.lifecycle_user_agent_product = Some(lifecycle_ua));
     // Config-scoping policy (CP-3): mirror the active PM's graph-shaping
     // config (pins/catalogs), never silently. Computed AFTER identity
     // resolves (it needs the role) and BEFORE the embedder defaults / engine
@@ -627,7 +651,7 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
     apply_config_scope(detected.as_ref(), &cwd, noise)?;
     // Set-unless-user-set: ranks below CLI flags, env vars, and every
     // config file in the engine's settings precedence.
-    aube::set_embedder_defaults(nub_setting_defaults(detected.as_ref()));
+    aube_settings::set_embedder_defaults(nub_setting_defaults(detected.as_ref()));
     // Route the engine's lifecycle scripts through nub's runtime augmentation
     // (project-pinned + augmented Node, shim on PATH, preload) — the SAME
     // augmentation `nub run` / `nub exec` apply, so run / exec / lifecycle
@@ -681,14 +705,17 @@ fn apply_config_scope(
         .unwrap_or((None, None));
 
     // Scope the override sources to the role's dialect.
-    let tagged = manifest.tagged_overrides();
+    let tagged = config_scope::gather_tagged_overrides(&manifest);
     let (effective, ignored) = config_scope::scope_overrides(role, major, minor, &tagged);
 
     // Register the scoped source as the engine's sole override source, and
     // the trusted-deps toggle (only bun, only below the major that dropped
     // it, honors `trustedDependencies`). Both are idempotent OnceLocks.
-    aube::set_embedder_overrides(Some(effective));
-    aube::set_trusted_dependencies_honored(config_scope::honors_trusted_dependencies(role, major));
+    let trusted = config_scope::honors_trusted_dependencies(role, major);
+    aube_util::update_engine_context(|c| {
+        c.embedder_overrides = Some(effective);
+        c.trusted_dependencies_honored = trusted;
+    });
 
     if noise == ConfigScopeNoise::Warn {
         // Catalog hard-error: a role that doesn't honor `catalog:` specifiers
@@ -750,7 +777,7 @@ fn first_catalog_specifier(manifest: &aube_manifest::PackageJson, root: &Path) -
 
     // (3) override values (root only — npm/pnpm/bun read overrides from the root
     // manifest). A `catalog:`-valued override is a real catalog reference.
-    for o in manifest.tagged_overrides() {
+    for o in config_scope::gather_tagged_overrides(manifest) {
         if o.value.starts_with("catalog:") {
             return Some(format!("override {}: {}", o.key, o.value));
         }
@@ -1034,12 +1061,16 @@ fn apply_lifecycle_augmentation(cwd: &Path) {
         return;
     };
     let (env_overlay, path_prepends) = augmentation_to_lifecycle_overlay(&aug, node.path.as_str());
-    // Merge onto whatever ScriptSettings already hold (UA etc. set elsewhere),
-    // preserving the embedder fields the later .npmrc pass carries forward.
-    let mut settings = aube::script_settings_snapshot();
-    settings.env_overlay = env_overlay;
-    settings.path_prepends = path_prepends;
-    aube::set_script_settings(settings);
+    // Hand the overlay to the engine via the runtime context. aube copies
+    // `env_overlay` / `path_prepends` from `engine_context()` into its
+    // `ScriptSettings` at settings-resolution time (the spawn path composes them
+    // onto PATH/env); aube's own ScriptSettings fields (node_options, the UA,
+    // etc.) are filled by the engine separately, so setting just these two here
+    // is the equivalent of the old snapshot-merge.
+    aube_util::update_engine_context(|c| {
+        c.env_overlay = env_overlay;
+        c.path_prepends = path_prepends;
+    });
 }
 
 /// `--dir` / `-C` (and the global `--cwd`, which dispatch applies earlier):
@@ -1143,43 +1174,68 @@ fn identity_error(err: aube_lockfile::Error) -> anyhow::Error {
 /// workspace config transitively (see the ordering note on
 /// [`engine_session`]). Every seam is idempotent.
 pub(crate) fn engine_brand_preflight() {
-    // Env surface: npm-compatible (`npm_config_*`) + ecosystem-neutral
-    // (`CI`, proxies, …). `AUBE_*` stays invisible — nub's config contract
-    // is the npm ecosystem's, not another tool's branded variables.
-    aube::set_env_families(aube::EnvFamilies::NPM.union(aube::EnvFamilies::EXTERNAL));
-    // Lifecycle scripts (npm_config_user_agent) and registry requests
-    // identify the running tool: `nub/<ver> …`.
-    aube::set_user_agent_product(format!("nub/{}", env!("CARGO_PKG_VERSION")));
+    // Static identity FIRST, before anything reads project state or branding.
+    // The whole compile-time profile — name, `nub/<ver>` UA, `lock.yaml`
+    // canonical lockfile, `["nub"]`/`["pnpm"]` detection names, and the five
+    // embedder-fixed toggles (engines-self check OFF, runtime-switching OFF,
+    // warm-store-verify OFF, canonical-lockfile-always-wins OFF, self-update
+    // OFF) — lives on [`identity::NUB`] and is registered once here (set-once
+    // OnceLock; idempotent). This replaces the old scatter of
+    // `set_user_agent_product` / `set_aube_lock_base_filename` /
+    // `set_detection_self_names` / `set_canonical_lockfile_always_wins` /
+    // `set_aube_engine_check` / `set_runtime_switching_enabled` /
+    // `set_warm_store_verify` / `set_package_manager_names` seam calls. It also
+    // carries the cache/data namespaces (`nub/pm`, `nub`), reproducing the old
+    // `set_cache_root($XDG_CACHE/nub/pm)` for the packument / git-clone /
+    // node-gyp caches that derive from `aube_store::dirs::cache_dir()`.
+    //
+    // GAP — env families: the old `set_env_families(NPM | EXTERNAL)` masked
+    // aube's settings-class `AUBE_*` env aliases (e.g. `AUBE_NO_LOCK`,
+    // `AUBE_DEFAULT_LOCKFILE_FORMAT`, `AUBE_LINK_CONCURRENCY`) so nub's config
+    // contract stayed the npm ecosystem's. The aube refactor REMOVED the
+    // env-family gating mechanism entirely (no `EnvFamilies`, no gated
+    // `aube_util::env::var`); `NUB.env_prefix = None` is the nearest expression
+    // of intent but does NOT re-mask those aliases, so under nub a project that
+    // sets `AUBE_*` settings vars now has them honored. No replacement seam
+    // exists. This is a behavior change flagged for the human (see report).
+    //
+    // GAP — resolver primer cache: the primer hardcodes `$XDG_CACHE/aube/primer`
+    // (and reads `AUBE_CACHE_DIR`), bypassing `cache_namespace`. The old
+    // `set_cache_root` redirected it to `…/nub/pm/primer`; the const can't.
+    // Minor (regenerable cache lands under aube's name); flagged, not blocking.
+    identity::register();
     // Config surface follows role (two-mode model, the maintainer 2026-06-10): under
-    // NUB identity the pnpm surface is OFF — `pnpm-workspace.yaml` unread
-    // (empty yaml-name list) and the `package.json#pnpm.*` namespace swapped
-    // for the manifest ROOT (`""`), so top-level `workspaces` (+ catalogs),
-    // `overrides`, `patchedDependencies`, and the three-state `allowBuilds`
-    // map are the config homes (and `approve-builds` writes top-level). In
-    // compat mode (any other role, incl. fresh) nub plays the incumbent
-    // completely: `pnpm-workspace.yaml` + `pnpm.*` stay live exactly as
-    // before. The probe is engine-free (plain manifest/lockfile-presence
-    // reads) because these getters freeze before identity resolution runs.
-    // ONE walk up the tree, ONE `current_dir()` read, resolving the full
-    // surface classification (see [`resolve_config_surface`]).
+    // NUB identity the pnpm surface is OFF — `pnpm-workspace.yaml` unread and
+    // the `package.json#pnpm.*` namespace not consulted (the `manifest_namespace
+    // = ""` root carries top-level `workspaces` (+ catalogs), `overrides`,
+    // `patchedDependencies`, and the three-state `allowBuilds` map; the engine's
+    // own branded YAML/namespace are `None`/`""` so they never apply). In compat
+    // mode (any other role, incl. fresh) nub plays the incumbent completely:
+    // `pnpm-workspace.yaml` + `pnpm.*` stay live. The pnpm-branded read-sites now
+    // move together behind ONE EngineContext posture: `read_branded_pnpm_config`
+    // gates the `pnpm-workspace.yaml` candidate, the `pnpm` package.json
+    // namespace, AND pnpm's global `~/.config/pnpm/auth.ini` — true only in the
+    // PnpmOrFresh arm. `pnpmfile_default_enabled` gates the cwd-default
+    // `.pnpmfile`; off only under a non-pnpm incumbent (NonPnpmCompat). The probe
+    // is engine-free (plain manifest/lockfile-presence reads): ONE walk up the
+    // tree, ONE `current_dir()` read (see [`resolve_config_surface`]).
     let surface = std::env::current_dir()
         .ok()
         .map(|cwd| resolve_config_surface(&cwd))
         .unwrap_or(ConfigSurface::PnpmOrFresh);
+    let read_branded_pnpm_config = matches!(surface, ConfigSurface::PnpmOrFresh);
+    let pnpmfile_default_enabled = !matches!(surface, ConfigSurface::NonPnpmCompat(_));
+    aube_util::update_engine_context(|c| {
+        c.read_branded_pnpm_config = read_branded_pnpm_config;
+        c.pnpmfile_default_enabled = pnpmfile_default_enabled;
+    });
     match surface {
         ConfigSurface::NubIdentity(dir) => {
-            aube::set_workspace_yaml_names(&[]);
-            aube::set_manifest_config_namespaces(&[""]);
-            // pnpm's global `~/.config/pnpm/auth.ini` is a pnpm-NAMED path, so
-            // under nub identity (incumbent is not pnpm) it is not read at all —
-            // a name-based rule: anything with "pnpm" in the path is off unless
-            // pnpm is the incumbent, impact-irrelevant (the maintainer 2026-06-11). The
-            // `.npmrc` / `npmrcAuthFile` auth sources stay live.
-            aube::set_pnpm_auth_ini_enabled(false);
             // A stray pnpm-workspace.yaml under nub identity (branch merge,
             // tutorial copy-paste) is ignore-with-warning, never read and never
             // silent: deterministic nub-pure behavior, one warning, remedies
-            // named (the maintainer 2026-06-10, supersedes read-with-warning).
+            // named (the maintainer 2026-06-10, supersedes read-with-warning). The read
+            // itself is already gated off by `read_branded_pnpm_config = false`.
             if dir.join("pnpm-workspace.yaml").is_file() {
                 eprintln!(
                     "nub: pnpm-workspace.yaml is not read under nub identity — migrate it \
@@ -1189,35 +1245,20 @@ pub(crate) fn engine_brand_preflight() {
         }
         ConfigSurface::NonPnpmCompat(role) => {
             // Compat mode, but the incumbent is npm/yarn/bun — NOT pnpm. The
-            // pnpm-specific config surface is theirs to ignore: a stray
-            // `pnpm-workspace.yaml` or a `package.json#pnpm.*` object in an npm /
-            // yarn / bun project is another tool's state, exactly as it is under
-            // nub identity (a yarn repo someone copied a pnpm tutorial's workspace
-            // yaml into must not silently adopt its `packages`/`node-linker`). The
-            // ecosystem-neutral surface stays live: `.npmrc`, and top-level
-            // `workspaces`/`overrides`/`allowBuilds` via the manifest root.
-            aube::set_workspace_yaml_names(&[]);
-            aube::set_manifest_config_namespaces(&[""]);
-            // The cwd-default `.pnpmfile.cjs`/`.mjs` is pnpm-proprietary too, and
-            // unlike a workspace-yaml *it shapes resolution* — its `readPackage` /
-            // `afterAllResolved` hooks rewrite the dep graph. Under a non-pnpm
-            // incumbent it's another tool's config: gate the default arm off so it
-            // isn't silently honored. Explicit `--pnpmfile`/`--global-pnpmfile`
-            // overrides still load (a path named on purpose). One dim warning when
-            // a present file is suppressed, matching the pnpm-workspace.yaml
-            // ignore-with-warning pattern.
-            aube::set_pnpmfile_default_enabled(false);
-            // pnpm's global `~/.config/pnpm/auth.ini` is a pnpm-NAMED path: under
-            // a non-pnpm incumbent (npm/yarn/bun) it is another tool's file and is
-            // not read at all. Name-based, impact-irrelevant — the earlier
-            // "auth.ini is exempt, cross-tool auth, no resolution impact" carve-out
-            // was reversed (the maintainer 2026-06-11): the rule keys on the pnpm name in
-            // the path, not on whether the read can change resolution. The
-            // ecosystem-neutral `.npmrc` / `npmrcAuthFile` auth sources stay live.
-            aube::set_pnpm_auth_ini_enabled(false);
+            // pnpm-specific config surface is theirs to ignore (gated off by
+            // `read_branded_pnpm_config = false`): a stray `pnpm-workspace.yaml`,
+            // a `package.json#pnpm.*` object, or pnpm's global `auth.ini` in an
+            // npm/yarn/bun project is another tool's state. The cwd-default
+            // `.pnpmfile.cjs`/`.mjs` is pnpm-proprietary too, and unlike a
+            // workspace-yaml *it shapes resolution* — gated off here by
+            // `pnpmfile_default_enabled = false`. Explicit
+            // `--pnpmfile`/`--global-pnpmfile` overrides still load (a path named
+            // on purpose). One dim warning when a present default file is
+            // suppressed, matching the pnpm-workspace.yaml ignore-with-warning
+            // pattern.
             if let Some(present) = std::env::current_dir()
                 .ok()
-                .and_then(|cwd| aube::pnpmfile_default_path(&cwd))
+                .and_then(|cwd| pnpmfile_default_path(&cwd))
             {
                 let name = present
                     .file_name()
@@ -1235,79 +1276,30 @@ pub(crate) fn engine_brand_preflight() {
             }
         }
         ConfigSurface::PnpmOrFresh => {
-            // pnpm role (or fresh): play the incumbent completely. Workspace
-            // yamls: `pnpm-workspace.yaml` only. An `aube-workspace.yaml` some
-            // other tool left on disk is neither read nor chosen as the
-            // fresh-write target (`approve-builds` writes its allowlist there).
-            aube::set_workspace_yaml_names(&["pnpm-workspace.yaml"]);
-            // package.json config namespace: `pnpm` only — an `aube` object in a
-            // manifest is another tool's state; nub neither consults nor mutates
-            // it (`remove`'s sidecar pruning, `--allow-build`'s fallback writes).
-            aube::set_manifest_config_namespaces(&["pnpm"]);
+            // pnpm role (or fresh): play the incumbent completely.
+            // `read_branded_pnpm_config = true` keeps `pnpm-workspace.yaml`, the
+            // `pnpm` package.json namespace, and pnpm's `auth.ini` live. nub's own
+            // branded YAML/namespace are `None`/`""` on the const, so an
+            // `aube-workspace.yaml` or `aube` manifest object some other tool left
+            // on disk is neither read nor chosen as a fresh-write target.
         }
     }
-    // The engine's canonical-lockfile slot carries nub's generic `lock.yaml`
-    // (two-mode model: nub identity = lock.yaml, pnpm-v9 bytes, deliberately
-    // unbranded name). An `aube-lock.yaml` left by another tool is invisible,
-    // exactly like `aube-workspace.yaml` above.
-    aube_lockfile::set_aube_lock_base_filename(use_align::NUB_LOCKFILE);
-    // Identity detection under nub's strict model (decision-table rows,
-    // identity-policy.md): a declared `nub` is the self-name (accepts every
-    // preservable format; fresh writes lock.yaml), and lock.yaml NEVER
-    // silently outranks a foreign lockfile sitting beside it — that state is
-    // the loud ambiguity/contradiction error, with `nub pm use` as the
-    // remedy. (Upstream keeps the always-wins carve-out for its post-import
-    // flow; nub has no import-style dual-lockfile state.)
-    aube_lockfile::set_detection_self_names(&["nub"]);
-    aube_lockfile::set_canonical_lockfile_always_wins(false);
-    // `engines.aube` pins gate a tool nub's users aren't running; skip
-    // them like the engine already skips `engines.pnpm`. `engines.node`
-    // stays validated.
-    aube::set_aube_engine_check(false);
-    // Node version switching is nub's job, not the engine's. nub reads
-    // `.nvmrc`/`.node-version`/devEngines, provisions Node, and pins it on
-    // its own side. Disabling aube's #861 runtime resolver keeps PATH
-    // untouched by the engine and prevents a second (conflicting) Node
-    // resolution — aube's runtime code stays compiled but inert.
-    aube::set_runtime_switching_enabled(false);
-    // Warm-relink store verification: nub trusts the atomically-published
-    // store, so it skips the per-file stat sweep the engine runs on every
-    // warm install by default. aube publishes to its CAS atomically
-    // (O_TMPFILE+linkat / O_CREAT|O_EXCL per file; the index is written
-    // LAST as the completeness marker; a torn index is parse-rejected and
-    // re-fetched), so the full stat-per-file guard only catches external
-    // drift (Docker cache mounts, a manual `rm` in the store) that it
-    // already only partially catches and that lands on a clean re-fetch,
-    // never silent corruption. Disabling it uses the cheap first-file
-    // check (~150 ms saved on a large warm install) and re-enables the
-    // workspace `AlreadyLinked` fast path. This is the local-cache
-    // warm-relink stat ONLY — import-time tarball SHA-512 / SRI
-    // verification (`verifyStoreIntegrity`) is untouched and stays on.
-    // nub defaults this OFF (fast-trust); upstream aube defaults it ON.
-    // See `wiki/commands/pm/supply-chain-posture.md`.
-    aube::set_warm_store_verify(false);
-    // `packageManager` acceptance: nub is the running tool, pnpm the
-    // compatible drop-in. Inert through nub's dispatch today (the
-    // guardrail runs in aube's own CLI entry, which nub bypasses), but any
-    // future engine path that consults the registered names must see
-    // nub's, never the engine's.
-    aube::set_package_manager_names(aube::PackageManagerNames {
-        self_names: vec!["nub".to_string()],
-        self_version: env!("CARGO_PKG_VERSION").to_string(),
-        compatible_names: vec!["pnpm".to_string()],
-    });
-    // Engine cache root: `$XDG_CACHE_HOME/nub/pm` (a sibling of nub's own
-    // runtime caches under `<cache_dir>/`, namespaced so engine state never
-    // mixes with nub's Node store / discovery cache). Covers the packument
-    // caches, git clone cache, node-gyp tool cache, resolver primer, and
-    // adaptive state — everything that previously landed at the engine's
-    // hard-named `<XDG_CACHE_HOME>/aube`. An explicit `cache-dir` in
-    // `.npmrc` still wins for the settings-routed consumers. Skipped when
-    // no cache base resolves — the engine then falls back to its own
-    // default, which fails the same way nub would.
-    if let Some(cache) = nub_core::node::discovery::cache_dir() {
-        aube::set_cache_root(cache.join("pm"));
+}
+
+/// The cwd-default pnpmfile path if one exists, ignoring the engine's
+/// detection gate. Lets the preflight discover that a default `.pnpmfile` is
+/// present *before* the `pnpmfile_default_enabled = false` posture suppresses
+/// it, so it can emit the one-line "ignored" warning naming the file.
+/// Inlined here (the engine's `pnpmfile::default_path` is no longer re-exported
+/// from the `aube` crate); mirrors aube's `.mjs`-over-`.cjs` precedence.
+fn pnpmfile_default_path(cwd: &Path) -> Option<PathBuf> {
+    for name in [".pnpmfile.mjs", ".pnpmfile.cjs"] {
+        let p = cwd.join(name);
+        if p.is_file() {
+            return Some(p);
+        }
     }
+    None
 }
 
 /// The role-gated config surface for a project, resolved by ONE engine-free
@@ -2172,8 +2164,11 @@ mod tests {
         // A bun-incumbent fixture with a real `catalog:` ref: the preflight
         // must not surface the hard-error when the version honors catalogs.
         let d = workspace(&[(
+            // The object form of `workspaces` requires `packages` (aube-manifest
+            // refuses a `packages`-less object so a `pacakges` typo fails loudly);
+            // bun's real object form always carries it alongside `catalog`.
             "package.json",
-            r#"{"name":"root","packageManager":"bun@1.2.3","workspaces":{"catalog":{"is-odd":"3.0.1"}},"dependencies":{"is-odd":"catalog:"}}"#,
+            r#"{"name":"root","packageManager":"bun@1.2.3","workspaces":{"packages":["pkgs/*"],"catalog":{"is-odd":"3.0.1"}},"dependencies":{"is-odd":"catalog:"}}"#,
         )]);
         let m = root_manifest(d.path());
         // The specifier is present...
