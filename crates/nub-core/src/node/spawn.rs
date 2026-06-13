@@ -1806,6 +1806,10 @@ mod tests {
             "packages:\n  - 'packages/*'\n",
         )
         .unwrap();
+        // A committed pnpm-lock.yaml makes pnpm the incumbent PM — without it the
+        // brand hard gate (AGENTS.md) refuses to read the pnpm-NAMED workspace file,
+        // so detect_project would not treat this dir as the workspace root.
+        fs::write(ws.path().join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
         fs::write(ws.path().join("package.json"), r#"{"name":"root"}"#).unwrap();
         let pkg_a = ws.path().join("packages/a");
         let pkg_b = ws.path().join("packages/b");
