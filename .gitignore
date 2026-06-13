@@ -12,6 +12,15 @@
 !.vercelignore
 !.github/
 
+# Agent tooling: track shared skills + project settings; keep local state (jobs, locks, worktrees, *.local.json, scratch *.js) ignored.
+!.claude/
+.claude/*
+!.claude/skills/
+!.claude/settings.json
+!.agents/
+.agents/*
+!.agents/skills/
+
 # === Global cruft ===
 *.pyc
 __pycache__/
