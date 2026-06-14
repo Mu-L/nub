@@ -483,11 +483,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Install from npm
-        run: npm install -g @nubjs/nub
-      - name: Smoke the installed package
+      - name: Install from npm and smoke (with propagation-race retry)
+        # Wraps BOTH the install AND the smoke in a single retry loop so a transient
+        # npm propagation race (optionalDependency not yet on all CDN nodes right after
+        # publish — false-red on 0.0.36) self-heals instead of failing the release.
+        # Up to 6 attempts × 25 s backoff ≈ 2.5 min max. A genuine bad release fails
+        # every attempt (real breakage is not masked). A propagation race typically
+        # passes on attempt 2–3 (CDN sync usually completes in < 60 s).
+        # The retry re-runs npm install each attempt so the binary resolves fresh.
         shell: bash
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh"
+        run: |
+          MAX=6; DELAY=25; attempt=0
+          while true; do
+            attempt=$((attempt + 1))
+            echo "--- install+smoke attempt $attempt/$MAX ---"
+            if npm install -g @nubjs/nub && bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh"; then
+              echo "--- attempt $attempt succeeded ---"
+              exit 0
+            fi
+            if [ "$attempt" -ge "$MAX" ]; then
+              echo "--- all $MAX attempts failed; treating as real failure ---"
+              exit 1
+            fi
+            echo "--- attempt $attempt failed; retrying in ${DELAY}s ---"
+            sleep "$DELAY"
+          done
 
   test-install-musl:
     # The musl leg the 0.0.10 musl-detection bug slipped through — none of the
@@ -502,8 +522,23 @@ jobs:
       - name: Toolchain (bash + git for checkout/smoke)
         run: apk add --no-cache bash git
       - uses: actions/checkout@v4
-      - name: Install from npm
-        run: npm install -g @nubjs/nub
-      - name: Smoke the installed package (musl)
+      - name: Install from npm and smoke (with propagation-race retry)
+        # Same retry logic as the runner-OS legs above — musl also hit the 0.0.36
+        # propagation race. Wrapped identically: both install + smoke per attempt.
         shell: bash
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh"
+        run: |
+          MAX=6; DELAY=25; attempt=0
+          while true; do
+            attempt=$((attempt + 1))
+            echo "--- install+smoke attempt $attempt/$MAX ---"
+            if npm install -g @nubjs/nub && bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh"; then
+              echo "--- attempt $attempt succeeded ---"
+              exit 0
+            fi
+            if [ "$attempt" -ge "$MAX" ]; then
+              echo "--- all $MAX attempts failed; treating as real failure ---"
+              exit 1
+            fi
+            echo "--- attempt $attempt failed; retrying in ${DELAY}s ---"
+            sleep "$DELAY"
+          done
