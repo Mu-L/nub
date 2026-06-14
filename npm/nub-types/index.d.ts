@@ -71,13 +71,36 @@ type __NubUseLibDomIfAvailable<GlobalThisKeyName extends PropertyKey, Otherwise>
       : Otherwise
     : Otherwise;
 
+// ── @types/node version-floor helpers ──
+// Web globals were added to @types/node incrementally across majors:
+//   @22: none of MessageEvent / ErrorEvent / MessagePort are globals
+//   @24: MessageEvent becomes global (globals.d.ts)
+//   @25: ErrorEvent and MessagePort become globals (web-globals/fetch.d.ts + messaging.d.ts)
+//
+// These aliases resolve to the real global type when present, or to a minimal
+// compatible fallback shape otherwise — avoiding TS2403 collisions on newer
+// versions and "cannot find name" errors on older ones.
+//
+// Sentinel: each is a `var` in globalThis once declared; we infer its instance
+// type from the constructor signature to get the instance shape.
+type __NubMessageEventType = typeof globalThis extends { MessageEvent: infer T }
+  ? T extends abstract new (...args: any[]) => infer I ? I : { data: unknown; type: string }
+  : { data: unknown; type: string };
+type __NubErrorEventType = typeof globalThis extends { ErrorEvent: infer T }
+  ? T extends abstract new (...args: any[]) => infer I ? I : { message: string; error: unknown }
+  : { message: string; error: unknown };
+// `MessagePort` is a var in @types/node@25+ (and in lib.dom). Fall back to an opaque
+// branded shape on older versions — sufficient for the `transfer` array type in postMessage.
+type __NubMessagePortType = typeof globalThis extends { MessagePort: infer T }
+  ? T extends abstract new (...args: any[]) => infer I ? I : { postMessage(message: any): void }
+  : { postMessage(message: any): void };
+
 // ── Browser-shape Worker global (runtime/worker-polyfill.mjs; wiki/runtime/web-worker.md) ──
 // Nub ships the WHATWG/browser subset of `Worker` over node:worker_threads.Worker.
 // @types/node has NO global `Worker` (only node:worker_threads' class), so this is
-// the genuine gap. `MessageEvent`, `ErrorEvent`, and `MessagePort` are ALREADY
-// global in @types/node (web-globals/fetch.d.ts + messaging.d.ts) — verified
-// empirically — so they are referenced from there and intentionally NOT redeclared
-// here (redeclaring them collides: TS2403).
+// the genuine gap. MessageEvent/ErrorEvent/MessagePort are referenced here via the
+// version-resilient aliases above so the file typechecks on @types/node@22, @24,
+// and @25+ without TS2403 collisions on any.
 //
 // Step-aside: when `lib: ["dom"]` is in play, the DOM's own `Worker` wins — the
 // interface body resolves to `{}` (via `__NubLibWorkerOrNubWorker`) and our `var`
@@ -90,11 +113,11 @@ interface WorkerOptions {
   credentials?: "omit" | "same-origin" | "include";
 }
 interface __NubWorker extends EventTarget {
-  postMessage(message: any, transfer?: readonly (ArrayBuffer | MessagePort)[]): void;
+  postMessage(message: any, transfer?: readonly (ArrayBuffer | __NubMessagePortType)[]): void;
   terminate(): void;
-  onmessage: ((this: Worker, ev: MessageEvent) => any) | null;
-  onmessageerror: ((this: Worker, ev: MessageEvent) => any) | null;
-  onerror: ((this: Worker, ev: ErrorEvent) => any) | null;
+  onmessage: ((this: Worker, ev: __NubMessageEventType) => any) | null;
+  onmessageerror: ((this: Worker, ev: __NubMessageEventType) => any) | null;
+  onerror: ((this: Worker, ev: __NubErrorEventType) => any) | null;
 }
 type __NubLibWorkerOrNubWorker = __NubLibDomIsLoaded extends true ? {} : __NubWorker;
 interface Worker extends __NubLibWorkerOrNubWorker {}
