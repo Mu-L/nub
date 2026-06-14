@@ -3253,6 +3253,36 @@ fn npm_upgrade_command(target: &str) -> String {
     format!("npm install -g {NPM_PACKAGE}@{target}")
 }
 
+/// Build the OS-correct `Command` that runs the npm-channel self-upgrade.
+///
+/// npm is not a native executable: on Windows it is the `npm.cmd` batch shim,
+/// which the OS can only launch through `cmd.exe`, and on POSIX it is the `npm`
+/// shell wrapper. We invoke npm via the platform shell rather than as a bare
+/// program so PATH-resolution of that wrapper works the same way a user's own
+/// `npm install -g …` would.
+///
+/// The Windows arm (`cmd /C npm install -g …`) is what fixes the npm-channel
+/// upgrade on a plain Windows box: the prior `sh -c …` form needs an `sh` that
+/// Windows does not ship (Git-Bash/MSYS is not guaranteed), so the only upgrade
+/// path npm-installed Windows users have was failing with "program not found"
+/// (CI's Windows runners carry Git-Bash, which masked it). Args are passed as
+/// discrete tokens, not a single joined string, so there is no shell-quoting to
+/// get wrong — the `@nubjs/nub@<target>` spec is one argv element either way.
+fn npm_upgrade_command_invocation(target: &str) -> std::process::Command {
+    let spec = format!("{NPM_PACKAGE}@{target}");
+    if cfg!(windows) {
+        // `cmd /C npm …` so the `npm.cmd` batch shim resolves + runs. `/C`
+        // carries the command and its args as separate tokens.
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "npm", "install", "-g"]).arg(spec);
+        cmd
+    } else {
+        let mut cmd = std::process::Command::new("npm");
+        cmd.args(["install", "-g"]).arg(spec);
+        cmd
+    }
+}
+
 /// GitHub release tarball URL for a resolved version + platform target. Mirrors
 /// install.sh's `url=` line so the self-owned channel pulls the same artifact
 /// the installer did.
@@ -3334,10 +3364,7 @@ fn run_upgrade(version: Option<&str>, dry_run: bool, _yes: bool) -> Result<i32> 
         UpgradeChannel::Npm => {
             let cmd = npm_upgrade_command(target);
             println!("nub upgrade: running `{cmd}`");
-            let status = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&cmd)
-                .status()?;
+            let status = npm_upgrade_command_invocation(target).status()?;
             let code = nub_core::node::spawn::exit_code_from_status(&status);
             // npm wrote a NEW inode; existing shim hardlinks still carry the
             // old bytes until `nub pm shim` re-links them.
@@ -5644,6 +5671,35 @@ mod tests {
             npm_upgrade_command("1.2.3"),
             "npm install -g @nubjs/nub@1.2.3"
         );
+    }
+
+    // The npm-channel runner must launch npm in an OS-correct way: on Windows
+    // `npm` is the `npm.cmd` batch shim, only launchable through `cmd.exe`, so a
+    // bare `sh -c …` (no `sh` on a plain Windows box) breaks the only upgrade
+    // path npm-installed Windows users have. Assert the program + argv shape for
+    // the current host (the inactive branch is cfg-pruned, so this exercises
+    // whichever arm this build compiles). The package spec arrives as ONE argv
+    // token regardless of OS, so there is no shell-quoting to get wrong.
+    #[test]
+    fn npm_upgrade_invocation_is_os_correct() {
+        let cmd = npm_upgrade_command_invocation("latest");
+        let prog = cmd.get_program().to_string_lossy().into_owned();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        if cfg!(windows) {
+            assert_eq!(prog, "cmd");
+            assert_eq!(
+                args,
+                vec!["/C", "npm", "install", "-g", "@nubjs/nub@latest"]
+            );
+        } else {
+            assert_eq!(prog, "npm");
+            assert_eq!(args, vec!["install", "-g", "@nubjs/nub@latest"]);
+        }
+        // No `sh` on any host — that was the Windows-breaking form.
+        assert_ne!(prog, "sh");
     }
 
     // The channel router decides delegate-vs-self-swap. node_modules ⇒ npm even

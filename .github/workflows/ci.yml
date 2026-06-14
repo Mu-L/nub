@@ -72,6 +72,13 @@ jobs:
         # `nub pm shim`/`unshim` round trip (dirs_next ignores env HOME on
         # Windows, so an end-to-end run would write the runner's real
         # profile — kept out deliberately).
+        #
+        # This leg also compiles + runs the cfg(windows) arm of the
+        # `nub upgrade` npm channel: the npm_upgrade_invocation_is_os_correct
+        # unit test pins the Windows argv (`cmd /C npm install -g …`), which is
+        # what fixes npm-channel upgrade on a plain Windows box (no `sh` there).
+        # A real end-to-end `npm install -g` is left CI-dark on purpose — it
+        # mutates global state and needs a published release.
         os: [ubuntu-latest, windows-latest, macos-14]
         # Node matrix spans the support range so the integration suite (which
         # nub runs against whatever `node` is first on PATH) exercises every
