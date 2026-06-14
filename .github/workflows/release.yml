@@ -628,14 +628,15 @@ jobs:
       - name: Install from npm and smoke (with propagation-race retry)
         # Wraps BOTH the install AND the smoke in a single retry loop so a transient
         # npm propagation race (optionalDependency not yet on all CDN nodes right after
-        # publish — false-red on 0.0.36) self-heals instead of failing the release.
-        # Up to 6 attempts × 25 s backoff ≈ 2.5 min max. A genuine bad release fails
-        # every attempt (real breakage is not masked). A propagation race typically
-        # passes on attempt 2–3 (CDN sync usually completes in < 60 s).
+        # publish — false-red on 0.0.36 and 0.0.38) self-heals instead of failing the
+        # release. Up to 12 attempts with stepped backoff (30 s × first 3 retries,
+        # then 60 s) ≈ 9.5 min max window. Cross-region CDN propagation can take
+        # several minutes; the wider window absorbs that. A genuine bad release fails
+        # every attempt (real breakage is not masked — all 12 must fail to report red).
         # The retry re-runs npm install each attempt so the binary resolves fresh.
         shell: bash
         run: |
-          MAX=6; DELAY=25; attempt=0
+          MAX=12; attempt=0
           while true; do
             attempt=$((attempt + 1))
             echo "--- install+smoke attempt $attempt/$MAX ---"
@@ -647,6 +648,9 @@ jobs:
               echo "--- all $MAX attempts failed; treating as real failure ---"
               exit 1
             fi
+            # Stepped backoff: 30 s for the first 3 retries (catches fast CDN sync),
+            # then 60 s for subsequent retries (covers multi-minute propagation lag).
+            DELAY=$( [ "$attempt" -le 3 ] && echo 30 || echo 60 )
             echo "--- attempt $attempt failed; retrying in ${DELAY}s ---"
             sleep "$DELAY"
           done
@@ -665,11 +669,13 @@ jobs:
         run: apk add --no-cache bash git
       - uses: actions/checkout@v4
       - name: Install from npm and smoke (with propagation-race retry)
-        # Same retry logic as the runner-OS legs above — musl also hit the 0.0.36
+        # Same retry logic as the runner-OS legs above — musl hit the 0.0.38
         # propagation race. Wrapped identically: both install + smoke per attempt.
+        # Up to 12 attempts with stepped backoff (30 s × first 3 retries, then 60 s)
+        # ≈ 9.5 min max window. A genuine bad release fails every attempt.
         shell: bash
         run: |
-          MAX=6; DELAY=25; attempt=0
+          MAX=12; attempt=0
           while true; do
             attempt=$((attempt + 1))
             echo "--- install+smoke attempt $attempt/$MAX ---"
@@ -681,6 +687,9 @@ jobs:
               echo "--- all $MAX attempts failed; treating as real failure ---"
               exit 1
             fi
+            # Stepped backoff: 30 s for the first 3 retries (catches fast CDN sync),
+            # then 60 s for subsequent retries (covers multi-minute propagation lag).
+            DELAY=$( [ "$attempt" -le 3 ] && echo 30 || echo 60 )
             echo "--- attempt $attempt failed; retrying in ${DELAY}s ---"
             sleep "$DELAY"
           done
