@@ -10,7 +10,7 @@
 // Run directly with node (no transpiler). Supersedes agent-must-be-background.sh.
 // FAIL OPEN: any parse error → allow unmodified. A broken dispatch hook must never halt
 // orchestration (the overnight heartbeat itself dispatches through here).
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { loadConfig } from '../../scripts/fray/config.mjs';
 
 const EPILOGUE = `
@@ -62,6 +62,20 @@ try {
   const m = prompt.match(/^THREAD:\s*([\w./-]+)/m);
   const thread = m ? m[1].replace(/^\.fray\//, '').replace(/\.md$/, '') : null;
   if (thread) {
+    // BULLETPROOF: a THREAD:-tagged dispatch whose .fray/<slug>.md does NOT exist is DENIED.
+    // The thread file must be created FIRST (with current context) before any agent runs for it —
+    // the maintainer's paramount rule (2026-06-14): every new/split-off effort gets its file first, or it
+    // gets forgotten. (A genuine one-shot with no thread should carry no THREAD: tag.)
+    if (!existsSync(`${dir}/.fray/${thread}.md`)) {
+      emit({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `fray (hook-enforced): dispatch is tagged \`THREAD: ${thread}\` but \`.fray/${thread}.md\` does NOT exist. CREATE THE THREAD FILE FIRST — write \`.fray/${thread}.md\` with all current context (Goal · Status · Decisions · Open questions · Steps · Next step), THEN re-send this dispatch. Every new or split-off effort gets its file BEFORE any agent runs for it. (If this is a true one-shot needing no thread, remove the \`THREAD:\` line from the prompt.)`,
+        },
+      });
+    }
     try {
       appendFileSync(
         `${dir}/.fray/.dispatch-ledger.jsonl`,
