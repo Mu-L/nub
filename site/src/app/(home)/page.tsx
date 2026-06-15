@@ -1230,18 +1230,24 @@ function FinalCta() {
 }
 
 function Footer() {
+  const year = new Date().getFullYear();
   return (
     <footer className="border-fd-border">
-      <Container className="flex flex-col items-center justify-between gap-4 py-10 text-sm text-fd-muted-foreground sm:flex-row">
-        <span className="font-display text-base text-fd-foreground">
-          nub<span className="text-ember">.</span>
-        </span>
-        <div className="flex items-center gap-6">
-          <Link href="/docs" className="hover:text-fd-foreground">Docs</Link>
-          <Link href="/blog" className="hover:text-fd-foreground">Blog</Link>
-          <a href="https://github.com/nubjs/nub" className="hover:text-fd-foreground">GitHub</a>
-          <a href="https://github.com/nubjs/nub/blob/main/LICENSE" className="hover:text-fd-foreground">License</a>
+      <Container className="py-10">
+        <div className="flex flex-col items-center justify-between gap-4 text-sm text-fd-muted-foreground sm:flex-row">
+          <span className="font-display text-base text-fd-foreground">
+            nub<span className="text-ember">.</span>
+          </span>
+          <div className="flex items-center gap-6">
+            <Link href="/docs" className="hover:text-fd-foreground">Docs</Link>
+            <Link href="/blog" className="hover:text-fd-foreground">Blog</Link>
+            <a href="https://github.com/nubjs/nub" className="hover:text-fd-foreground">GitHub</a>
+            <a href="https://github.com/nubjs/nub/blob/main/LICENSE" className="hover:text-fd-foreground">License</a>
+          </div>
         </div>
+        <p className="mt-6 text-center text-xs text-fd-muted-foreground">
+          © {year} Nub. MIT-licensed.
+        </p>
       </Container>
     </footer>
   );
