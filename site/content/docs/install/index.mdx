@@ -1,9 +1,17 @@
 ---
 title: Package manager
-description: Nub ships its own installer — the vendored aube engine — with a pnpm-shaped CLI and lockfile-compatibility with whatever your project already uses. npm/pnpm/Bun round-trip, Yarn read-only.
+description: Nub ships its own installer with a pnpm-shaped CLI and lockfile-compatibility with whatever your project already uses — npm, pnpm, and Bun round-trip, Yarn read-only.
 ---
 
-Nub has its own install engine: it resolves the dependency graph and links `node_modules`. The CLI is pnpm-shaped; the lockfile stays in your project's native format. npm, pnpm, and Bun round-trip cleanly; Yarn is read-only. The engine is the vendored [aube](https://github.com/jdx/aube) engine, embedded as a library and driven by Nub's own CLI.
+Nub has its own install engine: it resolves the dependency graph and links `node_modules`. What makes it a new kind of package manager is that it imposes no lockfile format of its own — three properties carry the whole design:
+
+- **Bring your own lockfile.** Nub does not impose its own lockfile format. It installs in whatever lockfile your project already has.
+- **Bidirectional read and write.** Nub reads *and* rewrites the project's native lockfile: npm `package-lock.json`, `pnpm-lock.yaml`, and `bun.lock` round-trip cleanly. Yarn's `yarn.lock` is read-only — consumed, never rewritten.
+- **Round-trip fidelity.** Read a foreign lockfile, install, and write it back, and it stays faithful — byte-for-byte where the format allows (npm `package-lock.json` v2/v3).
+
+Each incumbent gets its own page covering lockfile fidelity, config surfaces, and gaps: [pnpm](/docs/install/pnpm), [npm](/docs/install/npm), [Bun](/docs/install/bun), [Yarn](/docs/install/yarn).
+
+Nub never asks which package manager you use — it [infers the incumbent](#package-manager-inference) from the `packageManager` field or the lockfile on disk and mirrors it. The CLI itself is pnpm-shaped. The engine is the vendored [aube](https://github.com/jdx/aube) engine, embedded as a library and driven by Nub's own CLI.
 
 <Callout title="You don't need to use Nub's package manager">
 The installer is optional. Keep running `npm`, `pnpm`, `yarn`, or `bun` exactly as you do today, and reach for Nub for everything else — running files, scripts, and binaries.
@@ -121,26 +129,35 @@ The two compose: `nub pm shim` routes bare `npm` / `pnpm` / `yarn` through the p
 
 ## Per-package-manager compatibility
 
-What Nub reads and writes keys off the project's incumbent package manager. Each gets its own page — lockfile fidelity, config surfaces, and gaps:
+What Nub reads and writes keys off the project's incumbent package manager:
 
 - [pnpm](/docs/install/pnpm) — the closest mirror: native `pnpm-lock.yaml` v9 read+write, isolated layout, `.pnpmfile.cjs` hooks.
 - [npm](/docs/install/npm) — `package-lock.json` v2/v3 round-trip byte-for-byte, `.npmrc` at project and user scope.
 - [Bun](/docs/install/bun) — `bun.lock` text round-trip, `trustedDependencies` build trust.
 - [Yarn](/docs/install/yarn) — read-only: `yarn.lock` (Classic and Berry) is consumed, never rewritten.
 
-## Post-install
+## Lifecycle scripts
 
-Shared across pnpm, npm, and Bun, so it lives here once. Nub does **not** run dependency build scripts indiscriminately the way npm does. The posture is **deny-by-default, with a gated automatic-trust floor on top** (`defaultTrust=true` under Nub).
+Some dependencies run build steps on install — `preinstall`, `install`, and `postinstall` scripts declared in their own `package.json`. This applies across pnpm, npm, and Bun, so it lives here once. Nub does **not** run them indiscriminately the way npm does; you control which packages are allowed to build.
 
-A dependency's `preinstall`/`install`/`postinstall` scripts run only if:
+```bash
+nub approve-builds                 # interactively approve packages to build
+nub add --allow-build=<pkg> <pkg>  # pre-approve a package's build scripts as you add it
+nub rebuild                        # re-run build scripts for already-approved packages
+nub install --ignore-scripts       # skip every dependency build script this install
+```
 
-1. **An explicit allow** — the package is on `pnpm.onlyBuiltDependencies` / `pnpm.allowBuilds`, Bun's `trustedDependencies`, or you `nub approve-builds`'d it. An explicit `false` (`allowBuilds: { pkg: false }`, `neverBuiltDependencies`) always wins.
-2. **The default-trust floor vouches for it** — the package is on aube's curated default-trust list **and** every gate holds:
-   - **registry provenance** — it resolved from a registry (git / file / link / tarball never qualify; an npm alias can't borrow a listed name's trust),
-   - **advisory vetting** — an OSV `MAL-*` advisory gate ran against this install's graph, *or* the graph was inherited from an unchanged, already-advisory-checked lockfile (a frozen install / `nub ci` / a teammate clone),
-   - **cooling window** — the resolved version's publish time is older than `minimumReleaseAge` (default 1440 minutes / 24h). Unknown publish time fails closed.
+A package is allowed to build when it is on `pnpm.onlyBuiltDependencies` / `pnpm.allowBuilds`, Bun's `trustedDependencies`, or you have approved it with `nub approve-builds`. An explicit denial (`allowBuilds: { pkg: false }`, `neverBuiltDependencies`) always wins. When a package wants to build but isn't allowed, Nub skips it and prints `WARN_NUB_IGNORED_BUILD_SCRIPTS` naming the package, with `nub approve-builds` as the remedy.
 
-Otherwise the script is skipped and Nub prints `WARN_NUB_IGNORED_BUILD_SCRIPTS` naming the package, with `nub approve-builds` as the remedy.
+On top of explicit approval, a curated set of well-known packages builds automatically through a gated trust floor — see [Security](#security) for the posture and the gates.
+
+## Security
+
+Beyond explicit approval, Nub ships a **deny-by-default** posture with a gated automatic-trust floor on top (`defaultTrust=true`). A curated set of well-known packages — aube's default-trust list — may build without your approval, but only when every gate holds:
+
+- **registry provenance** — it resolved from a registry (git / file / link / tarball never qualify; an npm alias can't borrow a listed name's trust),
+- **advisory vetting** — an OSV `MAL-*` advisory gate ran against this install's graph, *or* the graph was inherited from an unchanged, already-advisory-checked lockfile (a frozen install / `nub ci` / a teammate clone),
+- **cooling window** — the resolved version's publish time is older than `minimumReleaseAge` (default 1440 minutes / 24h). Unknown publish time fails closed.
 
 A fresh resolve (or a lockfile Nub itself wrote, which carries the `time:` block) gives the floor everything it needs, so curated packages like `esbuild` build automatically:
 
