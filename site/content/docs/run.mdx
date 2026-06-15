@@ -65,7 +65,7 @@ To skip the `pre` / `post` hooks (CI, or a security-conscious run), pass `--igno
 nub run --ignore-scripts build
 ```
 
-## The npm_* environment
+## The `npm_*` environment
 
 Nub populates the child process with the full npm-compatible environment, so scripts and tooling that read `npm_*` variables behave exactly as they do under `npm run`. Locally installed CLIs are on `PATH` via the `node_modules/.bin` chain, so you can call them by bare name.
 
