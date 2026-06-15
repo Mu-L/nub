@@ -3,23 +3,23 @@ title: npm
 description: Nub speaks npm's on-disk formats — package-lock.json v2/v3 round-trips byte-for-byte, .npmrc is read at project and user scope. The CLI is pnpm-shaped; the files are npm's.
 ---
 
-Nub speaks npm's on-disk formats, so a project that already uses npm keeps working unchanged. The CLI you type is pnpm-shaped; the files Nub reads and writes are npm's.
+The CLI you type is pnpm-shaped; the files Nub reads and writes are npm's. A project already on npm keeps working unchanged — no `pnpm-lock.yaml` is introduced.
 
 <CompatTable
   rows={[
-    { feature: <code>package-lock.json</code>, status: 'yes', note: 'v2 / v3, read + write; v1 not supported' },
+    { feature: <code>package-lock.json</code>, status: 'yes', note: 'v2 / v3, read + write; v1 errors' },
+    { feature: <>project + user <code>.npmrc</code></>, status: 'yes' },
     { feature: <>global / builtin <code>.npmrc</code></>, status: 'no' },
     { feature: <code>overrides</code>, status: 'yes' },
-    { feature: <code>resolutions</code>, status: 'no', note: 'dropped + warned' },
+    { feature: <code>resolutions</code>, status: 'n/a', note: 'npm ignores it — use overrides' },
     { feature: <code>workspaces</code>, status: 'yes' },
     { feature: <><code>engines</code> / <code>os</code> / <code>cpu</code> / <code>libc</code></>, status: 'yes' },
-    { feature: <>project + user <code>.npmrc</code></>, status: 'yes' },
   ]}
 />
 
 ## `package-lock.json`
 
-When `package-lock.json` is the project's incumbent lockfile, Nub reads it, resolves against it, and writes it back in npm's exact format — no `pnpm-lock.yaml` is introduced.
+Nub reads `lockfileVersion` 2 and 3, resolves against it, and writes it back in npm's exact format. On a no-op install the writer reproduces npm's output byte-for-byte — key ordering, the `devOptional` collapse, `peerDependenciesMeta.optional`, and platform fields all preserved — so the file doesn't churn and `npm ci` accepts it unchanged.
 
 ```jsonc
 // package-lock.json written by `nub install` — accepted by `npm ci` byte-for-byte
@@ -42,52 +42,54 @@ When `package-lock.json` is the project's incumbent lockfile, Nub reads it, reso
 }
 ```
 
-Supported reading covers `lockfileVersion` 2 and 3. Version 1 (npm 6 and earlier) is rejected with a clear error rather than silently misread:
+A no-op rewrite keeps the incoming `lockfileVersion` — a v2 lock stays v2. The first **mutating** operation (`nub add`, `nub remove`) rewrites it as v3. The result is still valid and `npm ci`-accepted (v3 is npm's default since npm 9), but the version field is an expected diff.
+
+### lockfileVersion 1 is refused
+
+A `lockfileVersion: 1` lock (npm 5–6) is rejected before install, not silently misread:
 
 ```console
 # captured: nub 0.0.44 on a lockfileVersion 1 package-lock.json
 $ nub install
 ERR_NUB_LOCKFILE_PARSE
 
-  × failed to parse lockfile
+  × failed to parse lockfile          # ❌ v1 is unsupported — install refused
   ╰─▶ failed to parse lockfile /path/to/package-lock.json:
       package-lock.json lockfileVersion 1 is not supported (need v2 or v3)
+$ echo $?
+11
 ```
 
-Round-trip fidelity is the headline. On a no-op install (the graph already matches the lock), Nub reproduces npm's writer byte-for-byte — including npm's two-pass key ordering (`@npmcli/arborist` → `json-stringify-nice`), the `devOptional` collapse, `peerDependenciesMeta.optional`, and platform fields (`os`/`cpu`/`libc`) — so the file does not churn in diffs and `npm ci` accepts it unchanged. Verified against nub 0.0.44 / npm 11.13.0: a no-op `nub install` over an npm-written lock produced a `diff`-identical file, and `npm ci` exited 0 on it. (The original audit reproduced the same on graphs up to a 45-package tree with scoped, dev, and platform-gated `fsevents` packages.)
-
-One honest caveat on version drift. Nub preserves the incoming `lockfileVersion` on a no-op rewrite — a v2 lock stays v2, legacy `dependencies` block and all. But a **mutating** operation (`nub add`, `nub remove`, anything that changes the graph) rewrites the lock as `lockfileVersion: 3`. A v2 lock is therefore upgraded to v3 the first time you change a dependency. This was confirmed empirically: a v2 lock survived `nub install` as v2, then became v3 after `nub add is-number`. The result is still valid and `npm ci`-accepted (v3 has been npm's default since npm 7), but the version field changes — a real, expected diff, not a corruption.
+Run `npm install` once under npm 7+ to upgrade the lock to v2/v3, then Nub reads it.
 
 ## `.npmrc`
 
-When npm is the incumbent PM, Nub reads `.npmrc` at two scopes:
+When npm is the incumbent, Nub reads `.npmrc` at two scopes:
 
 ```
-1. project   ./.npmrc          (all keys)
-2. user      ~/.npmrc          (all keys, relocatable via NPM_CONFIG_USERCONFIG)
+project   ./.npmrc      (all keys)
+user      ~/.npmrc      (all keys, relocatable via NPM_CONFIG_USERCONFIG)
 ```
 
-At those scopes everything works: default and scoped registries (`@scope:registry`), auth tokens (`//host/:_authToken`), TLS (`strict-ssl`, `cafile`/`ca`), proxy settings, and install-shaping keys like `engine-strict` and `save-exact`. The `npm_config_*` environment variables are honored for install behavior, and CLI-passed config wins over both files. Precedence matches npm where the scopes overlap: project over user over env over CLI (project highest of the file scopes). Verified: with `registry` set in both files, `nub config get registry` returns the project value; a key set only in `~/.npmrc` falls back to the user value.
+Everything at those scopes works — default and scoped registries, auth tokens, TLS (`strict-ssl`, `cafile`), proxies, and install-shaping keys like `engine-strict` and `save-exact`. The `npm_config_*` env vars drive install behavior, and CLI config wins over both files. Precedence matches npm: project over user over env over CLI.
 
-**The gap — global and builtin scopes are not read.** npm's full config chain is `default → builtin → project → user → global → env → cli`. Nub covers project, user, env, and cli; it does **not** read:
+**Global and builtin scopes are not read.** Nub covers project, user, env, and CLI, but not:
 
-- the **global** npmrc at `$PREFIX/etc/npmrc` (what `npm config set --global ...` writes), and
-- npm's **builtin** npmrc (the one shipped inside the npm install, holding CI/corporate defaults).
+- the **global** npmrc at `$PREFIX/etc/npmrc` (`npm config set --global`), and
+- npm's **builtin** npmrc shipped inside the npm install.
 
-As a consequence, `NPM_CONFIG_GLOBALCONFIG` and `prefix`-based relocation of the global file are also not honored. This is a real, verified divergence: a private registry, auth token, CA, or `legacy-peer-deps` set **only** in the global npmrc is invisible to Nub, which can mean resolving against the wrong registry or failing auth on a machine that relies on global config (common on corporate/CI setups). The fix is workable — put those settings in `~/.npmrc` (user scope), which Nub does read. Closing the global/builtin gap is tracked; it is not yet shipped.
-
-A minor cosmetic note: `npm_config_*` env vars correctly drive install behavior but are not reflected in Nub's config-display output (the display reads files only). The install is correct; only the readout omits env overrides.
+A private registry, auth token, CA, or `legacy-peer-deps` set *only* in the global npmrc is invisible to Nub — which can mean the wrong registry or an auth failure on a machine that relies on global config. Move those settings to `~/.npmrc`.
 
 ## Install behavior
 
-- **Lifecycle scripts / build trust.** Postinstall and other lifecycle scripts run under Nub's deny-by-default trust posture plus the gated default-trust floor described under [post-install](/docs/install#post-install) — **not** npm's run-everything default. A curated, registry-resolved, age-vetted package builds automatically; everything else is skipped with `WARN_NUB_IGNORED_BUILD_SCRIPTS` until you `nub approve-builds`.
-- **overrides.** The `package.json` `"overrides"` field is read and applied. The `"resolutions"` field (which npm itself ignores) is dropped with a warning — matching npm's effective behavior.
-- **engines / os / cpu / libc.** Enforced. Platform-gated optional dependencies (e.g. `fsevents`) resolve and lock correctly, and the platform fields round-trip into `package-lock.json`.
+- **Build trust.** Lifecycle scripts run under Nub's deny-by-default posture plus the gated default-trust floor (see [post-install](/docs/install#post-install)), not npm's run-everything default. Curated, age-vetted packages build automatically; everything else is skipped with `WARN_NUB_IGNORED_BUILD_SCRIPTS` until `nub approve-builds`.
+- **overrides.** The `package.json` `"overrides"` field is applied; `"resolutions"` is dropped with a warning, matching npm's own behavior.
+- **Platform fields.** `engines` / `os` / `cpu` / `libc` are enforced, and platform-gated optionals (e.g. `fsevents`) resolve and round-trip into the lock.
 - **workspaces.** The neutral `"workspaces"` field is honored.
 
 ## Gaps
 
-- **No global/builtin `.npmrc`.** Settings that live only in `$PREFIX/etc/npmrc` or npm's builtin config are ignored (see above). Move them to `~/.npmrc`.
-- **lockfileVersion 1** (npm ≤ 6) is rejected, not migrated. Run `npm install` once to upgrade the lock to v2/v3 first.
+- **lockfileVersion 1** (npm ≤ 6) errors, not migrated — run `npm install` once to upgrade first.
+- **No global/builtin `.npmrc`.** Settings only in `$PREFIX/etc/npmrc` or npm's builtin config are ignored; move them to `~/.npmrc`.
+- **A v2 lock becomes v3** on the first mutating install (preserved on no-op installs only).
 - **No drop-in `npm` CLI grammar.** npm-specific subcommands/flags and `npm-shrinkwrap.json` are not emulated; the CLI is pnpm-shaped.
-- **A v2 lock becomes v3 on the first mutating install.** Preserved on no-op installs only.
