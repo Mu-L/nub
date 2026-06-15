@@ -3,8 +3,8 @@
 //! Supports:
 //! - `--filter <name>` — exact package name match
 //! - `--filter "<glob>"` — glob pattern against package name or relative dir
-//! - `--filter ...<name>` — package + all its dependencies
-//! - `--filter <name>...` — package + all its dependents
+//! - `--filter <name>...` — package + all its dependencies
+//! - `--filter ...<name>` — package + all its dependents
 //! - `--filter "...<name>..."` — both directions
 //! - `--filter !<name>` — exclude (subtract) a package from the selection
 //! - repeated `--filter` — include filters union; `!` filters subtract from the
@@ -41,9 +41,10 @@ impl Filter {
             pattern = pattern[1..].to_string();
         }
 
-        // Trailing ellipsis + optional ^: pkg...  or  pkg...^
+        // Trailing ellipsis + optional ^: pkg...  or  pkg...^ — pnpm: the package
+        // AND its dependencies (the packages it depends on).
         if pattern.ends_with("...") {
-            include_dependents = true;
+            include_dependencies = true;
             pattern = pattern[..pattern.len() - 3].to_string();
             if pattern.ends_with('^') {
                 exclude_self = true;
@@ -51,9 +52,10 @@ impl Filter {
             }
         }
 
-        // Leading ellipsis + optional ^: ...pkg  or  ...^pkg
+        // Leading ellipsis + optional ^: ...pkg  or  ...^pkg — pnpm: the package
+        // AND its dependents (the packages that depend on it).
         if pattern.starts_with("...") {
-            include_dependencies = true;
+            include_dependents = true;
             pattern = pattern[3..].to_string();
             if pattern.starts_with('^') {
                 exclude_self = true;
@@ -680,7 +682,8 @@ mod tests {
 
     #[test]
     fn parse_deps_filter() {
-        let f = Filter::parse("...@org/api");
+        // Trailing `...` (pnpm: package + its dependencies).
+        let f = Filter::parse("@org/api...");
         assert_eq!(f.pattern, "@org/api");
         assert!(f.include_dependencies);
         assert!(!f.include_dependents);
@@ -688,7 +691,8 @@ mod tests {
 
     #[test]
     fn parse_dependents_filter() {
-        let f = Filter::parse("@org/api...");
+        // Leading `...` (pnpm: package + its dependents).
+        let f = Filter::parse("...@org/api");
         assert_eq!(f.pattern, "@org/api");
         assert!(!f.include_dependencies);
         assert!(f.include_dependents);
@@ -812,6 +816,54 @@ mod tests {
         );
     }
 
+    /// End-to-end ellipsis DIRECTION, matching pnpm (the contract nub claims
+    /// parity with). Dependency chain app → lib → core. This asserts the
+    /// observable SELECTED SET, not just the parsed labels, so the direction can
+    /// never silently re-invert (the labels and the graph-walk could agree with
+    /// each other yet both be wrong vs pnpm — exactly the bug this guards).
+    #[test]
+    fn ellipsis_direction_matches_pnpm() {
+        let members = vec![
+            pkg_with_deps("app", &["lib"]),
+            pkg_with_deps("lib", &["core"]),
+            pkg("core"),
+        ];
+
+        // Trailing `lib...` → lib + its DEPENDENCIES (core). pnpm: {lib, core}.
+        assert_eq!(
+            selected_names(&members, "lib..."),
+            HashSet::from(["lib", "core"]),
+            "trailing ellipsis selects the package and its dependencies"
+        );
+
+        // Leading `...lib` → lib + its DEPENDENTS (app). pnpm: {lib, app}.
+        assert_eq!(
+            selected_names(&members, "...lib"),
+            HashSet::from(["lib", "app"]),
+            "leading ellipsis selects the package and its dependents"
+        );
+
+        // Both directions `...lib...` → app + lib + core.
+        assert_eq!(
+            selected_names(&members, "...lib..."),
+            HashSet::from(["app", "lib", "core"]),
+            "both-direction ellipsis selects dependents and dependencies"
+        );
+
+        // `^` exclude-self rides on the same flag: `lib^...` → dependencies only
+        // (core, lib excluded); `...^lib` → dependents only (app, lib excluded).
+        assert_eq!(
+            selected_names(&members, "lib^..."),
+            HashSet::from(["core"]),
+            "trailing ^... selects dependencies only, excluding lib itself"
+        );
+        assert_eq!(
+            selected_names(&members, "...^lib"),
+            HashSet::from(["app"]),
+            "leading ...^ selects dependents only, excluding lib itself"
+        );
+    }
+
     #[test]
     fn exclude_filter_selects_complement() {
         // `!b` selects every package except b — it must not select b itself.
@@ -830,9 +882,10 @@ mod tests {
 
     #[test]
     fn exclude_filter_subtracts_dependency_expansion() {
-        // a depends on b; `!...a` excludes a AND its dependency b, leaving c.
+        // a depends on b; trailing `a...` is a + its dependencies (b), so `!a...`
+        // excludes both, leaving c. (pnpm: trailing ellipsis = dependencies.)
         let members = vec![pkg_with_deps("a", &["b"]), pkg("b"), pkg("c")];
-        assert_eq!(selected_names(&members, "!...a"), HashSet::from(["c"]));
+        assert_eq!(selected_names(&members, "!a..."), HashSet::from(["c"]));
     }
 
     fn selected_names_multi<'a>(
@@ -858,10 +911,10 @@ mod tests {
 
     #[test]
     fn multiple_includes_union_with_dependency_expansion() {
-        // `...a` brings in a's dep b; unioned with the c filter → {a, b, c}.
+        // Trailing `a...` brings in a's dep b; unioned with the c filter → {a, b, c}.
         let members = vec![pkg_with_deps("a", &["b"]), pkg("b"), pkg("c")];
         assert_eq!(
-            selected_names_multi(&members, &["...a", "c"]),
+            selected_names_multi(&members, &["a...", "c"]),
             HashSet::from(["a", "b", "c"])
         );
     }
@@ -890,7 +943,8 @@ mod tests {
 
     #[test]
     fn parse_exclude_self_deps() {
-        let f = Filter::parse("...^@org/api");
+        // Trailing `^...` (pnpm: dependencies only, package itself excluded).
+        let f = Filter::parse("@org/api^...");
         assert_eq!(f.pattern, "@org/api");
         assert!(f.include_dependencies);
         assert!(f.exclude_self);
@@ -899,7 +953,8 @@ mod tests {
 
     #[test]
     fn parse_exclude_self_dependents() {
-        let f = Filter::parse("@org/api^...");
+        // Leading `...^` (pnpm: dependents only, package itself excluded).
+        let f = Filter::parse("...^@org/api");
         assert_eq!(f.pattern, "@org/api");
         assert!(f.include_dependents);
         assert!(f.exclude_self);
@@ -923,18 +978,20 @@ mod tests {
 
     #[test]
     fn parse_gitref_with_deps_trailing() {
+        // Trailing `...` → dependencies.
         let f = Filter::parse("[master]...");
         assert_eq!(f.git_ref, Some("master".to_string()));
-        assert!(f.include_dependents);
-        assert!(!f.include_dependencies);
+        assert!(f.include_dependencies);
+        assert!(!f.include_dependents);
     }
 
     #[test]
     fn parse_gitref_with_deps_leading() {
+        // Leading `...` → dependents.
         let f = Filter::parse("...[master]");
         assert_eq!(f.git_ref, Some("master".to_string()));
-        assert!(f.include_dependencies);
-        assert!(!f.include_dependents);
+        assert!(f.include_dependents);
+        assert!(!f.include_dependencies);
     }
 
     #[test]
@@ -947,9 +1004,11 @@ mod tests {
 
     #[test]
     fn parse_dir_with_deps() {
+        // Leading `...` on a dir selector → dependents (pnpm direction).
         let f = Filter::parse("...{./foo}");
         assert_eq!(f.pattern, "./foo");
-        assert!(f.include_dependencies);
+        assert!(f.include_dependents);
+        assert!(!f.include_dependencies);
     }
 
     #[test]
