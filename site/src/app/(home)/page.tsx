@@ -1219,7 +1219,7 @@ function FinalCta() {
       />
       <Container className="relative py-32 text-center md:py-[180px]">
         <h2 className="text-balance font-display text-4xl font-medium leading-[1.05] md:text-6xl">
-          The toolkit that <span className="italic text-ember">augments</span> Node.js
+          The all-in-one toolkit for Node.js
         </h2>
         <div className="mt-10 flex flex-col items-center">
           <InstallTabs className="mx-auto" />
