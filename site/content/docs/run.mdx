@@ -81,7 +81,20 @@ Nub populates the child process with the full npm-compatible environment, so scr
 nub run build                 # tsc resolves from node_modules/.bin; npm_* vars are set
 ```
 
-The injected set includes `npm_lifecycle_event`, `npm_lifecycle_script`, `npm_execpath`, `npm_node_execpath`, `npm_command`, and the full `npm_config_*` and `npm_package_*` enumerations, and `INIT_CWD` is set to the directory you invoked `nub run` from. Inside a script, spawning `node` (by shebang or `child_process.spawn("node", …)`) re-enters Nub through the PATH shim, so child processes stay transpiled and augmented — see [Run without augmentation](#run-without-augmentation) below.
+The injected set includes:
+
+```bash
+npm_lifecycle_event
+npm_lifecycle_script
+npm_execpath
+npm_node_execpath
+npm_command
+npm_config_*          # full enumeration
+npm_package_*         # full enumeration
+INIT_CWD              # the directory you invoked `nub run` from
+```
+
+Inside a script, spawning `node` (by shebang or `child_process.spawn("node", …)`) re-enters Nub through the PATH shim, so child processes stay transpiled and augmented — see [Run without augmentation](#run-without-augmentation) below.
 
 ## `--script-shell`
 

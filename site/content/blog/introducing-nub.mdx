@@ -143,7 +143,18 @@ await using db = await connect()  // disposed at scope end
 
 ### YAML and TOML imports
 
-Import a config file directly. No `npm install yaml`, no `fs.readFile` + `parse` plumbing — the load hook parses the file in Rust and hands you the value. Supported out of the box: `.json` (Node-native), `.jsonc`, `.json5`, `.toml`, `.yaml` / `.yml`, and `.txt`. These are extension-based loaders, not built-in modules — `import { parse } from "yaml"` still resolves to the npm package, and under `--node` the loaders are off entirely.
+Import a config file directly. No `npm install yaml`, no `fs.readFile` + `parse` plumbing — the load hook parses the file in Rust and hands you the value. Supported out of the box:
+
+```text
+.json          # Node-native
+.jsonc
+.json5
+.toml
+.yaml, .yml
+.txt
+```
+
+These are extension-based loaders, not built-in modules — `import { parse } from "yaml"` still resolves to the npm package, and under `--node` the loaders are off entirely.
 
 ```ts
 import config from "./config.yaml"   // parsed object

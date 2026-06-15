@@ -5,8 +5,8 @@ description: Nub ships its own installer — the vendored aube engine — with a
 
 Nub has its own package manager: an install engine that resolves dependencies and links `node_modules`. The CLI is pnpm-shaped, and the on-disk lockfile stays in your project's native format — npm, pnpm, and Bun round-trip cleanly; Yarn is read-only. The engine is the vendored [aube](https://github.com/jdx/aube) engine, embedded as a library and driven by Nub's own CLI.
 
-<Callout title="You don't need the package manager to use Nub">
-The installer is optional. Keep using your existing `npm` / `pnpm` / `yarn` / `bun` and reach for Nub for everything else — running files, scripts, and binaries — by installing the [`nub pm shim`](/docs/pm#nub-pm-shim). The shims route bare PM commands through the [package meta-manager](/docs/pm), which provisions and runs the exact version your project pins.
+<Callout title="You don't need to use Nub's package manager">
+The installer is entirely optional. Nub works alongside whatever package manager your project already uses — keep running `npm`, `pnpm`, `yarn`, or `bun` exactly as you do today, and reach for Nub for everything else: running files, scripts, and binaries. Nothing about Nub requires its installer.
 </Callout>
 
 ## `nub install`
@@ -22,7 +22,27 @@ nub install --node-linker hoisted
 nub ci                           # clean install from the lockfile
 ```
 
-The accepted flags are pnpm's: `--frozen-lockfile`, `--no-frozen-lockfile`, `--prefer-frozen-lockfile`, `--prod`/`-P`, `--dev`/`-D`, `--ignore-scripts`, `--no-optional`, `--offline`, `--prefer-offline`, `--lockfile-only`, `--force`, `--node-linker`, `--registry`, and `--dir`/`-C`. Where pnpm and npm spell a flag differently, Nub takes pnpm's: `--dir`/`-C` rather than `--prefix`, `--frozen-lockfile` rather than npm's `ci`-only behavior.
+The accepted flags are pnpm's:
+
+```bash
+# accepted flags (pnpm spellings)
+--frozen-lockfile
+--no-frozen-lockfile
+--prefer-frozen-lockfile
+--prod, -P            # production install
+--dev, -D
+--ignore-scripts
+--no-optional
+--offline
+--prefer-offline
+--lockfile-only
+--force
+--node-linker
+--registry
+--dir, -C             # pnpm's spelling, not npm's --prefix
+```
+
+Where pnpm and npm spell a flag differently, Nub takes pnpm's — the `--dir`/`-C` spelling rather than `--prefix`, and `--frozen-lockfile` rather than npm's `ci`-only behavior.
 
 ## `nub add`
 
@@ -84,7 +104,30 @@ nub import          # read package-lock.json / yarn.lock / bun.lock → pnpm-loc
 nub import --force  # overwrite an existing pnpm-lock.yaml
 ```
 
-The full registered verb set also covers `why`, `outdated`, `list`/`ls`, `patch` / `patch-commit` / `patch-remove`, `approve-builds`, `prune`, `rebuild`, `fetch`, `link`/`unlink`, `audit`, `licenses`, `bin`, `root`, `store`, `config`, `pkg`, `publish`, `pack`, `dlx`, `create`, and more — the complete list lives in the engine verb registry.
+The full registered verb set also covers more — the complete list lives in the engine verb registry:
+
+```text
+why
+outdated
+list, ls
+patch, patch-commit, patch-remove
+approve-builds
+prune
+rebuild
+fetch
+link, unlink
+audit
+licenses
+bin
+root
+store
+config
+pkg
+publish
+pack
+dlx
+create
+```
 
 ## `nub pm`
 
@@ -133,7 +176,7 @@ Everything below — which lockfile format Nub reads and writes, which config su
 
 1. **The `packageManager` field** (`package.json`) — the Corepack standard. A declaration is a *stronger* signal than any lockfile on disk: a pnpm project that picked up a stray `package-lock.json` (a contributor ran `npm install`) keeps resolving as pnpm, not silently flipping format.
 2. **The `devEngines.packageManager` field** — the fallback declaration, object form (`{ "name": "pnpm" }`) or array form. Outranked by `packageManager` when both are present; a same-tool version disagreement or a different-tool disagreement between the two is a hard error, not a silent pick.
-3. **The lockfile on disk** — consulted only when no declaration names a manager. Filename precedence is `lock.yaml` (Nub's own canonical) → `pnpm-lock.yaml` → `bun.lock` → `yarn.lock` → `npm-shrinkwrap.json` → `package-lock.json`.
+3. **The lockfile on disk** — consulted only when no declaration names a manager. Filename precedence is `pnpm-lock.yaml` (Nub's own canonical, which it shares with a pnpm incumbent) → `bun.lock` → `yarn.lock` → `npm-shrinkwrap.json` → `package-lock.json`.
 4. **Nothing present** — a fresh project with no declaration and no lockfile is **nub identity**: Nub writes its own canonical `pnpm-lock.yaml` (v9 bytes) and honors only un-branded, cross-tool config.
 
 A declaration that names `nub` (what `nub pm use nub` writes) is nub identity too, and accepts whatever lockfile the project already has.
@@ -146,7 +189,7 @@ When the signals disagree, Nub stops rather than guess:
 - **Declaration vs lockfile mismatch** — `package.json` declares one manager but only *other* managers' lockfiles are present. Code `ERR_NUB_LOCKFILE_DECLARATION_MISMATCH`.
 - **Ambiguous lockfiles** — two or more managers' lockfiles sit side by side with no declaration to break the tie. Code `ERR_NUB_LOCKFILE_AMBIGUOUS`.
 
-The remedy for both is the same: name the owner explicitly with `nub pm use <pm>`, or remove the stale lockfile. Under nub identity, Nub's own `lock.yaml` does **not** silently outrank a foreign lockfile beside it — that pairing is the ambiguity error, not a quiet win.
+The remedy for both is the same: name the owner explicitly with `nub pm use <pm>`, or remove the stale lockfile. Under nub identity, Nub's own `pnpm-lock.yaml` does **not** silently outrank a foreign lockfile beside it — that pairing is the ambiguity error, not a quiet win.
 </Callout>
 
 <Callout title="Inference vs the pinned PM">
