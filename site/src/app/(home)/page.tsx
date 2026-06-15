@@ -210,7 +210,7 @@ async function Hero() {
       {/* Wider than the rest of the page (smaller gutters) so the H1 has room
           and never breaks past 3 lines. Stacks to one column below xl. */}
       <div className="relative mx-auto flex min-h-[calc(100svh-3.5rem)] w-full max-w-[88rem] items-center px-6 py-16 sm:px-8">
-        <div className="grid w-full items-center gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:gap-20">
+        <div className="grid w-full items-center gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(640px,1fr)] xl:gap-12">
           <div className="min-w-0">
             <HeroPill />
             <HeroH1 className="mt-6 text-4xl md:text-5xl" />
