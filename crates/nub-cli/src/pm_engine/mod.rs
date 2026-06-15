@@ -649,6 +649,14 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
     // when the resolver reads them. Filter applies in every family; warnings
     // + the catalog hard-error are install-family only (see `noise`).
     apply_config_scope(detected.as_ref(), &cwd, noise)?;
+    // Warn once at install time when the project requests Plug'n'Play
+    // (nodeLinker: pnp in .yarnrc.yml) but nub will install a node_modules
+    // tree instead — the embedder default below forces `hoisted` and the
+    // .yarnrc.yml is not re-read anywhere in the install path, so without this
+    // the divergence is entirely silent.
+    if noise == ConfigScopeNoise::Warn {
+        warn_if_pnp_requested(detected.as_ref(), &cwd);
+    }
     // Set-unless-user-set: ranks below CLI flags, env vars, and every
     // config file in the engine's settings precedence.
     aube_settings::set_embedder_defaults(nub_setting_defaults(detected.as_ref()));
@@ -1438,6 +1446,71 @@ fn resolve_config_surface(cwd: &Path) -> ConfigSurface {
 ///   never disables it). Off-switch: `.npmrc default-trust=false` /
 ///   `npm_config_default_trust=false` — this is the embedder tier, below
 ///   every user source.
+/// Emit a single install-time warning when the project's `.yarnrc.yml`
+/// declares `nodeLinker: pnp` but nub will install a hoisted `node_modules`
+/// tree instead. The warning fires once per install, only for yarn-incumbent
+/// projects, and only when we can confirm the requested linker is `pnp` —
+/// no warning for `hoisted`, `isolated`, absent, or anything else.
+fn warn_if_pnp_requested(detected: Option<&DetectedLockfile>, cwd: &Path) {
+    let is_yarn = matches!(
+        detected.map(|d| d.kind),
+        Some(LockfileKind::Yarn | LockfileKind::YarnBerry)
+    );
+    if !is_yarn {
+        return;
+    }
+    let root = detected.map(|d| d.dir.as_path()).unwrap_or(cwd);
+    if yarnrc_node_linker(root).as_deref() == Some("pnp") {
+        let line = "nub: this project requests Plug'n'Play (nodeLinker: pnp in .yarnrc.yml), \
+                    which nub does not implement — installing a node_modules tree instead. \
+                    [WARN_NUB_PNP_LINKER_DOWNGRADE]";
+        if scope_warning_uses_dim() {
+            eprintln!("\x1b[2m{line}\x1b[0m");
+        } else {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// Read the `nodeLinker:` key from `.yarnrc.yml` at the project root, returning
+/// the lowercased scalar value when present. Uses the same hand line-scan idiom
+/// as `nub_core::pm::resolve::committed_yarn_path` — nub-cli takes no YAML
+/// dependency. Only top-level, unindented `nodeLinker:` entries are recognized;
+/// nested or multi-document forms are not (no real-world `.yarnrc.yml` nests it).
+fn yarnrc_node_linker(root: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(root.join(".yarnrc.yml")).ok()?;
+    for line in content.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("nodeLinker:") {
+            let value = strip_yarnrc_value(rest);
+            if !value.is_empty() {
+                return Some(value.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
+/// Extract a scalar YAML value from the text after a `key:`. Strips surrounding
+/// quotes and inline `# comments` on unquoted values. Mirrors the logic in
+/// `nub_core::pm::resolve::strip_yaml_value` (duplicated here to avoid a
+/// cross-crate dep for one small helper).
+fn strip_yarnrc_value(rest: &str) -> &str {
+    let rest = rest.trim();
+    for quote in ['"', '\''] {
+        if let Some(inner) = rest.strip_prefix(quote) {
+            if let Some(end) = inner.find(quote) {
+                return &inner[..end];
+            }
+        }
+    }
+    // Unquoted: trim trailing `# comment`.
+    rest.split('#').next().map(str::trim).unwrap_or(rest)
+}
+
 /// - Layout policy: flat-layout lockfile kinds (npm/yarn/bun) default
 ///   `nodeLinker` to `hoisted`; pnpm/aube kinds and fresh projects keep the
 ///   engine's `isolated` default (no entry pushed, so user/env settings
@@ -1673,6 +1746,100 @@ mod tests {
             // silent no-op — see the KNOWN GAP note on nub_setting_defaults.
             assert_eq!(get(&defaults, "cacheDir"), None);
         }
+    }
+
+    #[test]
+    fn yarnrc_node_linker_reads_unquoted_and_quoted_and_ignores_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+
+        // Unquoted value.
+        std::fs::write(&path, "nodeLinker: pnp\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("pnp"));
+
+        // Single-quoted value.
+        std::fs::write(&path, "nodeLinker: 'pnp'\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("pnp"));
+
+        // Double-quoted value.
+        std::fs::write(&path, "nodeLinker: \"pnp\"\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("pnp"));
+
+        // Hoisted — must read the value but it won't trigger the warning.
+        std::fs::write(&path, "nodeLinker: hoisted\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("hoisted"));
+
+        // Inline comment stripped on unquoted values.
+        std::fs::write(&path, "nodeLinker: pnp # managed by yarn\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("pnp"));
+
+        // Indented (nested) — must not match.
+        std::fs::write(&path, "  nodeLinker: pnp\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()), None);
+
+        // Absent file.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()), None);
+
+        // Case-normalised to lowercase.
+        std::fs::write(&path, "nodeLinker: PnP\n").unwrap();
+        assert_eq!(yarnrc_node_linker(dir.path()).as_deref(), Some("pnp"));
+    }
+
+    #[test]
+    fn warn_if_pnp_requested_fires_only_for_yarn_with_pnp_linker() {
+        let dir = tempfile::tempdir().unwrap();
+        let yarnrc = dir.path().join(".yarnrc.yml");
+
+        // Helper that mirrors the gating logic without actually calling
+        // eprintln! — we check the predicate, not the output channel.
+        let would_warn = |kind: Option<LockfileKind>, content: Option<&str>| {
+            let _ = std::fs::remove_file(&yarnrc);
+            if let Some(c) = content {
+                std::fs::write(&yarnrc, c).unwrap();
+            }
+            let detected = kind.map(|k| DetectedLockfile {
+                kind: k,
+                dir: dir.path().to_path_buf(),
+                fresh: false,
+            });
+            let is_yarn = matches!(
+                detected.as_ref().map(|d| d.kind),
+                Some(LockfileKind::Yarn | LockfileKind::YarnBerry)
+            );
+            let root = detected
+                .as_ref()
+                .map(|d| d.dir.as_path())
+                .unwrap_or(dir.path());
+            is_yarn && yarnrc_node_linker(root).as_deref() == Some("pnp")
+        };
+
+        // Yarn + pnp → warn.
+        assert!(would_warn(Some(LockfileKind::Yarn), Some("nodeLinker: pnp\n")));
+        assert!(would_warn(
+            Some(LockfileKind::YarnBerry),
+            Some("nodeLinker: pnp\n")
+        ));
+
+        // Yarn + hoisted → no warn.
+        assert!(!would_warn(
+            Some(LockfileKind::Yarn),
+            Some("nodeLinker: hoisted\n")
+        ));
+
+        // Yarn + no .yarnrc.yml → no warn.
+        assert!(!would_warn(Some(LockfileKind::YarnBerry), None));
+
+        // Non-yarn kinds + pnp → no warn (npm/bun projects can't have .yarnrc.yml pnp).
+        assert!(!would_warn(Some(LockfileKind::Npm), Some("nodeLinker: pnp\n")));
+        assert!(!would_warn(Some(LockfileKind::Bun), Some("nodeLinker: pnp\n")));
+        assert!(!would_warn(
+            Some(LockfileKind::Pnpm),
+            Some("nodeLinker: pnp\n")
+        ));
+
+        // No lockfile → no warn.
+        assert!(!would_warn(None, Some("nodeLinker: pnp\n")));
     }
 
     // The brand-surface toggles (workspace-yaml list, manifest config
