@@ -598,49 +598,16 @@ let __cpWrapArmed = false;
 function armChildProcessCompileCacheWrap() {
   if (__cpWrapArmed || __cpWrapped) return;
   __cpWrapArmed = true;
-  // DEFER the `Module._load` interceptor to setImmediate. Installing it
-  // synchronously here (during preload) leaves nub's wrapper sitting on `_load`
-  // while the USER's entry module — and every require it makes — executes, so an
-  // `Error` created during that synchronous load chain captures a
-  // `module_._load (runtime/preload-common.cjs)` frame that vanilla Node never has.
-  // That leaked preload frame is observable: `util.inspect(err, {colors:true})`
-  // greys ONLY `node:internal` frames, so nub's repo-path frame stays uncoloured and
-  // diverges from Node (Node's own test-util-inspect asserts every post-summary stack
-  // line is grey). Arming a tick LATER — after the main module body has finished its
-  // synchronous run — keeps the wrapper off that stack entirely. The child_process
-  // compile-cache strip only matters when the user SPAWNS a node child, which is a
-  // later/async action, so one setImmediate of latency costs nothing. To still cover
-  // a top-level `require('child_process')` that ran before this fires, patch the
-  // already-loaded singleton eagerly at arm time; future loads are caught by the
-  // interceptor. unref so a purely-synchronous program isn't kept alive by it.
-  const arm = () => {
-    if (__cpWrapped) return;
-    // Already-loaded case: child_process required synchronously before this tick.
-    // Patch the live builtin singleton directly (same object require() returns).
-    try {
-      if (typeof process.getBuiltinModule === "function" &&
-          process.moduleLoadList.some((m) => m === "NativeModule child_process")) {
-        wrapChildProcessCompileCache(process.getBuiltinModule("child_process"));
-        return; // patched; no interceptor needed
-      }
-    } catch { /* fall through to the lazy interceptor */ }
-    if (typeof module_._load !== "function") return;
-    const origLoad = module_._load;
-    module_._load = function (request, parent, isMain) {
-      const exports = origLoad.call(this, request, parent, isMain);
-      if (request === "child_process" || request === "node:child_process") {
-        module_._load = origLoad; // restore: one-shot, no steady-state overhead
-        try { wrapChildProcessCompileCache(exports); } catch {}
-      }
-      return exports;
-    };
+  if (typeof module_._load !== "function") return;
+  const origLoad = module_._load;
+  module_._load = function (request, parent, isMain) {
+    const exports = origLoad.call(this, request, parent, isMain);
+    if (request === "child_process" || request === "node:child_process") {
+      module_._load = origLoad; // restore: one-shot, no steady-state overhead
+      try { wrapChildProcessCompileCache(exports); } catch {}
+    }
+    return exports;
   };
-  try {
-    setImmediate(arm).unref();
-  } catch {
-    // No setImmediate (extreme floor / detached realm): fall back to synchronous arm.
-    try { arm(); } catch {}
-  }
 }
 
 // Monkey-patch child_process so node-targeted children the USER spawns with an
