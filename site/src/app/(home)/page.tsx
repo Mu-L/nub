@@ -938,7 +938,12 @@ const RULES = [
 
 /* Per-config-field support across package managers. Cells derive directly from
    crates/nub-cli/src/pm_engine/config_scope.rs and pm_engine/mod.rs — do NOT
-   edit a cell without changing the code it mirrors. Legend:
+   edit a cell without changing the code it mirrors. Exception: the
+   `packageExtensions` row has no pm_engine dialect-scoping (no per-PM conflict);
+   the nub=yes cell is grounded in the embedded aube engine, which honors a
+   top-level `packageExtensions` natively (vendor/aube/crates/aube-manifest/src/lib.rs
+   `package_extensions()` → resolver package_ext.rs). bun=no verified: zero refs in
+   bun source + docs. Legend:
      yes  — honored
      no   — ignored
      —    — n/a
@@ -961,6 +966,10 @@ const PM_MATRIX: { field: ReactNode; cells: Record<(typeof PM_COLUMNS)[number], 
   {
     field: <><Mono>catalog:</Mono></>,
     cells: { npm: 'no', pnpm: 'yes', yarn: 'no', bun: 'yes', nub: 'yes' },
+  },
+  {
+    field: <><Mono>packageExtensions</Mono></>,
+    cells: { npm: 'no', pnpm: 'yes', yarn: 'yes', bun: 'no', nub: 'yes' },
   },
   {
     field: <><Mono>.npmrc</Mono></>,
