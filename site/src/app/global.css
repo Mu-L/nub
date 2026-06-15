@@ -179,16 +179,19 @@ pre span[style*='#6a737d'] {
   color: #8f8a80 !important;
 }
 
-/* IBM Plex Mono against the Newsreader serif body: its x-height runs high but
-   its caps/ascenders sit short, so at the naive 0.86em the lowercase matched
-   while caps + digits looked stunted — inline code read as a visibly *smaller*,
-   broken-looking chip next to the prose (e.g. "global / builtin `.npmrc`").
-   0.9em is the optically-matched value (measured: serif cap-ascent 10.82px vs
-   mono 10.05px, x-height 7.05 vs 7.43 — balanced across caps and lowercase).
-   em-relative so it tracks the surrounding size in headings, tables, and body
-   alike. Code blocks (`pre code`) are excluded and unchanged. */
+/* IBM Plex Mono against the Newsreader serif body. Prose is dominated by
+   lowercase, so the perceived size of an inline-code token is governed by its
+   x-height, not its cap-height — and Plex Mono's x-height runs tall. At the old
+   0.9em the mono x-height measured 7.43px against the serif's 7.05px (ratio
+   1.054), so every code token read visibly *larger* and heavier than the words
+   around it. 0.84em brings the mono x-height to 6.94px (ratio 0.984) — a hair
+   below the serif lowercase, which optically balances the token against Plex
+   Mono's heavier stroke so it sits *in* the sentence rather than bulging out of
+   it. The slight negative tracking further trims the chunky feel. em-relative
+   so it tracks the surrounding size in headings, tables, and body alike. Code
+   blocks (`pre code`) are excluded and unchanged. */
 :not(pre) > code {
-  font-size: 0.9em;
+  font-size: 0.84em;
   letter-spacing: -0.01em;
   font-variant-ligatures: none;
 }
