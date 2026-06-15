@@ -1,6 +1,6 @@
 ---
 title: Runtime
-description: What Nub adds when it runs your code on stock Node — TypeScript, resolution, env loading, data imports, and modern globals — and the --node escape hatch that turns it all off.
+description: What Nub adds when it runs your code on stock Node — TypeScript, resolution, env loading, data imports, and modern globals — and the plain-Node escape hatch that turns it all off.
 ---
 
 The top-level `nub <file>` command runs a file on the `node` you already have installed. It is a true drop-in for `node <file>` — same argv shape, same flag set, same behavior — and on top of that it augments the runtime: TypeScript and JSX execute directly, imports resolve the way your editor resolves them, `.env*` files load automatically, data files import as parsed values, and modern web/TC39 globals are present even on older Node.
@@ -16,6 +16,19 @@ nub script.js
 <Callout title="Supported Node versions">
 Nub runs your code on stock Node — it resolves which Node your project pins and fetches one if it's missing, but never ships a runtime of its own. The supported floor is **Node 18.19+**; below that Nub refuses to run. Node 18.19–22.14 use the compatibility tier (async `module.register()` loader-worker) and 22.15+ use the fast path (sync `module.registerHooks()`) — functionally equivalent, differing only in startup overhead. See [Managing Node versions](/docs/node) for pinning and pre-installing.
 </Callout>
+
+## The Node version
+
+Before running anything, Nub resolves which Node the project pins. It walks up from the working directory and consults every pin source, taking the first one that yields a version. Highest precedence first:
+
+- `NODE_EXECUTABLE` — an absolute path to a Node binary, the explicit override. Set it and Nub uses that binary directly, skipping every pin file, the cache, and provisioning (the floor check still applies).
+- `package.json#devEngines.runtime` — the workspace-root manifest's runtime declaration. A version or range pins Node; a non-Node runtime here makes Nub refuse the run (unless the entry sets `onFail` to `"warn"` or `"ignore"`, which falls through to the next source).
+- `.node-version` — the tool-agnostic pin file, checked before `.nvmrc` when a directory has both.
+- `.nvmrc` — the nvm pin file.
+- `package.json#engines.node` — a semver *range* on the workspace-root manifest; the newest published version satisfying it is used.
+- No pin anywhere up the tree — the `node` already on your `PATH`.
+
+The pin files (`.node-version`, `.nvmrc`) are found by walking up parent directories — a pin at the repo root governs every subdirectory — while the `package.json` sources read the workspace-root manifest. When a pin resolves to a version that isn't installed, Nub fetches it; see [Managing Node versions](/docs/node) for how provisioning fires and where versions are cached. When sources disagree (a pin file vs `engines.node`, or `devEngines.runtime` overriding a pin file), Nub warns.
 
 ## A drop-in for `node`
 
@@ -56,10 +69,6 @@ In brief:
 - **[Web Storage](/docs/runtime/web-storage)** — `localStorage` / `sessionStorage` behavior and the opt-in that backs persistent storage.
 
 ## Modern APIs
-
-<TypesSetup>
-Most of these globals are already typed by `@types/node` 26 — use that version and they typecheck with no extra setup. The one exception is `reportError`, which lives in nub's own types package; install it if you call that.
-</TypesSetup>
 
 Modern globals — TC39, web-platform, and newer Node built-ins — work out of the box under Nub. Whatever Node version you run, the API is there — native where Node ships it, and where Node doesn't, Nub fills the gap automatically. You write against the API; the version split is Nub's problem, not yours.
 
