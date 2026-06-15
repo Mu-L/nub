@@ -642,8 +642,19 @@ mod tests {
         // it's what `run` prints verbatim.)
         let body = SKILL_MD_EVERGREEN;
         assert!(!body.trim().is_empty(), "skill must not be empty");
-        assert!(body.starts_with("---\n"), "skill needs YAML front matter");
-        for pointer in ["nubjs.com/docs", "nubjs.com/llms.txt", "nub --help", "--node"] {
+        // First line is the YAML front-matter fence. Compare line-ending-agnostically:
+        // a Windows checkout embeds the file with CRLF, so `body` may start with "---\r\n".
+        assert_eq!(
+            body.lines().next(),
+            Some("---"),
+            "skill needs YAML front matter"
+        );
+        for pointer in [
+            "nubjs.com/docs",
+            "nubjs.com/llms.txt",
+            "nub --help",
+            "--node",
+        ] {
             assert!(
                 body.contains(pointer),
                 "evergreen skill must point the agent at `{pointer}`"

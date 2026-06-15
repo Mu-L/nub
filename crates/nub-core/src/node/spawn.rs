@@ -1421,10 +1421,26 @@ mod tests {
         // must not double-inject / must respect an explicit disable.
         let s = |v: &str| v.to_string();
         let v = NodeVersion::new(22, 15, 0);
-        assert!(!should_inject_webstorage_flag(&v, &[s("--experimental-webstorage")], None));
-        assert!(!should_inject_webstorage_flag(&v, &[], Some("--experimental-webstorage")));
-        assert!(!should_inject_webstorage_flag(&v, &[s("--no-experimental-webstorage")], None));
-        assert!(!should_inject_webstorage_flag(&v, &[], Some("--no-experimental-webstorage")));
+        assert!(!should_inject_webstorage_flag(
+            &v,
+            &[s("--experimental-webstorage")],
+            None
+        ));
+        assert!(!should_inject_webstorage_flag(
+            &v,
+            &[],
+            Some("--experimental-webstorage")
+        ));
+        assert!(!should_inject_webstorage_flag(
+            &v,
+            &[s("--no-experimental-webstorage")],
+            None
+        ));
+        assert!(!should_inject_webstorage_flag(
+            &v,
+            &[],
+            Some("--no-experimental-webstorage")
+        ));
         // A --localstorage-file opt-in does NOT change the in-band decision — the
         // flag injects either way; (d) nub never synthesizes --localstorage-file, so
         // its presence/absence is irrelevant to whether the flag is injected.
@@ -1441,8 +1457,14 @@ mod tests {
         // Neither polarity present → nub may inject.
         assert!(!user_has_webstorage_flag(&[s("app.js")], None));
         // User already passed the positive → don't double-add.
-        assert!(user_has_webstorage_flag(&[s("--experimental-webstorage")], None));
-        assert!(user_has_webstorage_flag(&[], Some("--experimental-webstorage")));
+        assert!(user_has_webstorage_flag(
+            &[s("--experimental-webstorage")],
+            None
+        ));
+        assert!(user_has_webstorage_flag(
+            &[],
+            Some("--experimental-webstorage")
+        ));
         // User explicitly disabled → respect it, never re-enable.
         assert!(user_has_webstorage_flag(
             &[s("--no-experimental-webstorage")],

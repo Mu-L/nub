@@ -1046,7 +1046,10 @@ fn sessionstorage_works_by_default_localstorage_needs_user_file() {
     // Default run, no --localstorage-file: sessionStorage is a working global out of
     // the box (nub injects --experimental-webstorage on the band; native on 25+).
     let (probe_out, probe_err, probe_code) = run(&["probe.js"]);
-    assert_eq!(probe_code, 0, "sessionStorage probe failed: stderr={probe_err}");
+    assert_eq!(
+        probe_code, 0,
+        "sessionStorage probe failed: stderr={probe_err}"
+    );
     assert!(
         probe_out.contains("SS:v"),
         "sessionStorage must work out of the box (no --localstorage-file); got {probe_out:?} stderr: {probe_err:?}"
