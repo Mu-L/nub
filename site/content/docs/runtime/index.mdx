@@ -33,7 +33,7 @@ In brief:
 - **[Decorators](/docs/runtime/decorators)** — legacy decorators run with no build step under `experimentalDecorators`, including `emitDecoratorMetadata` for the DI / ORM ecosystem.
 - **[Resolution](/docs/runtime/resolution)** — extensionless imports, `.js → .ts` rewriting, and `tsconfig.json` path aliases resolve at runtime, the way `tsc` and your editor resolve them.
 - **[Environment variables](/docs/runtime/env)** — `.env*` files load into the environment before Node starts, with `${VAR}` expansion. No `dotenv`, no `--env-file`.
-- **[Data imports](/docs/runtime/data-imports)** — import `.yaml`, `.toml`, `.jsonc`, `.json5`, and `.txt` files directly as parsed values, with no npm parser and no claimed import specifiers.
+- **[Loaders](/docs/runtime/loaders)** — import `.yaml`, `.toml`, `.jsonc`, `.json5`, and `.txt` files directly as parsed values, with no npm parser and no claimed import specifiers.
 - **[Modern APIs](#modern-apis)** — modern globals and built-ins (Temporal, URLPattern, WebSocket, EventSource, node:sqlite, and more) work out of the box, polyfilled or unflagged per Node-version band.
 - **[Workers](/docs/runtime/workers)** — the browser-shape `Worker` global runs your `.ts` entry points, wrapping `node:worker_threads`.
 - **[Web Storage](/docs/runtime/web-storage)** — `localStorage` / `sessionStorage` behavior and the opt-in that backs persistent storage.
