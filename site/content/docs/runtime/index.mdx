@@ -17,18 +17,18 @@ nub script.js
 Nub runs your code on stock Node — it resolves which Node your project pins and fetches one if it's missing, but never ships a runtime of its own. The supported floor is **Node 18.19+**; below that Nub refuses to run. Node 18.19–22.14 use the compatibility tier (async `module.register()` loader-worker) and 22.15+ use the fast path (sync `module.registerHooks()`) — functionally equivalent, differing only in startup overhead. See [Managing Node versions](/docs/node) for pinning and pre-installing.
 </Callout>
 
-## The Node version
+## Node version resolution
 
-Before running anything, Nub resolves which Node the project pins. It walks up from the working directory and consults every pin source, taking the first one that yields a version. Highest precedence first:
+Nub resolves the project's pinned Node before running anything, walking up from the working directory and taking the first source that yields a version. Highest precedence first:
 
-- `NODE_EXECUTABLE` — an absolute path to a Node binary, the explicit override. Set it and Nub uses that binary directly, skipping every pin file, the cache, and provisioning (the floor check still applies).
-- `package.json#devEngines.runtime` — the workspace-root manifest's runtime declaration. A version or range pins Node; a non-Node runtime here makes Nub refuse the run (unless the entry sets `onFail` to `"warn"` or `"ignore"`, which falls through to the next source).
-- `.node-version` — the tool-agnostic pin file, checked before `.nvmrc` when a directory has both.
-- `.nvmrc` — the nvm pin file.
-- `package.json#engines.node` — a semver *range* on the workspace-root manifest; the newest published version satisfying it is used.
-- No pin anywhere up the tree — the `node` already on your `PATH`.
+- `NODE_EXECUTABLE` — an explicit path to a Node binary
+- `package.json` → `devEngines.runtime`
+- `.node-version`
+- `.nvmrc`
+- `package.json` → `engines.node` (a range)
+- the `node` on your `PATH`, when nothing is pinned
 
-The pin files (`.node-version`, `.nvmrc`) are found by walking up parent directories — a pin at the repo root governs every subdirectory — while the `package.json` sources read the workspace-root manifest. When a pin resolves to a version that isn't installed, Nub fetches it; see [Managing Node versions](/docs/node) for how provisioning fires and where versions are cached. When sources disagree (a pin file vs `engines.node`, or `devEngines.runtime` overriding a pin file), Nub warns.
+When a pinned version isn't installed, Nub fetches it — see [Managing Node versions](/docs/node).
 
 ## A drop-in for `node`
 
