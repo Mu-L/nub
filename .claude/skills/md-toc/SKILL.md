@@ -2,6 +2,8 @@
 name: md-toc
 description: Navigate large markdown files efficiently — get a complete heading TOC with exact line ranges, then Read only the section you need instead of loading the whole file.
 version: 1.0.0
+metadata:
+  internal: true
 ---
 
 # md-toc — markdown navigation via line ranges

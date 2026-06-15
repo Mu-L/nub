@@ -2,6 +2,8 @@
 name: todo
 description: Parse status-tagged todo lines from a markdown file — filter by status, section, or get a quick tally — without loading the whole file.
 version: 1.1.0
+metadata:
+  internal: true
 ---
 
 # todo — parse status-box todo lines from markdown
