@@ -108,7 +108,7 @@ To fetch package managers from a different registry than your dependencies, `COR
 
 ## `nub pm shim`
 
-Make **bare** `npm` / `pnpm` / `yarn` commands (plus `npx`, `pnpx`, `yarnpkg`) use the project's pinned package manager — typed from muscle memory, or spawned by tools you don't control. This is what `corepack enable` does, without the corepack tax: each shim *is* the Nub binary (a hardlink), so deciding which PM to run costs zero Node boots.
+Make **bare** `npm` / `pnpm` / `yarn` commands (plus the runners `npx` / `pnpx`) use the project's pinned package manager — typed from muscle memory, or spawned by tools you don't control. This is what `corepack enable` does, without the corepack tax: each shim *is* the Nub binary (a hardlink), so deciding which PM to run costs zero Node boots.
 
 ```console
 $ nub pm shim
@@ -116,7 +116,7 @@ nub pm shim: 7 entries in ~/.nub/shims (7 created)
   PATH: added ~/.nub/shims to ~/.zshrc — open a new shell or run `source ~/.zshrc`
 ```
 
-The seven entries are the six package-manager shims (`npm`, `pnpm`, `yarn`, `npx`, `pnpx`, `yarnpkg`) plus a `nub` self-link.
+The seven entries are the package-manager shims (`npm`, `pnpm`, `yarn`) and their runners (`npx`, `pnpx`), plus yarn's `yarnpkg` alias and a `nub` self-link.
 
 With shims active, a bare command resolves against the project it runs in:
 
