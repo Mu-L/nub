@@ -868,17 +868,11 @@ function Compatibility() {
           </h3>
           <p className="mt-5 text-balance text-lg leading-relaxed text-fd-muted-foreground">
             Your code is transpiled and executed with the stock <Mono>node</Mono>{' '}binary, so
-            Nub passes Node&rsquo;s own test suite: <span className="font-semibold text-fd-foreground">100% in <Mono>--node</Mono>{' '}passthrough,
-            99.3% augmented</span>{' '}over the full corpus with zero exclusions. The augmented gap is
-            deliberate &mdash; enabled features, suppressed experimental-warning noise, superseded TS
-            handling &mdash; not breakage. It&rsquo;s not a reimplementation.
+            Nub passes Node&rsquo;s own test suite — <span className="font-semibold text-fd-foreground">99.3% of the full corpus</span>. The gap comes from nub&rsquo;s native Node addons and unflagged experimental features, not breakage. It&rsquo;s not a reimplementation.
           </p>
         </div>
 
-        <p className="mx-auto mt-12 max-w-2xl text-center text-sm font-medium text-fd-foreground">
-          How the runtimes compare on Deno&rsquo;s own Node-compat corpus
-        </p>
-        <div className="mx-auto mt-5 max-w-3xl space-y-5">
+        <div className="mx-auto mt-12 max-w-3xl space-y-5">
           {COMPAT.map((r) => {
             // Short bars can't fit the label inside the fill (it gets clipped),
             // so for anything under ~22% the label sits just outside the fill.
@@ -911,9 +905,7 @@ function Compatibility() {
           })}
         </div>
         <p className="mx-auto mt-6 max-w-lg text-center text-sm leading-relaxed text-fd-muted-foreground">
-          Deno&rsquo;s published Node-compatibility corpus, run against every runtime with Deno&rsquo;s
-          own skip list and scored node-relative — each as a fraction of what stock Node passes. Deno
-          and Bun reimplement Node&rsquo;s APIs; Nub runs on Node, so it tracks Node.{' '}
+          Deno&rsquo;s own Node-compat corpus, scored against stock Node. Deno and Bun reimplement Node&rsquo;s APIs; Nub runs on Node, so it tracks it.{' '}
           <a
             href="https://github.com/nubjs/nub/tree/main/tests/cross-runtime"
             target="_blank"
@@ -1126,15 +1118,14 @@ catalog:
                 On every install, pnpm rebuilds a per-project <Mono>node_modules</Mono>,
                 hardlinking thousands of files into place. Nub points <Mono>node_modules</Mono>{' '}
                 straight at one global store shared across all your projects, so a warm install
-                writes little more than symlinks. Apps that need real files on disk — Next, Nuxt —
-                materialize instead and match pnpm.
+                is just symlinks.
               </>
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
                 {/* Source: tests/bench/run.sh (warm leg, GVS on) + tests/bench/results/linux-warm-large-aarch64-20260613.json.
                     CAVEAT (wiki/research/benchmark-credibility.md §3): the 10× is the GVS-on (default) symlink-farm path;
-                    fair materialized config is ~tie with pnpm. The Next/Nuxt opt-out line below carries ***REMOVED***. */}
+                    fair materialized config is ~tie with pnpm. (Next/Nuxt opt-out line removed per the maintainer — marketing copy keeps the headline.) */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   warm install · 1,168 deps · Linux · hyperfine
                 </p>
