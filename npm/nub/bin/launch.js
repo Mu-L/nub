@@ -92,10 +92,15 @@ function ensureExecutable(binPath, verb) {
     const base = process.env.XDG_CACHE_HOME ||
       (os.homedir() && os.homedir() !== "/" ? path.join(os.homedir(), ".cache") : null);
     if (!base) return binPath;
-    const dir = path.join(base, "nub", "bin");
-    fs.mkdirSync(dir, { recursive: true });
+    // The copy's FILENAME must stay the bare verb (`nub`/`nubx`): the native binary
+    // selects its verb from argv[0]'s basename, and the healed sh trampoline `exec`s
+    // this path with no argv0 override — a tagged filename like `nubx-<tag>` would make
+    // `nubx` misclassify as plain `nub`. So the staleness tag goes in the DIRECTORY,
+    // and the executable keeps its real name: `<cache>/nub/bin/<tag>/<verb>`.
     const tag = `${st.size}-${Math.trunc(st.mtimeMs)}`;
-    const dest = path.join(dir, `${verb}-${tag}`);
+    const dir = path.join(base, "nub", "bin", tag);
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, verb);
     if (isExecutable(dest)) {
       const dst = fs.statSync(dest);
       if (dst.size === st.size) return dest; // already staged, current, runnable
