@@ -551,6 +551,7 @@ import { host, port } from "./config.yaml" // named exports`}
 
           <Feature
             accent="ember"
+            reverse
             eyebrow="truly drop-in"
             title={<>Flag-for-flag compatible with <HeadingCode>node</HeadingCode></>}
             body={
@@ -579,7 +580,6 @@ import { host, port } from "./config.yaml" // named exports`}
 
           <Feature
             accent="ember"
-            reverse
             eyebrow="No Nub-specific APIs"
             title="Zero lock-in"
             body={
@@ -727,6 +727,7 @@ function RunScriptBand() {
 
           <Feature
             accent="acid"
+            reverse
             eyebrow="Drop-in for pnpm run"
             title={<>Flag-for-flag compatible with <HeadingCode>pnpm run</HeadingCode></>}
             body={
@@ -751,7 +752,6 @@ function RunScriptBand() {
 
           <Feature
             accent="acid"
-            reverse
             eyebrow="Workspaces"
             title="Monorepo-friendly"
             body={
@@ -791,7 +791,8 @@ function NubxBand() {
             <>
               The <Mono>nubx</Mono>{' '}command resolves <Mono>node_modules/.bin</Mono>{' '}in Rust
               and execs the binary directly — no Node process in the wrapper. A drop-in for{' '}
-              <Mono>npx</Mono>{' '}and <Mono>pnpm exec</Mono>.
+              <Mono>npx</Mono>{' '}and <Mono>pnpm dlx</Mono>: it runs a local bin, or fetches an
+              uninstalled one from the registry.
             </>
           }
           accent="sky"
@@ -842,31 +843,8 @@ function NubxBand() {
           <Feature
             accent="sky"
             reverse
-            eyebrow="Resolution"
-            title="Works with any package manager"
-            body={
-              <>
-                Nub resolves the CLI the way <Mono>pnpm</Mono>,{' '}<Mono>yarn</Mono>, and{' '}
-                <Mono>npm</Mono>{' '}do, so it runs the exact binary your install put there,
-                even in a monorepo. Add <Mono>--node</Mono>{' '}to run one under plain Node.
-              </>
-            }
-            visual={
-              <Terminal
-                lines={[
-                  { cmd: 'nubx eslint .', comment: "member's .bin first" },
-                  { cmd: 'nubx prisma generate', comment: 'then workspace root' },
-                  { cmd: 'nubx tsc --noEmit', comment: 'then ancestors' },
-                  { cmd: 'nubx --node some-cli', comment: 'run under plain Node' },
-                ]}
-              />
-            }
-          />
-
-          <Feature
-            accent="sky"
             eyebrow="Drop-in for pnpm exec"
-            title={<>Your <HeadingCode>pnpm exec</HeadingCode> muscle memory just works</>}
+            title={<>Flag-for-flag compatible with <HeadingCode>pnpm exec</HeadingCode></>}
             body={
               <>
                 The <Mono>nubx</Mono>{' '}and <Mono>nub exec</Mono>{' '}commands take{' '}
@@ -885,6 +863,29 @@ function NubxBand() {
               />
             }
           />
+
+          <Feature
+            accent="sky"
+            eyebrow="Resolution"
+            title="Works with any package manager"
+            body={
+              <>
+                Nub resolves a locally-installed CLI from{' '}<Mono>node_modules/.bin</Mono>{' '}
+                regardless of which package manager put it there — so you get Nub's
+                performance without switching package managers.
+              </>
+            }
+            visual={
+              <Terminal
+                lines={[
+                  { cmd: 'nubx eslint .', comment: "member's .bin first" },
+                  { cmd: 'nubx prisma generate', comment: 'then workspace root' },
+                  { cmd: 'nubx tsc --noEmit', comment: 'then ancestors' },
+                  { cmd: 'nubx --node some-cli', comment: 'run under plain Node' },
+                ]}
+              />
+            }
+          />
         </div>
       </Container>
     </section>
@@ -894,15 +895,16 @@ function NubxBand() {
 /* ------------------------------------------------------------ Compatibility */
 
 /* Source: tests/cross-runtime/ (run.mjs + results.json, corpus colinhacks/node_test @ node-25.8.1).
-   This chart is the cross-runtime COMPETITIVE comparison, node-relative — a SEPARATE measurement
-   from the headline 99.3% (Node's own test suite, tests/run-node-compat.sh). Do not conflate them.
-   Rates = runtime_pass / node_pass on the identical corpus. Counts mirror results.json:
-   node 4375, nub 4320, deno 3380, bun 1769 passes (node_pass = 4375). Deno ref: deno.com/blog/v2.8 */
+   This is the ONE compat measurement used across the whole site — the Deno cross-runtime
+   Node-compat corpus, node-relative. The same 98.3% nub figure is the headline in the blog.
+   (The old partial "node-suite" 99.3% number is retired — it was a random sampling, not Node's
+   real suite.) Rates = runtime_pass / node_pass on the identical corpus. Counts mirror results.json:
+   node 4324, nub 4251, deno 3370, bun 1760 passes (node_pass = 4324). Deno ref: deno.com/blog/v2.8 */
 const COMPAT = [
-  { name: 'Node 25.8', rate: 100, tests: '4,375 / 4,375', us: false, dim: false },
-  { name: 'Nub', rate: 98.7, tests: '4,320 / 4,375', us: true, dim: false },
-  { name: 'Deno 2.8', rate: 77.3, tests: '3,380 / 4,375', us: false, dim: true },
-  { name: 'Bun 1.3.14', rate: 40.4, tests: '1,769 / 4,375', us: false, dim: true },
+  { name: 'Node 25.8', rate: 100, tests: '4,324 / 4,324', us: false, dim: false },
+  { name: 'Nub', rate: 98.3, tests: '4,251 / 4,324', us: true, dim: false },
+  { name: 'Deno 2.8', rate: 77.9, tests: '3,370 / 4,324', us: false, dim: true },
+  { name: 'Bun 1.3.14', rate: 40.7, tests: '1,760 / 4,324', us: false, dim: true },
 ];
 
 function Compatibility() {
@@ -1130,28 +1132,22 @@ function HypermanagerBand() {
           <Feature
             accent="pink"
             reverse
-            eyebrow="pnpm compatibility"
-            title="Built for pnpm compatibility"
+            eyebrow="Drop-in for pnpm"
+            title={<>Drop-in <HeadingCode>pnpm</HeadingCode> compatibility</>}
             body={
               <>
-                When a <Mono>pnpm-lock.yaml</Mono>{' '}is detected, Nub runs in pnpm-compat mode.
-                It reads and respects <Mono>pnpm-workspace.yaml</Mono>, <Mono>.pnpmfile.cjs</Mono>,
-                and the <Mono>{'"pnpm"'}</Mono>{' '}section in <Mono>package.json</Mono>.
+                Nub&rsquo;s <Mono>install</Mono>{' '}and <Mono>add</Mono>{' '}speak pnpm&rsquo;s flags
+                with the same spelling and semantics, down to advanced features like the workspace
+                catalog. Swap <Mono>pnpm</Mono>{' '}for <Mono>nub</Mono>{' '}and your install commands
+                run unchanged.
               </>
             }
             visual={
-              <Source
-                lang="yaml"
-                code={`# pnpm-workspace.yaml — read as-is
-packages:
-  - "packages/*"
-catalog:
-  react: ^18.3.1
-
-# package.json
-{ "pnpm": {
-    "overrides": { "axios": "^1.7.0" },
-    "onlyBuiltDependencies": ["esbuild"] } }`}
+              <Terminal
+                lines={[
+                  { cmd: 'nub add -E -D --save-catalog react', comment: 'exact pin · devDeps · workspace catalog' },
+                  { cmd: 'nub install --frozen-lockfile --prefer-offline --node-linker hoisted' },
+                ]}
               />
             }
           />
