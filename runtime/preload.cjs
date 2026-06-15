@@ -143,7 +143,11 @@ if (!requireEsmDisabled) {
   // through the registered loader-worker hooks. User require(esm) of THEIR own ES
   // modules still gets Node's native ERR_REQUIRE_ESM, exactly as the flag promises.
   const { pathToFileURL } = require("node:url");
-  module_.register("./preload-async-hooks.mjs", pathToFileURL(__filename).href);
+  // Via the shared helper so Node 26+'s DEP0205 (steering to module.registerHooks) is
+  // not leaked onto the user's stderr — nub is forced onto module.register here
+  // because require(esm) is off, so registerHooks' in-thread sync core load is
+  // impossible; the user has no action to take. See registerLoaderWorker.
+  common.registerLoaderWorker("./preload-async-hooks.mjs", pathToFileURL(__filename).href);
 
   // Sync, non-require(esm) polyfills still install (none of them require(esm)).
   // Clobbered-polyfill packages are CJS requires, unaffected by the flag.

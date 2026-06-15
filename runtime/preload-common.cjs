@@ -159,6 +159,44 @@ function installUserHookDetector() {
   try { module_.registerHooks = wrapped; } catch {}
 }
 
+// ── Internal `module.register()` without the DEP0205 leak ────────────
+// `module.register()` is the loader-WORKER registration surface (async ESM hooks in
+// a dedicated thread). nub uses it for the compat tier (18.19–22.14, where the sync
+// `module.registerHooks` doesn't exist) and for the fast tier's
+// `--no-experimental-require-module` fallback (where `require(esm)` is off, so the
+// in-thread sync hooks can't load transform-core.mjs synchronously). On Node 26+,
+// `module.register()` emits a one-shot `[DEP0205]` DeprecationWarning steering callers
+// to `module.registerHooks()` — but nub CANNOT use `registerHooks` on these paths
+// (no sync surface on compat; no sync core load when require(esm) is disabled), and
+// the deprecation is for nub's OWN internal call, not anything the user wrote: the
+// user has no action to take, so the warning is pure noise on their stderr. Suppress
+// exactly that DEP0205 emission for the duration of nub's own register() call, then
+// restore `process.emitWarning` untouched, so a user's later `module.register()` (or
+// any other deprecation) still warns normally. Default-preserving: only nub's
+// internal call is silenced, only for DEP0205, only on the versions that emit it.
+function registerLoaderWorker(specifier, parentURL, options) {
+  const realEmitWarning = process.emitWarning;
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    try { process.emitWarning = realEmitWarning; } catch {}
+  };
+  try {
+    process.emitWarning = function (warning, ...rest) {
+      // Node calls emitWarning(msg, 'DeprecationWarning', 'DEP0205', ...) for the
+      // module.register() deprecation. Swallow only that exact code; pass everything
+      // else (including any non-DEP0205 deprecation) straight through.
+      const code = typeof rest[0] === "object" && rest[0] !== null ? rest[0].code : rest[1];
+      if (code === "DEP0205") return;
+      return realEmitWarning.call(this, warning, ...rest);
+    };
+    return module_.register(specifier, parentURL, options);
+  } finally {
+    restore();
+  }
+}
+
 function makeHooks(core, watchReporting) {
   installUserHookDetector();
 
@@ -560,16 +598,49 @@ let __cpWrapArmed = false;
 function armChildProcessCompileCacheWrap() {
   if (__cpWrapArmed || __cpWrapped) return;
   __cpWrapArmed = true;
-  if (typeof module_._load !== "function") return;
-  const origLoad = module_._load;
-  module_._load = function (request, parent, isMain) {
-    const exports = origLoad.call(this, request, parent, isMain);
-    if (request === "child_process" || request === "node:child_process") {
-      module_._load = origLoad; // restore: one-shot, no steady-state overhead
-      try { wrapChildProcessCompileCache(exports); } catch {}
-    }
-    return exports;
+  // DEFER the `Module._load` interceptor to setImmediate. Installing it
+  // synchronously here (during preload) leaves nub's wrapper sitting on `_load`
+  // while the USER's entry module — and every require it makes — executes, so an
+  // `Error` created during that synchronous load chain captures a
+  // `module_._load (runtime/preload-common.cjs)` frame that vanilla Node never has.
+  // That leaked preload frame is observable: `util.inspect(err, {colors:true})`
+  // greys ONLY `node:internal` frames, so nub's repo-path frame stays uncoloured and
+  // diverges from Node (Node's own test-util-inspect asserts every post-summary stack
+  // line is grey). Arming a tick LATER — after the main module body has finished its
+  // synchronous run — keeps the wrapper off that stack entirely. The child_process
+  // compile-cache strip only matters when the user SPAWNS a node child, which is a
+  // later/async action, so one setImmediate of latency costs nothing. To still cover
+  // a top-level `require('child_process')` that ran before this fires, patch the
+  // already-loaded singleton eagerly at arm time; future loads are caught by the
+  // interceptor. unref so a purely-synchronous program isn't kept alive by it.
+  const arm = () => {
+    if (__cpWrapped) return;
+    // Already-loaded case: child_process required synchronously before this tick.
+    // Patch the live builtin singleton directly (same object require() returns).
+    try {
+      if (typeof process.getBuiltinModule === "function" &&
+          process.moduleLoadList.some((m) => m === "NativeModule child_process")) {
+        wrapChildProcessCompileCache(process.getBuiltinModule("child_process"));
+        return; // patched; no interceptor needed
+      }
+    } catch { /* fall through to the lazy interceptor */ }
+    if (typeof module_._load !== "function") return;
+    const origLoad = module_._load;
+    module_._load = function (request, parent, isMain) {
+      const exports = origLoad.call(this, request, parent, isMain);
+      if (request === "child_process" || request === "node:child_process") {
+        module_._load = origLoad; // restore: one-shot, no steady-state overhead
+        try { wrapChildProcessCompileCache(exports); } catch {}
+      }
+      return exports;
+    };
   };
+  try {
+    setImmediate(arm).unref();
+  } catch {
+    // No setImmediate (extreme floor / detached realm): fall back to synchronous arm.
+    try { arm(); } catch {}
+  }
 }
 
 // Monkey-patch child_process so node-targeted children the USER spawns with an
@@ -763,6 +834,7 @@ function reenableUserCompileCache() {
 
 module.exports = {
   installWatchReporting,
+  registerLoaderWorker,
   makeHooks,
   installCjsRequireHooks,
   preloadPolyfillPackages,

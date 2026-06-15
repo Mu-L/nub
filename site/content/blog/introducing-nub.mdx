@@ -27,11 +27,11 @@ Node is the gold standard for server-side JavaScript. It defines the stdlib the 
 - **`dotenv`** — `.env` file loading.
 - **`nodemon`** — restart on file changes.
 
-Bun and Deno proved there's enormous appetite for an all-in-one toolkit that replaces this pile. But neither has dented Node's production dominance — six years after Deno 1.0 and two and a half after Bun 1.0, neither is a first-class target on AWS, GCP, or Azure, and their Node.js conformance still trails the real thing by a wide margin. Both are from-scratch runtimes reimplementing Node's surface, and the gaps show up in production.
+Bun and Deno proved there's enormous appetite for an all-in-one toolkit that replaces this pile. But neither has dented Node's production dominance — six years after Deno 1.0 and two and a half after Bun 1.0, neither is a first-class target on AWS, GCP, or Azure, and their Node.js conformance still trails the real thing by a wide margin. Both are from-scratch runtimes reimplementing Node's surface, and the gaps show up in production. The "next-generation" runtimes share a fundamental flaw: **they're trying to replace Node.js.**
 
 ## Introducing Nub
 
-The "next-generation" runtimes share a fundamental flaw: **they're trying to replace Node.js.** Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so it passes the vast majority of Node's own test suite, because the runtime underneath *is* Node. It combines:
+Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so it passes the vast majority of Node's own test suite, because the runtime underneath *is* Node. It combines:
 
 ```sh
 $ nub index.ts             # file runner — full TypeScript, on stock Node

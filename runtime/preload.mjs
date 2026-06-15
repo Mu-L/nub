@@ -80,7 +80,11 @@ if (__isFastTier) {
   // Compat path: ESM `import` hooks run in a dedicated loader worker thread. That
   // worker resolves PnP deps via pnpapi.resolveRequest itself (preload-async-
   // hooks.mjs), so no Yarn `.pnp.loader.mjs` registration is needed here either.
-  module.register("./preload-async-hooks.mjs", import.meta.url);
+  // Via the shared helper so any DEP0205 from nub's own register() call (Node 26+,
+  // if this compat path is ever reached there) is not leaked onto the user's stderr.
+  // On the compat tier proper (18.19–22.14) registerHooks doesn't exist, so the
+  // loader-worker is the only hook surface; the user has no action to take.
+  common.registerLoaderWorker("./preload-async-hooks.mjs", import.meta.url);
   // (The main-thread require() shim's module-format + decorator detection is a
   // synchronous native addon call now — no parser warm-up; the old
   // `await core.ensureParser()` for the ESM-only oxc-parser is gone.)
