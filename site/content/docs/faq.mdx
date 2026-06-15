@@ -90,7 +90,7 @@ Because Nub writes the same lockfile your package manager does, nothing forces a
 
 Yes. All four keep working exactly as they do without Nub. Your lockfile stays in whatever format your package manager produces. Workspace topology (`pnpm-workspace.yaml`, `npm` workspaces, `yarn` workspaces) is honored by `nub run` and `nubx` directly. The source of truth for `nub run` is `package.json` and its `"scripts"` field; for `nubx`, it's `node_modules/.bin`.
 
-One Yarn-specific caveat: Yarn Berry's Plug'n'Play mode replaces `node_modules/.bin/` with a runtime resolution table managed by Yarn's own loader, and tools that walk the `.bin/` tree — `npx`, `pnpm exec`, `bunx`, `nubx` — don't see it. Yarn Berry users who want compatibility with the standard CLI-runner ecosystem can opt out by setting `nodeLinker: node-modules` in `.yarnrc.yml`, which restores the conventional `.bin/` layout.
+One Yarn-specific note: Yarn Berry's Plug'n'Play mode replaces `node_modules/.bin/` with a runtime resolution table managed by Yarn's own loader. Tools that only walk the `.bin/` tree — `npx`, `pnpm exec`, `bunx` — don't see it, but `nubx` does: when the `.bin` walk-up misses in a PnP tree it resolves the bin through `pnpapi` (this is part of `nubx`'s augmentation, so it's skipped under `--node`). Yarn Berry users running `nubx --node` can restore the conventional `.bin/` layout by setting `nodeLinker: node-modules` in `.yarnrc.yml`.
 
 ## Is it monorepo-friendly?
 
@@ -213,7 +213,7 @@ rimraf                                  # fs.rmSync({ recursive, force }) since 
 mkdirp                                  # fs.mkdirSync({ recursive }) since 10.12
 glob, globby (basic cases)              # fs.glob since 22
 form-data                               # native FormData since 18
-ws client                               # native WebSocket since 22.0, polyfilled older
+ws client                               # native WebSocket since 22.0, flag-injected down to 20.10
 ```
 
 The second bucket's credit is Node's — running on a modern-Node floor is what makes the inheritance practical without per-project Node-version verification.
@@ -297,7 +297,7 @@ That installs the Rust binary (via the usual `@<scope>/<platform-arch>` npm dist
 npm install -g @nubjs/nub@latest
 ```
 
-Same as installing. Because Nub adopts whatever `node` is on your `PATH`, upgrading Nub does not change your Node version, and upgrading Node does not change your Nub version.
+Same as installing. Nub and Node version independently: Nub resolves the Node your project pins (`.node-version` / `.nvmrc` / `engines.node`) and provisions it if it's missing, falling back to the `node` on your `PATH` only when nothing is pinned. So upgrading Nub does not change your project's Node version, and upgrading Node does not change your Nub version.
 
 ## Is there a curl install script?
 

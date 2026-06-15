@@ -1,6 +1,6 @@
 ---
 title: Package meta-manager
-description: Provision and run the package manager your project pins — corepack's job, in native Rust. Pin a version and the exact pnpm/npm/yarn is fetched, verified, cached, and run on the project's Node.
+description: Provision and run the package manager your project pins — corepack's job, in native Rust. Pin a version and the exact pnpm, npm, or yarn release is fetched, verified, cached, and run on the project's Node.
 ---
 
 Nub reads your project's package-manager pin, downloads that exact version from the npm registry — integrity-verified before extraction, cached under `~/.cache/nub/pm` — and runs it under the project's Node. No corepack, no `enable` step, no baked version table: a Nub binary from six months ago provisions today's pnpm.
@@ -61,9 +61,9 @@ What it writes:
 
 - **`packageManager`** — the exact version plus a `+sha512` hash computed from the verified tarball. This is what corepack, pnpm, and turbo execute, and `use` is the only Nub command that writes it.
 - **The lockfile, in the new manager's format.** An existing lockfile in another format is *converted* — resolution state preserved — and the old file removed. Already the right format: kept as is. No lockfile: nothing; the next install creates it. The converted lockfile passes the real manager's frozen install (`pnpm install --frozen-lockfile`, `npm ci`, `bun install --frozen-lockfile`) byte-for-byte.
-- **`devEngines` is never created.** If it already exists and names a different manager, its `name` is reconciled (version dropped — `packageManager` alone pins exactly).
+- **`devEngines.packageManager`** — written alongside `packageManager` as `{ name, version: "^<exact>", onFail: "warn" }` (the `^`-range form, as shown above). An existing entry that names a different manager is reconciled in place — its `name` updated and the range refreshed.
 
-Every file written or removed is named in the output; rerunning is a no-op. Two refusals, both before anything is written: multiple foreign-format lockfiles (remove the stale ones first), and `use yarn` when it would have to convert (Nub doesn't write `yarn.lock` yet; generate it with `yarn install`, then rerun — with `yarn.lock` in place only the declaration is written). Running `use bun` writes the declaration and the lockfile but doesn't provision bun.
+Every file written or removed is named in the output; rerunning is a no-op. The refusals, all before anything is written: multiple foreign-format lockfiles (remove the stale ones first); a binary `bun.lockb` source (regenerate it as a text `bun.lock` with `bun install --save-text-lockfile` first); and `use yarn` in two cases it can't convert faithfully — an existing Berry (2+) `yarn.lock` (classic `use yarn` would downgrade the format; use `yarn set version` instead) and a graph that uses the `workspace:` protocol (classic yarn can't express it). A converting `use yarn` is otherwise fine — Nub writes a classic `yarn.lock` directly. Running `use bun` writes the declaration and the lockfile but doesn't provision bun.
 
 ## `nub pm update`
 
@@ -105,9 +105,11 @@ Make **bare** `npm` / `pnpm` / `yarn` commands (plus `npx`, `pnpx`, `yarnpkg`) u
 
 ```console
 $ nub pm shim
-created 7 shims in ~/.nub/shims
-added PATH entry to ~/.zshrc — restart your shell or: source ~/.zshrc
+nub pm shim: 7 entries in ~/.nub/shims (7 created)
+  PATH: added ~/.nub/shims to ~/.zshrc — open a new shell or run `source ~/.zshrc`
 ```
+
+The seven entries are the six package-manager shims (`npm`, `pnpm`, `yarn`, `npx`, `pnpx`, `yarnpkg`) plus a `nub` self-link.
 
 With shims active, a bare command resolves against the project it runs in:
 
@@ -125,5 +127,6 @@ Remove the shims and the `PATH` entry. Works even after the Nub binary itself ha
 
 ```console
 $ nub pm unshim
-removed ~/.nub/shims · PATH entry stripped from ~/.zshrc
+nub pm unshim: removed ~/.nub/shims
+  PATH: removed the shims block from ~/.zshrc
 ```

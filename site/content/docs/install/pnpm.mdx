@@ -1,6 +1,6 @@
 ---
 title: pnpm
-description: pnpm is the package manager Nub mirrors most closely — native pnpm-lock.yaml v9 read+write, isolated node_modules, .pnpmfile.cjs hooks, all gated on pnpm being the incumbent.
+description: pnpm is the package manager Nub mirrors most closely — native version-9 lockfile read and write, an isolated dependency tree, and pnpm's hook file, all gated on pnpm being the incumbent.
 ---
 
 Nub mirrors pnpm most closely: the CLI surface, the isolated `node_modules` layout, and the lockfile. When pnpm is the incumbent — a `packageManager: "pnpm@…"` field or an existing `pnpm-lock.yaml` — Nub reads and writes pnpm's own `pnpm-lock.yaml` in its native format, and honors pnpm's config. Everything below is gated on that.
@@ -100,7 +100,7 @@ $ nub install --node-linker pnp
   │ `hoisted`
 ```
 
-Lifecycle scripts for dependencies are skipped by default, exactly as pnpm 10 does. A package runs install scripts only when allowlisted via `pnpm.onlyBuiltDependencies` (or `pnpm.allowBuilds`), or when Nub's gated default-trust floor vouches for it (see [post-install](/docs/install#post-install)); `nub approve-builds` adds an entry interactively. `pnpm.neverBuiltDependencies` is a denylist that wins over any allow and over the floor.
+Lifecycle scripts for dependencies are skipped by default, exactly as pnpm 10 does. A package runs install scripts only when allowlisted via `pnpm.onlyBuiltDependencies` (or `pnpm.allowBuilds`), or when Nub's gated default-trust floor vouches for it (see [Security](/docs/install#security)); `nub approve-builds` adds an entry interactively. `pnpm.neverBuiltDependencies` is a denylist that wins over any allow and over the floor.
 
 ## Gaps
 

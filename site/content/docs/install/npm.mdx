@@ -1,6 +1,6 @@
 ---
 title: npm
-description: Nub speaks npm's on-disk formats — package-lock.json v2/v3 round-trips byte-for-byte, .npmrc is read at project and user scope. The CLI is pnpm-shaped; the files are npm's.
+description: Nub speaks npm's on-disk formats — the version-2 and version-3 lockfile round-trips byte-for-byte, and npm config is read at project and user scope. The CLI is pnpm-shaped; the files are npm's.
 ---
 
 The CLI you type is pnpm-shaped; the files Nub reads and writes are npm's. A project already on npm keeps working unchanged — no `pnpm-lock.yaml` is introduced.
@@ -71,7 +71,7 @@ project   ./.npmrc      (all keys)
 user      ~/.npmrc      (all keys, relocatable via NPM_CONFIG_USERCONFIG)
 ```
 
-Everything at those scopes works — default and scoped registries, auth tokens, TLS (`strict-ssl`, `cafile`), proxies, and install-shaping keys like `engine-strict` and `save-exact`. The `npm_config_*` env vars drive install behavior, and CLI config wins over both files. Precedence matches npm: project over user over env over CLI.
+Everything at those scopes works — default and scoped registries, auth tokens, TLS (`strict-ssl`, `cafile`), proxies, and install-shaping keys like `engine-strict` and `save-exact`. The `npm_config_*` env vars drive install behavior too. Precedence matches npm, highest first: CLI flags, then `npm_config_*` env vars, then the project `.npmrc`, then the user `.npmrc`.
 
 **Global and builtin scopes are not read.** Nub covers project, user, env, and CLI, but not:
 
@@ -82,7 +82,7 @@ A private registry, auth token, CA, or `legacy-peer-deps` set *only* in the glob
 
 ## Install behavior
 
-- **Build trust.** Lifecycle scripts run under Nub's deny-by-default posture plus the gated default-trust floor (see [post-install](/docs/install#post-install)), not npm's run-everything default. Curated, age-vetted packages build automatically; everything else is skipped with `WARN_NUB_IGNORED_BUILD_SCRIPTS` until `nub approve-builds`.
+- **Build trust.** Lifecycle scripts run under Nub's deny-by-default posture plus the gated default-trust floor (see [Security](/docs/install#security)), not npm's run-everything default. Curated, age-vetted packages build automatically; everything else is skipped with `WARN_NUB_IGNORED_BUILD_SCRIPTS` until `nub approve-builds`.
 - **overrides.** The `package.json` `"overrides"` field is applied; `"resolutions"` is dropped with a warning, matching npm's own behavior.
 - **Platform fields.** `engines` / `os` / `cpu` / `libc` are enforced, and platform-gated optionals (e.g. `fsevents`) resolve and round-trip into the lock.
 - **workspaces.** The neutral `"workspaces"` field is honored.

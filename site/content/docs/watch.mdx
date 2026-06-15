@@ -1,9 +1,9 @@
 ---
 title: Watch mode
-description: Restart-on-change for files and scripts, driven by the resolved dependency graph plus your .env*, tsconfig.json, and package.json — no glob hygiene required.
+description: Restart-on-change for files and scripts, driven by the resolved dependency graph plus your environment files, tsconfig, and package manifest — no glob hygiene required.
 ---
 
-Watch mode (`nub watch`) runs your entry point and restarts it whenever something it actually depends on changes. The engine underneath is Node's own `--watch`, with Nub-side glue that reports the in-memory-transpiled dependency graph — plus the off-graph files that still invalidate a process — back to Node's watcher. The result is a watcher that Just Works for TypeScript projects, with no glob list to maintain.
+Watch mode (`nub watch`) runs your entry point and restarts it whenever something it actually depends on changes. The engine underneath is Node's own `--watch` (run with `--watch-preserve-output`), with Nub-side glue that reports the in-memory-transpiled dependency graph — plus the off-graph files that still invalidate a process — back to Node's watcher. The result is a watcher that Just Works for TypeScript projects, with no glob list to maintain.
 
 This page is a cookbook. For how `nub` runs files in the first place, see [Running files](/docs/runtime); for scripts, [Running scripts](/docs/run).
 
@@ -37,17 +37,12 @@ A `--watch` placed after a script name is forwarded *to the script* like any oth
 
 ## Preserve output
 
-Nub preserves terminal output by default and prints a restart banner, rather than clearing the screen — so the previous run's error message stays on screen.
+Nub preserves terminal output across restarts rather than clearing the screen, so the previous run's error message stays visible. It runs Node's watcher with `--watch-preserve-output`, so a restart prints Node's own status lines instead of wiping the terminal:
 
-```bash
-nub watch src/server.ts
-# ── restart [14:32:08] ──
-```
-
-If you prefer Node's clear-on-restart behavior, opt in:
-
-```bash
-nub watch --clear src/server.ts
+```console
+$ nub watch src/server.ts
+Completed running 'src/server.ts'. Waiting for file changes before restarting...
+Restarting 'src/server.ts'
 ```
 
 ## What triggers a restart

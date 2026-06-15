@@ -178,7 +178,7 @@ The OS-level **build jail** (network-blocked, filesystem-scoped sandbox) is comp
 Which lockfile Nub reads and writes, which config it honors, whether a write is allowed — all key off one decision: **which package manager owns this project.** Nub infers the incumbent and mirrors it; it never asks. Signals, in precedence order:
 
 1. **`packageManager` field** (`package.json`) — the Corepack standard, and a stronger signal than any lockfile on disk. A pnpm project that picked up a stray `package-lock.json` keeps resolving as pnpm.
-2. **`devEngines.packageManager` field** — the fallback declaration, object (`{ "name": "pnpm" }`) or array form. Outranked by `packageManager`; a version or tool disagreement between the two is a hard error.
+2. **`devEngines.packageManager` field** — the fallback declaration, object (`{ "name": "pnpm" }`) or array form. Outranked by `packageManager`: when `packageManager` is present, it decides the identity and `devEngines` isn't consulted for it. The hard error is a *declaration vs. on-disk lockfile* mismatch (shown below), not a disagreement between these two fields.
 3. **The lockfile on disk** — consulted only when no declaration names a manager. Filename precedence, highest first:
    - `pnpm-lock.yaml`
    - `bun.lock`
