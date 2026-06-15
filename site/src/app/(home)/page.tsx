@@ -982,6 +982,10 @@ const PM_MATRIX: { field: ReactNode; cells: Record<(typeof PM_COLUMNS)[number], 
     cells: { npm: 'no', pnpm: 'yes', yarn: 'no', bun: 'no', nub: 'yes' },
   },
   {
+    field: <><Mono>trustedDependencies</Mono></>,
+    cells: { npm: 'no', pnpm: 'no', yarn: 'no', bun: 'yes', nub: 'yes' },
+  },
+  {
     field: <><Mono>.npmrc</Mono></>,
     cells: { npm: 'yes', pnpm: 'yes', yarn: 'yes', bun: 'yes', nub: 'yes' },
   },
