@@ -1,0 +1,120 @@
+---
+title: Yarn
+description: Yarn is supported read-only — Nub reads yarn.lock (Classic v1 and Berry v2+) to install and run a project, but never writes it. Treat a Yarn project as something Nub consumes, not maintains.
+---
+
+Yarn is supported **read-only**. Nub reads a project's `yarn.lock` — Classic (v1) and Berry (v2+) — to install and run it, but never writes `yarn.lock`. Treat a Yarn project as something Nub *consumes*, not something Nub maintains: keep using `yarn` for anything that changes the dependency graph. This is the narrowest compatibility tier of any package manager Nub recognizes.
+
+| `yarn.lock` read | `yarn.lock` write | `.yarnrc.yml` / `.yarnrc` | `resolutions` | `packageManager` | `nodeLinker: pnp`/`pnpm` install | `dependenciesMeta.*.built` | `packageExtensions` | `supportedArchitectures` | `.npmrc` |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| ✓ v1+Berry | ✗ refused | ✗ | ✓ | ✓ | ✗ hoisted | ✗ | ✗ | ✗ | ✓ |
+
+## Running a Yarn project
+
+Run an existing Yarn project's install when `yarn.lock` already satisfies `package.json`:
+
+```bash
+nub install        # reads yarn.lock, links node_modules, runs lifecycle scripts — does NOT write yarn.lock
+nub ci             # frozen install: yarn.lock is law; drift is a hard error
+nub run <script>   # runs package.json scripts
+nubx <bin>         # one-off binary execution
+```
+
+Nub resolves the dependency graph from `yarn.lock` (both Classic and Berry formats parse), links a hoisted `node_modules`, and runs scripts. The lockfile is read; it is never rewritten.
+
+Top-level `resolutions` in `package.json` is honored — Nub applies it the way Yarn does. So is the `packageManager` field, which is what tells Nub the project is a Yarn project.
+
+## `yarn.lock` is read-only
+
+Any command that would change `yarn.lock` is refused with a message pointing you back to Yarn (captured against nub 0.0.44, `nub add lodash` in a Yarn project — the verb, reason, and remedy are interpolated):
+
+```console
+$ nub add lodash
+Error: nub add: refusing to modify yarn.lock — adding a dependency re-resolves and rewrites yarn.lock
+  yarn.lock write fidelity is unproven in the embedded engine, so commands
+  that would rewrite it are blocked. Run it with yarn directly:
+    yarn add lodash
+```
+
+Refused (run these with `yarn`):
+
+```bash
+nub add <pkg>       # → yarn add
+nub remove <pkg>    # → yarn remove
+nub update          # → yarn upgrade
+nub dedupe          # → yarn dedupe
+```
+
+The gate also fires on an `install` / `ci` that *would* rewrite the lockfile rather than just read it:
+
+- a project that declares Yarn but has no `yarn.lock` yet (a fresh install would create one),
+- `nub install --force`, `--no-frozen-lockfile`, or `--lockfile-only`,
+- a `yarn.lock` that no longer satisfies `package.json` (the install would have to re-resolve).
+
+Captured (declared-yarn project with no `yarn.lock`):
+
+```console
+$ nub install
+Error: nub install: refusing to modify yarn.lock — this project declares yarn but has no yarn.lock yet — a fresh install would create it
+  yarn.lock write fidelity is unproven in the embedded engine, so commands
+  that would rewrite it are blocked. Run it with yarn directly:
+    yarn install
+```
+
+In all of these, run `yarn install` instead. The reason is honesty about fidelity: Nub's embedded engine parses `yarn.lock` reliably but its Yarn-format *writer* is unproven, so Nub blocks the write rather than risk a corrupt or churned lockfile.
+
+There is no path that converts *to* `yarn.lock`. `nub import` produces Nub's own `pnpm-lock.yaml`, not a `yarn.lock`:
+
+```console
+$ nub import        # in a yarn project
+Imported 2 packages from yarn.lock to pnpm-lock.yaml
+```
+
+<Callout title="nub pm use yarn is a different surface">
+The `nub pm use yarn` command is the [meta-manager](/docs/pm) provisioning command, and it *does* work: it fetches and pins Yarn via the `packageManager` field. It does not produce a `yarn.lock` or convert your install engine; it just provisions the Yarn binary.
+</Callout>
+
+## Yarn config files are not read
+
+This is the headline gap. Nub reads **`.npmrc` only** for registry, auth, scopes, CA, and proxy settings. It does not read Yarn's config files at all:
+
+- `.yarnrc.yml` (Berry) — project **and** global (`~/.yarnrc.yml`) — is not parsed,
+- classic `.yarnrc` (Yarn 1) is not parsed.
+
+In practice, none of these Yarn-config keys take effect under Nub:
+
+```yaml
+# .yarnrc.yml — ALL IGNORED by nub
+npmRegistryServer: https://registry.internal/   # ignored — nub reads .npmrc `registry=`
+npmScopes:                                       # ignored — per-scope registries unread
+  myorg:
+    npmRegistryServer: https://npm.myorg.dev/
+    npmAuthToken: ...                            # ignored — private-dep auth NOT applied
+npmAuthToken: ...                                # ignored
+httpsCaFilePath: ./ca.pem                        # ignored
+httpProxy: http://proxy:8080                     # ignored
+```
+
+If your private-registry auth or custom registry lives in `.yarnrc.yml` (which for Berry is the *only* place it lives), Nub will not pick it up and private installs fail with 401/403. The workaround today is to put the equivalent settings in `.npmrc`, which Nub does read.
+
+## PnP and pnpm node-linkers are not produced
+
+Nub-the-package-manager only produces a **hoisted `node_modules`** for a Yarn project. Because Nub does not read `.yarnrc.yml` at all, a `nodeLinker` setting there is never seen — and Nub's default layout for a Yarn-incumbent project is hoisted regardless:
+
+```yaml
+# .yarnrc.yml
+nodeLinker: pnp     # nub installs hoisted node_modules instead
+nodeLinker: pnpm    # also produces hoisted
+```
+
+Running `nub install` in a `nodeLinker: pnp` project does **not** produce a PnP install — it builds a hoisted `node_modules`, a different on-disk layout than Yarn would produce.
+
+Keep this distinction crisp: **Nub-the-runtime fully supports Plug'n'Play.** If a project was *already* installed by Yarn in PnP mode, Nub can run it — `nub <file>`, `nub run`, and `nubx` honor `.pnp.cjs` across all supported Node versions. What Nub cannot do is *produce* a PnP install itself. So the supported workflow for a PnP project is: install with `yarn`, run with `nub`.
+
+## Gaps
+
+Several Yarn `package.json` and `.yarnrc.yml` fields have no effect under Nub:
+
+- `dependenciesMeta.<pkg>.built` — Yarn's per-package build gate is not read; Nub uses its own build-script approval (`nub approve-builds`),
+- `packageExtensions` — Yarn's resolution patches are not applied,
+- `supportedArchitectures` — Yarn's platform/arch download controls are not read.
