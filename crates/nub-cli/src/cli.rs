@@ -1847,23 +1847,49 @@ fn run_workspace_target(
         matched_set.insert(idx);
     }
 
-    // Zero-match handling. With a filter present this is always an error (a
-    // selector that matches nothing is a mistake); --fail-if-no-match is the
-    // explicit, self-documenting form of that same default. We surface the
-    // selector list either way so the user can see what missed.
+    // Zero-match handling. A filter that selects nothing is a clean exit-0
+    // no-op (matching pnpm: `No projects matched the filters in "<dir>"`), not
+    // an error — CI commonly runs `--filter <maybe-empty>` and expects success.
+    // `--fail-if-no-match` is the opt-in that turns the empty selection back
+    // into a hard error (pnpm's `--fail-if-no-match` semantics, exit 1).
     if matched_set.is_empty() {
-        if !ws.filter.is_empty() {
-            bail!(
-                "no packages matched the filter{}: {}",
-                if ws.filter.len() == 1 { "" } else { "s" },
-                ws.filter.join(", ")
-            );
-        }
         if ws.fail_if_no_match {
+            if !ws.filter.is_empty() {
+                bail!(
+                    "no packages matched the filter{}: {}",
+                    if ws.filter.len() == 1 { "" } else { "s" },
+                    ws.filter.join(", ")
+                );
+            }
             bail!("no packages to run (--fail-if-no-match)");
         }
-        // No filter, no flag, nothing to run: treat as a clean no-op.
+        if !ws.filter.is_empty() {
+            eprintln!(
+                "No projects matched the filters in \"{}\"",
+                ws_root.display()
+            );
+        }
         return Ok(0);
+    }
+
+    // pnpm's "Scope:" header (reportScope.ts): how many workspace projects this
+    // run touches out of the total. `total` counts the workspace root too — it
+    // is in `members` only when `--include-workspace-root` appended it
+    // (`root_idx`), otherwise add one for it. Suppressed for a single selected
+    // project (pnpm prints nothing then), and reads "all N" when every project
+    // is selected.
+    let total_projects = if root_idx.is_some() {
+        members.len()
+    } else {
+        members.len() + 1
+    };
+    let selected = matched_set.len();
+    if selected > 1 {
+        if selected == total_projects {
+            eprintln!("Scope: all {total_projects} workspace projects");
+        } else {
+            eprintln!("Scope: {selected} of {total_projects} workspace projects");
+        }
     }
 
     // Build dependency graph for topological chunking.
@@ -1943,6 +1969,12 @@ fn run_workspace_target(
 
     // Execute chunks.
     let mut total_failed = 0;
+    // Packages that actually ran the script (had it declared). Drives the
+    // pnpm "none of the selected packages has a <script> script" error below:
+    // a recursive run where every selected package skipped the script is the
+    // only missing-script failure, and `--if-present` (or `test`) waives even
+    // that.
+    let mut ran_count = 0usize;
     let bail = ws.bail;
 
     for chunk in &chunks {
@@ -1958,7 +1990,6 @@ fn run_workspace_target(
                 }
                 let leaf = MemberLeaf {
                     compat_mode,
-                    if_present: ws.if_present,
                     stream: ws.stream
                         || ws.parallel
                         || concurrency > 1
@@ -1968,9 +1999,13 @@ fn run_workspace_target(
                     exec: &exec,
                     aggregate,
                 };
-                let code = run_one_member(target, &members[idx], ws_root, &leaf);
-                if code != 0 {
-                    total_failed += 1;
+                match run_one_member(target, &members[idx], ws_root, &leaf) {
+                    MemberOutcome::Ran(0) => ran_count += 1,
+                    MemberOutcome::Ran(_) => {
+                        ran_count += 1;
+                        total_failed += 1;
+                    }
+                    MemberOutcome::SkippedMissingScript => {}
                 }
             }
         } else {
@@ -1982,6 +2017,7 @@ fn run_workspace_target(
             use std::thread;
 
             let failed = Arc::new(AtomicUsize::new(0));
+            let ran = Arc::new(AtomicUsize::new(0));
             let (tx, rx) = mpsc::channel::<usize>();
             let rx = Arc::new(std::sync::Mutex::new(rx));
 
@@ -1990,6 +2026,7 @@ fn run_workspace_target(
                 .map(|_| {
                     let rx = Arc::clone(&rx);
                     let failed = Arc::clone(&failed);
+                    let ran = Arc::clone(&ran);
                     // Clone the selected members so they cross the thread boundary
                     // (the borrowed `&members` slice can't be `move`d); paired with
                     // their original index for the prefix color. `WorkspacePackage`
@@ -2007,7 +2044,6 @@ fn run_workspace_target(
                     // boundary; reconstituted into the borrowed forms inside the
                     // worker (the borrowed forms can't be `move`d).
                     let target = OwnedTarget::from(target);
-                    let if_present = ws.if_present;
                     let ignore_scripts = exec.ignore_scripts;
                     let script_shell = ws.script_shell.clone();
 
@@ -2035,7 +2071,6 @@ fn run_workspace_target(
                             };
                             let leaf = MemberLeaf {
                                 compat_mode,
-                                if_present,
                                 // The concurrent path always streams (prefixed) —
                                 // its whole reason for existing is interleaved output.
                                 stream: true,
@@ -2043,8 +2078,15 @@ fn run_workspace_target(
                                 exec: &exec,
                                 aggregate,
                             };
-                            if run_one_member(target, member, &ws_root_buf, &leaf) != 0 {
-                                failed.fetch_add(1, AtomicOrdering::Relaxed);
+                            match run_one_member(target, member, &ws_root_buf, &leaf) {
+                                MemberOutcome::Ran(0) => {
+                                    ran.fetch_add(1, AtomicOrdering::Relaxed);
+                                }
+                                MemberOutcome::Ran(_) => {
+                                    ran.fetch_add(1, AtomicOrdering::Relaxed);
+                                    failed.fetch_add(1, AtomicOrdering::Relaxed);
+                                }
+                                MemberOutcome::SkippedMissingScript => {}
                             }
                         }
                     })
@@ -2061,6 +2103,20 @@ fn run_workspace_target(
             }
 
             total_failed += failed.load(AtomicOrdering::Relaxed);
+            ran_count += ran.load(AtomicOrdering::Relaxed);
+        }
+    }
+
+    // A recursive run where no selected package declared the script is a
+    // clean exit-0 no-op with an informational notice on stdout, matching
+    // pnpm 10.x's observed behavior — it prints "None of the selected
+    // packages has a \"<script>\" script" and exits 0 rather than failing.
+    // `--if-present` and `test` (npm/pnpm treat a missing `test` as success)
+    // suppress even the notice. Only `Script` targets reach this; a `Bin` run
+    // already errors per-member on a missing bin.
+    if let WorkspaceTarget::Script(script, _) = target {
+        if ran_count == 0 && total_failed == 0 && !ws.if_present && script != "test" {
+            println!("None of the selected packages has a \"{script}\" script");
         }
     }
 
@@ -2123,9 +2179,6 @@ impl OwnedTarget {
 #[derive(Clone, Copy)]
 struct MemberLeaf<'a> {
     compat_mode: bool,
-    /// Scripts only: skip a member that lacks the named script (`--if-present`).
-    /// Inert for bins (exec has no `--if-present`; a missing bin is an error).
-    if_present: bool,
     /// Scripts only: pipe + prefix each output line vs. inherit stdio with a
     /// single header. Bins always inherit stdio (see [`run_one_workspace_bin`]).
     stream: bool,
@@ -2136,11 +2189,28 @@ struct MemberLeaf<'a> {
     aggregate: bool,
 }
 
-/// Run a workspace [`WorkspaceTarget`] in one member, returning its exit code (0
-/// = success). The single per-member leaf both chunk loops call: it owns the
-/// recursion-reentry skip, the per-target dispatch, and the failure-print, so a
-/// caller need only do `if run_one_member(...) != 0 { failed += 1 }`. The two
-/// targets diverge only in their resolution + launch:
+/// What happened when a single member's [`WorkspaceTarget`] was run.
+/// Distinguishes a member that lacked the named script — a pnpm-style silent
+/// *skip* in a recursive run, never a failure — from one that actually ran (and
+/// may have failed). The chunk loops fold `Ran(code != 0)` into `total_failed`
+/// and count every `Ran` toward `ran_count`; `SkippedMissingScript` does
+/// neither, so a `nub -r run <script>` over a workspace where only some packages
+/// declare `<script>` runs them and exits 0, exactly like pnpm's `runRecursive`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemberOutcome {
+    /// The target ran; carries its exit code (0 = success).
+    Ran(i32),
+    /// The member has no such script — skipped, not counted as a failure.
+    /// Reachable only for `Script` targets; a missing `Bin` is still an error
+    /// (`nub exec` has no `--if-present` skip).
+    SkippedMissingScript,
+}
+
+/// Run a workspace [`WorkspaceTarget`] in one member. The single per-member leaf
+/// both chunk loops call: it owns the recursion-reentry skip, the per-target
+/// dispatch, and the failure-print. Returns a [`MemberOutcome`] so the caller
+/// can tell a missing-script skip apart from a real failure. The two targets
+/// diverge only in their resolution + launch:
 ///   - `Script`: resolve from package.json#scripts, run the pre/main/post
 ///     lifecycle (streamed-prefixed or inherited-with-header per `leaf.stream`).
 ///   - `Bin`: resolve `<member>/node_modules/.bin/<name>` (walking up), launch
@@ -2150,24 +2220,29 @@ fn run_one_member(
     member: &nub_core::workspace::filter::WorkspacePackage,
     ws_root: &Path,
     leaf: &MemberLeaf,
-) -> i32 {
+) -> MemberOutcome {
     // Recursion guard: skip a member whose own script is already running in an
     // ancestor `nub run` (see `is_workspace_recursion_reentry`). Scripts only —
     // `nub exec` sets no `npm_lifecycle_event`, so a bin re-entry can't false-match.
     if is_workspace_recursion_reentry(target.label(), &member.name) {
-        return 0;
+        return MemberOutcome::Ran(0);
     }
     match target {
         WorkspaceTarget::Script(script, args) => {
             run_one_workspace_script(script, args, member, ws_root, leaf)
         }
-        WorkspaceTarget::Bin { name, args } => run_one_workspace_bin(name, args, member, leaf),
+        WorkspaceTarget::Bin { name, args } => {
+            MemberOutcome::Ran(run_one_workspace_bin(name, args, member, leaf))
+        }
     }
 }
 
 /// Per-member leaf for a `Script` target. Resolves the named script in the
 /// member, runs its pre/main/post lifecycle, and prints a failure line. A
-/// missing script is a counted failure unless `--if-present` (returns 0). The
+/// member that doesn't declare `<script>` is a silent skip
+/// ([`MemberOutcome::SkippedMissingScript`]) — pnpm's recursive-run semantics,
+/// where only the packages that have the script run and the run exits 0 as long
+/// as *some* package did (the all-missing case is caught by the caller). The
 /// streamed vs. inherited disposition follows `leaf.stream`.
 fn run_one_workspace_script(
     script: &str,
@@ -2175,13 +2250,9 @@ fn run_one_workspace_script(
     member: &nub_core::workspace::filter::WorkspacePackage,
     ws_root: &Path,
     leaf: &MemberLeaf,
-) -> i32 {
+) -> MemberOutcome {
     let Some(cmd) = nub_core::workspace::scripts::resolve_script(&member.manifest, script) else {
-        if !leaf.if_present {
-            eprintln!("{} | missing script \"{script}\"", member.name);
-            return 1;
-        }
-        return 0;
+        return MemberOutcome::SkippedMissingScript;
     };
     let fake_project = nub_core::workspace::detect::Project {
         root: member.dir.clone(),
@@ -2201,16 +2272,21 @@ fn run_one_workspace_script(
             leaf.exec,
             leaf.aggregate,
         ) {
-            Ok(0) => 0,
+            Ok(0) => {
+                // pnpm prints a per-package "Done" suffix on success.
+                let done_prefix = format_stream_prefix(&prefix, script, leaf.color_idx);
+                eprintln!("{done_prefix}Done");
+                MemberOutcome::Ran(0)
+            }
             Ok(code) => {
                 let err_prefix = format_stream_prefix(&prefix, script, leaf.color_idx);
                 eprintln!("{err_prefix}exit {code}");
-                code
+                MemberOutcome::Ran(code)
             }
             Err(e) => {
                 let err_prefix = format_stream_prefix(&prefix, script, leaf.color_idx);
                 eprintln!("{err_prefix}error: {e}");
-                1
+                MemberOutcome::Ran(1)
             }
         }
     } else {
@@ -2223,14 +2299,14 @@ fn run_one_workspace_script(
             args,
             leaf.exec,
         ) {
-            Ok(0) => 0,
+            Ok(0) => MemberOutcome::Ran(0),
             Ok(code) => {
                 eprintln!("  {} {script} — exit {code}", member.name);
-                code
+                MemberOutcome::Ran(code)
             }
             Err(e) => {
                 eprintln!("  {} {script} — error: {e}", member.name);
-                1
+                MemberOutcome::Ran(1)
             }
         }
     }
