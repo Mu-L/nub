@@ -31,15 +31,7 @@ nub pm unshim: removed /Users/you/.nub/shims
 
 These are separate steps that do different things, and only `nub pm shim` installs shims.
 
-The pin lives in `package.json`. Running `nub pm use pnpm` writes the `packageManager` field (and a `devEngines.packageManager` range) and aligns the lockfile — it sets which package manager the project uses. It does not touch your PATH or install any shim:
-
-```console
-$ nub pm use pnpm
-using pnpm@11.7.0
-  package.json: packageManager = pnpm@11.7.0 (+sha512)
-  package.json: devEngines.packageManager = { name: "pnpm", version: "^11.7.0", onFail: "warn" }
-  no lockfile — the next install writes pnpm-lock.yaml
-```
+The pin lives in `package.json`. Running `nub pm use pnpm` writes the `packageManager` field (and a `devEngines.packageManager` range) and aligns the lockfile — it sets which package manager the project uses. It does not touch your PATH or install any shim.
 
 With a pin set, `nub install` already runs the right pnpm. The shims are the separate, explicit opt-in that makes the *bare* `pnpm` command — typed at a shell, or invoked by a tool you don't control — route through Nub too. Set the pin with `nub pm use`; install the shims with `nub pm shim`, once, if you want bare commands intercepted.
 
