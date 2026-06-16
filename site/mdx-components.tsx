@@ -4,6 +4,7 @@ import type { MDXComponents } from 'mdx/types';
 import type { ComponentProps, ReactNode } from 'react';
 import { Bench } from '@/components/code';
 import { CompatTable } from '@/components/compat-table';
+import { PmSupport } from '@/components/pm-support-table';
 import { InstallTabs } from '@/components/install-tabs';
 import { TypesSetup } from '@/components/types-setup';
 
@@ -63,6 +64,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     Callout,
     Bench,
     CompatTable,
+    PmSupport,
     InstallTabs,
     TypesSetup,
     ...components,
