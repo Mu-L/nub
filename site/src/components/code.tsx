@@ -104,7 +104,7 @@ export function Bench({
   caption,
 }: {
   label: string;
-  rows: { cmd: string; ms: number; ratio?: number | null; us?: boolean }[];
+  rows: { cmd: string; ms: number; ratio?: number | null; label?: string; us?: boolean }[];
   max: number;
   accent?: 'ember' | 'acid' | 'sky';
   /* Optional link to the benchmark source — rendered as a small centered
@@ -147,7 +147,7 @@ export function BenchBars({
   accent = 'ember',
   unit = 'ms',
 }: {
-  rows: { cmd: string; ms: number; ratio?: number | null; us?: boolean }[];
+  rows: { cmd: string; ms: number; ratio?: number | null; label?: string; us?: boolean }[];
   max: number;
   accent?: 'ember' | 'acid' | 'sky' | 'pink';
   unit?: string;
@@ -169,7 +169,7 @@ export function BenchBars({
             </span>
             <span className="shrink-0 font-mono text-xs tabular-nums text-fd-muted-foreground">
               {r.ms} {unit}
-              {r.ratio ? `  ·  ${r.ratio}× slower` : ''}
+              {r.label ? `  ·  ${r.label}` : r.ratio ? `  ·  ${r.ratio}× slower` : ''}
             </span>
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-fd-card/60">
