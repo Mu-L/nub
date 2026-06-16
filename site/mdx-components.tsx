@@ -3,6 +3,7 @@ import { Callout as FumaCallout } from 'fumadocs-ui/components/callout';
 import type { MDXComponents } from 'mdx/types';
 import type { ComponentProps, ReactNode } from 'react';
 import { Bench } from '@/components/code';
+import { ShimDemo } from '@/components/shim-demo';
 import { CompatTable } from '@/components/compat-table';
 import { PmSupport } from '@/components/pm-support-table';
 import { InstallTabs } from '@/components/install-tabs';
@@ -63,6 +64,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     ...defaultMdxComponents,
     Callout,
     Bench,
+    ShimDemo,
     CompatTable,
     PmSupport,
     InstallTabs,

@@ -5,21 +5,9 @@ description: An opt-in for muscle memory. Install the shims and a bare pnpm, npm
 
 Default Nub usage needs no shims: `nub install`, `nub add`, and `nub run` already provision and run the package manager your project pins. The shims are for the times you'd rather type the package manager directly — bare `pnpm install`, `npm ci`, `yarn add` — and still have it go through Nub. One command turns that on.
 
-```console
-$ which pnpm
-/opt/homebrew/bin/pnpm
+<ShimDemo />
 
-$ nub pm shim
-nub pm shim: 7 entries in /Users/you/.nub/shims (7 created)
-  PATH: added /Users/you/.nub/shims to /Users/you/.zshrc — open a new shell or run `source /Users/you/.zshrc`
-
-$ source ~/.zshrc
-
-$ which pnpm
-/Users/you/.nub/shims/pnpm
-```
-
-After `nub pm shim`, bare `pnpm` resolves to a shim in `~/.nub/shims` — itself a hardlink to the Nub binary. Running `pnpm install` now dispatches to the exact pnpm your project pins, in-process, under the project's Node. `nub pm unshim` removes the shim directory and strips the PATH block, restoring the previous `pnpm`.
+After `nub pm shim`, bare `pnpm` resolves to a shim in `~/.nub/shims` — itself a hardlink to the Nub binary. Running `pnpm --version` (or any pinned-PM command) on a cold cache provisions the pinned pnpm, then dispatches to it in-process under the project's Node. The dim `pnpm@9.5.0 (via nub shim)` line names the package manager and version the shim resolved to and ran; it prints on stderr — every pinned-PM dispatch — so it never pollutes piped stdout. On a warm cache only that notice and pnpm's own output print. `nub pm unshim` removes the shim directory and strips the PATH block, restoring the previous `pnpm`.
 
 ```console
 $ nub pm unshim
