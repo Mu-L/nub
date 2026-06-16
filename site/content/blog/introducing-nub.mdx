@@ -33,7 +33,7 @@ Bun and Deno proved there's enormous appetite for an all-in-one toolkit that rep
 
 ## Introducing Nub
 
-Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so the runtime underneath *is* Node. On Deno's own cross-runtime Node-compatibility corpus it clears 98.3% of what real Node passes, versus 77.9% for Deno and 40.7% for Bun. It combines:
+Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so the runtime underneath *is* Node. On Deno's own cross-runtime Node-compatibility corpus it clears 98.8% of what real Node passes, versus 77.9% for Deno and 40.7% for Bun. It combines:
 
 ```console
 $ nub index.ts             # file runner — full TypeScript, on stock Node
@@ -49,9 +49,8 @@ $ nub node install 26      # version manager — installs Node on demand
 The top-level command runs files. It's a true drop-in replacement for `node` — same flags, same argv, same runtime behavior:
 
 ```console
-$ nub \
+$ NODE_OPTIONS='--enable-source-maps' nub \
     --max-old-space-size=4096 \
-    --inspect \
     --import ./instrument.js \
     app.ts --port 3000
 ```
@@ -419,7 +418,7 @@ The `.bin` walk-up happens in Rust and the binary is exec'd directly — no Node
 
 When the tool isn't installed, `nubx` fetches it from the registry and runs it — no prompt, the same local-first-then-DLX model as `npx` and `pnpm dlx`. A version specifier like `nubx cowsay@1.5.0` goes straight through that fetch path.
 
-## `nub install`: a 10× faster `pnpm install`
+## `nub install`: a 3× faster `pnpm install`
 
 Nub ships a full package manager, powered by the embedded [aube](https://github.com/jdx/aube) engine, built by [jdx](https://github.com/jdx), the creator of mise. Two guarantees define it.
 
@@ -438,21 +437,22 @@ Second, on a pnpm project, support is complete: Nub reads and honors every confi
 
 ### Performance
 
-A warm install symlinks `node_modules` into a global store shared across every project instead of copying package files, so almost no files are written. On a 1,168-package fixture that's about 10× faster than pnpm:
+Nub maintains a content-addressed store on disk — each package version lands once, identified by content hash. A warm reinstall reuses that store, reflink- or hardlink-copying files already on disk into `node_modules` instead of redownloading or recopying them. On a real [create-t3-app](https://create.t3.gg/) project that's about 3× faster than pnpm and faster than Bun:
 
 <Bench
-  label="warm install · 1,168 deps · Linux · hyperfine"
+  label="warm install · create-t3-app · 222 deps · macOS · hyperfine"
   source="https://github.com/nubjs/nub/tree/main/tests/bench"
   accent="pink"
-  max={1938}
+  max={4732}
   rows={[
-    { cmd: 'nub install', ms: 194, us: true },
-    { cmd: 'bun install', ms: 697 },
-    { cmd: 'pnpm install', ms: 1938, ratio: 10 },
+    { cmd: 'nub install', ms: 974, us: true },
+    { cmd: 'bun install', ms: 1498, ratio: 1.54 },
+    { cmd: 'pnpm install', ms: 2743, ratio: 2.82 },
+    { cmd: 'npm ci', ms: 4732, ratio: 4.86 },
   ]}
 />
 
-The win is the global virtual store: package files link into one machine-wide store instead of being copied per project, so a warm install mostly creates symlinks rather than copying files. Bun is fast too, but it still materializes every package into each project — that extra file work is the gap you see above.
+The win is relinking: when the content-addressed store already holds a package, Nub writes a reflink (APFS/btrfs) or hardlink (ext4) into `node_modules` instead of copying bytes — so a warm reinstall is mostly an inode operation regardless of project size. Bun uses a similar store strategy, which is why it's fast too; Nub edges it out because the linking path avoids extra materialization work Bun still does per project.
 
 ### Secure by default
 

@@ -147,7 +147,7 @@ const heroLines = (major: string) => [
   { cmd: 'nub index.ts', comment: 'TypeScript-first Node.js runtime' },
   { cmd: 'nub run dev', comment: '24× faster pnpm run' },
   { cmd: 'nubx prisma generate', comment: '19× faster npx' },
-  { cmd: 'nub install', comment: '9× faster pnpm install' },
+  { cmd: 'nub install', comment: '3× faster pnpm install' },
   { cmd: 'nub watch src/server.ts', comment: 'native watch mode' },
   { cmd: 'nub pm shim', comment: 'built-in Corepack-style shims' },
   { cmd: `nub node install ${major}`, comment: 'Node version manager' },
@@ -567,9 +567,8 @@ import { host, port } from "./config.yaml" // named exports`}
               <Terminal
                 lines={[
                   {
-                    cmd: `nub \\
+                    cmd: `NODE_OPTIONS='--enable-source-maps' nub \\
   --max-old-space-size=8192 \\
-  --inspect \\
   --import ./instrument.js \\
   app.ts --port 3000`,
                   },
@@ -817,7 +816,7 @@ function NubxBand() {
                     esbuild (native Go binary, no Node boot) is the clean wrapper-speed measure.
                     Numbers: wiki/research/benchmark-credibility.md §4 (round 20× → ~19× npx / ~17× pnpm exec; re-cite from quiet box). */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
-                  esbuild --version · native CLI, no Node startup · macOS · hyperfine
+                  esbuild --version · macOS · hyperfine
                 </p>
                 <BenchBars
                   accent="sky"
@@ -894,15 +893,14 @@ function NubxBand() {
 
 /* ------------------------------------------------------------ Compatibility */
 
-/* Source: tests/cross-runtime/ (run.mjs + results.json, corpus colinhacks/node_test @ node-25.8.1).
-   This is the ONE compat measurement used across the whole site — the Deno cross-runtime
-   Node-compat corpus, node-relative. The same 98.3% nub figure is the headline in the blog.
-   (The old partial "node-suite" 99.3% number is retired — it was a random sampling, not Node's
-   real suite.) Rates = runtime_pass / node_pass on the identical corpus. Counts mirror results.json:
-   node 4324, nub 4251, deno 3370, bun 1760 passes (node_pass = 4324). Deno ref: deno.com/blog/v2.8 */
+/* Source: the Deno cross-runtime Node-compat corpus (colinhacks/node_test @ node-25.8.1), node-relative.
+   nub + Node are OUR fresh measurement (tests/cross-runtime/ run.mjs, quiet-box, Node 25.8.1):
+   nub 4323 / node 4376 = 98.8%. The Deno and Bun figures are Deno's own published numbers
+   (deno.com/blog/v2.8) — NOT re-measured here. Rates = runtime_pass / node_pass. The same 98.8%
+   nub figure is the headline in the blog. */
 const COMPAT = [
-  { name: 'Node 25.8', rate: 100, tests: '4,324 / 4,324', us: false, dim: false },
-  { name: 'Nub', rate: 98.3, tests: '4,251 / 4,324', us: true, dim: false },
+  { name: 'Node 25.8', rate: 100, tests: '4,376 / 4,376', us: false, dim: false },
+  { name: 'Nub', rate: 98.8, tests: '4,323 / 4,376', us: true, dim: false },
   { name: 'Deno 2.8', rate: 77.9, tests: '3,370 / 4,324', us: false, dim: true },
   { name: 'Bun 1.3.14', rate: 40.7, tests: '1,760 / 4,324', us: false, dim: true },
 ];
@@ -954,7 +952,7 @@ function Compatibility() {
           })}
         </div>
         <p className="mx-auto mt-6 max-w-lg text-center text-sm leading-relaxed text-fd-muted-foreground">
-          Deno&rsquo;s own Node-compat corpus, scored against stock Node. Deno and Bun reimplement Node&rsquo;s APIs; Nub runs on Node, so it tracks it.{' '}
+          Deno&rsquo;s own Node-compat corpus, scored against stock Node. Nub's failures are due to the fact that it auto-enables experimental features and uses Node addons.<br/>
           <a
             href="https://github.com/nubjs/nub/tree/main/tests/cross-runtime"
             target="_blank"
@@ -1083,7 +1081,7 @@ function HypermanagerBand() {
           command="nub install"
           title={
             <>
-              A <span className="text-pink">9×</span> faster pnpm
+              A <span className="text-pink">3×</span> faster pnpm
             </>
           }
           subhead={
@@ -1155,40 +1153,41 @@ function HypermanagerBand() {
           <Feature
             accent="pink"
             eyebrow="Install speed"
-            title="9× faster warm installs"
+            title="3× faster warm installs"
             body={
               <>
-                On every install, pnpm rebuilds a per-project <Mono>node_modules</Mono>,
-                hardlinking thousands of files into place. Nub points <Mono>node_modules</Mono>{' '}
-                straight at one global store shared across all your projects, so a warm install
-                is just symlinks.
+                On every install, pnpm recopies the packages into a per-project{' '}
+                <Mono>node_modules</Mono>. Nub keeps one content-addressed store on disk and
+                reflinks the files already there into place, so a warm reinstall is mostly
+                relinking — about 3× faster than pnpm on a create-t3-app project, and ahead of
+                bun and npm too.
               </>
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: tests/bench/run.sh (warm leg, GVS on) + tests/bench/results/linux-warm-large-aarch64-20260613.json.
-                    CAVEAT (wiki/research/benchmark-credibility.md §3): the 10× is the GVS-on (default) symlink-farm path;
-                    the materialized (GVS-off) config is ~tie with pnpm. GVS auto-disables for Next/Nuxt/Parcel projects. */}
+                {/* Source: tests/bench/run-warm-gvs.sh --fixture t3 (create-t3-app, Next 16) across
+                    nub / bun / pnpm / npm, warm + frozen + offline, node_modules wiped between runs. */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
-                  warm install · 1,168 deps · Linux · hyperfine
+                  warm install · create-t3-app · 222 deps · macOS · hyperfine
                 </p>
                 <BenchBars
                   accent="pink"
-                  max={1938}
+                  max={4732}
                   unit="ms"
                   rows={[
-                    { cmd: 'nub install', ms: 194, us: true },
-                    { cmd: 'bun install', ms: 697 },
-                    { cmd: 'pnpm install', ms: 1938, ratio: 9 },
+                    { cmd: 'nub install', ms: 974, us: true },
+                    { cmd: 'bun install', ms: 1498, label: '54% slower' },
+                    { cmd: 'pnpm install', ms: 2743, ratio: 2.8 },
+                    { cmd: 'npm ci', ms: 4732, ratio: 4.9 },
                   ]}
                 />
                 <a
-                  href="https://github.com/nubjs/nub/tree/main/tests/bench"
+                  href="https://github.com/nubjs/nub/blob/main/tests/bench/README.md"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 inline-block py-1.5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground underline decoration-dotted decoration-fd-muted-foreground/60 underline-offset-4 hover:text-fd-foreground"
                 >
-                  View bench →
+                  View methodology →
                 </a>
               </div>
             }
@@ -1226,6 +1225,13 @@ function FinalCta() {
         }}
       />
       <Container className="relative py-32 text-center md:py-[180px]">
+        <img
+          src="/icon.svg"
+          alt=""
+          width={40}
+          height={40}
+          className="mx-auto mb-8 h-10 w-10 rounded-[12px] ring-1 ring-white/10"
+        />
         <h2 className="text-balance font-display text-4xl font-medium leading-[1.05] md:text-6xl">
           The all-in-one toolkit for Node.js
         </h2>
