@@ -1,6 +1,6 @@
 {
   "name": "@nubjs/nub-linux-arm64-musl",
-  "version": "0.0.46",
+  "version": "0.0.47",
   "description": "Nub binary for linux-arm64-musl",
   "license": "MIT",
   "repository": "https://github.com/nubjs/nub",
