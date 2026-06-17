@@ -60,4 +60,5 @@ update.bats|aube update: reports version change in output|fixture's committed au
 update.bats|aube update --latest --no-save: bumps the lockfile but not package.json|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
 update.bats|aube update --lockfile-only: refreshes lockfile without populating node_modules|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
 update.bats|aube update --lockfile-only --latest: bumps direct deps without linking|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
-update.bats|aube update preserves time: entries for direct deps|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
+update.bats|aube update preserves time: entries for direct deps (time-based mode)|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
+update.bats|aube update drops a stray time: block under default resolution (pnpm parity)|fixture's committed aube-lock.yaml is invisible: nub's canonical lockfile name is lock.yaml
