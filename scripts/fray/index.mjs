@@ -85,6 +85,60 @@ function nextStep(src) {
   return '';
 }
 
+/**
+ * The full body text under a `## <heading>` section, up to the next heading of the
+ * same-or-higher level. Matching is case-insensitive on the heading text. Returns ''
+ * if the section is absent. Used by the stall-suspect check to ask "does this thread
+ * have DECIDED content?" (a non-empty `## Decisions` that isn't just a placeholder).
+ * @param {string} src
+ * @param {string} heading  e.g. "Decisions" — matches `## Decisions` (and any deeper
+ *   `### …` it contains; stops at the next `##`).
+ * @returns {string}
+ */
+function section(src, heading) {
+  const lines = src.split('\n');
+  const re = new RegExp(`^##\\s+${heading}\\b`, 'i');
+  const i = lines.findIndex((l) => re.test(l));
+  if (i === -1) return '';
+  const body = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    if (/^##\s/.test(lines[j])) break; // next `##` section
+    body.push(lines[j]);
+  }
+  return body.join('\n').trim();
+}
+
+/**
+ * Does a `## Decisions` body carry REAL settled content vs an empty placeholder?
+ * The fray convention is "none yet"/"none" for an empty Decisions section, so we
+ * treat anything substantive beyond that placeholder as decided.
+ * @param {string} body  the `## Decisions` section text
+ * @returns {boolean}
+ */
+function hasDecidedContent(body) {
+  if (!body) return false;
+  const stripped = body.replace(/[*_`>#-]/g, '').trim().toLowerCase();
+  if (!stripped) return false;
+  // Pure placeholders the convention uses for an empty Decisions section.
+  return !/^(none|none yet|n\/a|tbd)\.?$/.test(stripped);
+}
+
+/**
+ * Does a thread's `## Next step` (its one crisp line) state a DEFER-REASON or a
+ * BLOCKER — i.e. an explicit "why this isn't being dispatched right now"? This is
+ * the false-positive guard: a legitimately-deferred `planned` thread (e.g.
+ * security-scanner: "on hold per Colin, pick up post-v0.1.1") MUST NOT be flagged
+ * as a drop-risk. Conservative by design — we look for the vocabulary of a stated
+ * deferral/gate, NOT for the mere absence of a dispatch. Better to miss a real
+ * drop-risk than to cry-wolf on a thread that says why it's parked.
+ * @param {string} next  the `## Next step` line
+ * @returns {boolean}
+ */
+function statesDeferOrBlocker(next) {
+  if (!next) return false;
+  return /\b(on hold|hold(ing)?|deferr?(ed|ing)?|defer|parked?|park|not now|later|post-v|pick up|picked up|awaiting|await|blocked|block(ing|ed)? on|waiting on|wait on|needs?[- ]decision|pending|until|once|after .+ (returns?|lands?|merges?|completes?)|colin|human)\b/i.test(next);
+}
+
 // .fray/config.yml globals — parsed by the shared, type-safe loadConfig.
 const cfg = loadConfig(PROJECT_DIR);
 
@@ -105,7 +159,19 @@ const threads = readdirSync(FRAY_DIR)
         errors.push(`invalid status "${fm.status}" (expected one of: ${STATUS.join(', ')})`);
     }
     const dependsOn = parseList(fm?.depends_on);
-    return { id, title: fm?.title ?? '', status: fm?.status ?? '?', next: nextStep(src), dependsOn, text: src, errors };
+    const next = nextStep(src);
+    return {
+      id,
+      title: fm?.title ?? '',
+      status: fm?.status ?? '?',
+      next,
+      dependsOn,
+      text: src,
+      errors,
+      /** @type {string[]} */ warnings: [],
+      decided: hasDecidedContent(section(src, 'Decisions')),
+      nextDefers: statesDeferOrBlocker(next),
+    };
   });
 
 // `depends_on` references other THREAD SLUGS — validate they resolve. A dangling
@@ -130,14 +196,48 @@ function blockers(t) {
   return t.dependsOn.filter((dep) => slugs.has(dep) && !TERMINAL.includes(statusOf.get(dep) ?? '?'));
 }
 
+// ── Stall-suspect WARNINGS (drop-risk heuristics) ───────────────────────────────
+// These are CONSERVATIVE warnings, NOT hard errors — they never fail `--validate`'s
+// exit code (that stays gated on real frontmatter errors so the per-turn hook + CI
+// don't break on a heuristic). They exist because a decided-and-ready thread was once
+// parked as `planned` with no dispatch + no `depends_on` and silently DROPPED. The
+// guard against crying-wolf: we fire only when there is NO stated defer-reason/blocker
+// (so a legitimately-deferred thread like security-scanner — "on hold per Colin, pick
+// up post-v0.1.1" — is NOT flagged). Self-contained: every signal is read off the
+// thread's own frontmatter + section text; no external state.
+for (const t of threads) {
+  if (TERMINAL.includes(t.status)) continue; // terminal threads are done — never a drop-risk
+
+  // (1) DROP-RISK: a `planned` thread that is DECIDED (has real `## Decisions` content)
+  //     AND has no `depends_on` blocker AND whose `## Next step` states no defer-reason
+  //     /blocker. That is the exact shape of the dropped thread — "decided but parked
+  //     with nothing to un-defer it." Keyed on the ABSENCE of a defer-reason, NOT merely
+  //     planned+decided, so a deliberately-held thread that SAYS why is exempt.
+  if (t.status === 'planned' && t.decided && t.dependsOn.length === 0 && !t.nextDefers) {
+    t.warnings.push('decided but not queued (active/enqueued?) — drop risk: `planned` + has Decisions, no depends_on, and Next step names no defer-reason/blocker');
+  }
+
+  // (2) An EMPTY `## Next step` on a non-terminal thread — the board's "→" cell goes
+  //     blank, so the thread has no stated next action and is easy to lose track of.
+  //     `backlog` is the documented parking-lot (a curated list, not a single-effort
+  //     thread), so it legitimately has no `## Next step` — exempt it.
+  if (!t.next && t.id !== 'backlog') {
+    t.warnings.push('empty `## Next step` — no stated next action (the board "→" cell is blank)');
+  }
+}
+
 const allErrors = threads.filter((t) => t.errors.length).map((t) => `  ${t.id}.md: ${t.errors.join('; ')}`);
+const allWarnings = threads.filter((t) => t.warnings.length).map((t) => `  ${t.id}.md: ${t.warnings.join('; ')}`);
 
 if (process.argv.includes('--validate') || process.argv.includes('--check')) {
+  // Warnings print but DO NOT affect the exit code — they're conservative drop-risk
+  // heuristics, not schema errors. Only real frontmatter errors fail the hook/CI.
+  if (allWarnings.length) console.error(`fray drop-risk WARNINGS (advisory, non-fatal):\n${allWarnings.join('\n')}`);
   if (allErrors.length) {
     console.error(`fray frontmatter validation FAILED:\n${allErrors.join('\n')}`);
     process.exit(1);
   }
-  console.log('fray frontmatter OK');
+  console.log(`fray frontmatter OK${allWarnings.length ? ` (${allWarnings.length} drop-risk warning${allWarnings.length === 1 ? '' : 's'} above)` : ''}`);
   process.exit(0);
 }
 
@@ -146,7 +246,7 @@ if (process.argv.includes('--json')) {
     const b = blockers(t);
     return { ...t, blockers: b, ready: t.dependsOn.length > 0 && b.length === 0 };
   });
-  console.log(JSON.stringify({ config: cfg, threads: dump, errors: allErrors }, null, 2));
+  console.log(JSON.stringify({ config: cfg, threads: dump, errors: allErrors, warnings: allWarnings }, null, 2));
   process.exit(0);
 }
 
@@ -173,6 +273,7 @@ if (only && !STATUS.includes(only)) {
 const out = [];
 out.push(`fray board — autonomous_mode: ${cfg.autonomousMode ? 'on' : 'off'}${only ? ` — status:${only}` : ''}`);
 if (allErrors.length) out.push(`\n⚠ VALIDATION ERRORS:\n${allErrors.join('\n')}`);
+if (allWarnings.length) out.push(`\n⚠ DROP-RISK WARNINGS (advisory):\n${allWarnings.join('\n')}`);
 for (const s of only ? [only] : STATUS) {
   const group = threads.filter((t) => t.status === s);
   if (!group.length) continue;
@@ -185,6 +286,7 @@ for (const s of only ? [only] : STATUS) {
         ? `    ⏳ blocked on: ${b.join(', ')}`
         : `    ▶ READY — dependencies clear, dispatch now`);
     }
+    for (const w of t.warnings) out.push(`    ⚠ ${w}`);
   }
 }
 const unknown = threads.filter((t) => !STATUS.includes(t.status));
