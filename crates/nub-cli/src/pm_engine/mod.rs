@@ -580,13 +580,6 @@ pub(crate) fn stub_error(typed: &str, args: &[String], pm_hint: &str) -> anyhow:
 pub(crate) struct EngineSession {
     pub(crate) detected: Option<DetectedLockfile>,
     pub(crate) runtime: tokio::runtime::Runtime,
-    /// The project had NO package-manager preference signal of any kind when
-    /// this session was prepared (no lockfile, no `packageManager`/`devEngines`
-    /// declaration, no pnpm-named file). On this path nub claims full identity:
-    /// the install writes `lock.yaml` (via the `defaultLockfileFormat=aube`
-    /// embedder default) and stamps the manifest. Carried so the install family
-    /// can stamp AFTER a successful first install.
-    pub(crate) truly_fresh: bool,
 }
 
 /// Build the shared engine context for one verb invocation: apply `--dir`,
@@ -669,10 +662,12 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
         warn_if_pnp_requested(detected.as_ref(), &cwd);
     }
     // Truly-fresh = no PM-preference signal anywhere (no lockfile, no
-    // declaration, no pnpm-named file). On this path nub claims full identity:
-    // the embedder default flips to `lock.yaml` and the install stamps the
-    // manifest. Any incumbent signal makes the project pnpm-shaped/compat and
-    // is respected untouched.
+    // declaration, no pnpm-named file). On this path nub claims identity via the
+    // neutral lockfile: the embedder default flips to `lock.yaml`, the quiet
+    // identity marker the classifier reads back as nub. Any incumbent signal
+    // makes the project pnpm-shaped/compat and is respected untouched. nub does
+    // NOT auto-stamp `package.json` here — that exclusivity claim is reserved
+    // for the explicit `nub pm use nub` command.
     let truly_fresh = is_truly_fresh_project(&cwd, detected.as_ref());
     // Set-unless-user-set: ranks below CLI flags, env vars, and every
     // config file in the engine's settings precedence.
@@ -687,7 +682,6 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
     Ok(EngineSession {
         detected,
         runtime: build_runtime()?,
-        truly_fresh,
     })
 }
 

@@ -328,7 +328,6 @@ fn run_add(typed: &str, args: &[String]) -> Result<i32> {
             .runtime
             .block_on(aube::commands::add::run(verb, globals.effective_filter())),
     )?;
-    stamp_if_truly_fresh(code, &session);
     Ok(code)
 }
 
@@ -372,7 +371,6 @@ fn run_update(typed: &str, args: &[String]) -> Result<i32> {
         verb,
         globals.effective_filter(),
     )))?;
-    stamp_if_truly_fresh(code, &session);
     Ok(code)
 }
 
@@ -977,74 +975,15 @@ pub fn run_install(flags: InstallFlags) -> Result<i32> {
     }
 
     let code = run_engine(&session, opts, yarn)?;
-    // Truly-fresh install: nub claims full identity on the project it just
-    // scaffolded from nothing. The neutral `lock.yaml` was already written
-    // (the `defaultLockfileFormat=aube` embedder default on this path); now
-    // stamp the manifest so the identity is durable and self-reinforcing.
-    // Stamp ONLY on a clean success — a failed/partial install must not leave
-    // an identity stamp behind.
-    stamp_if_truly_fresh(code, &session);
+    // Truly-fresh install: the neutral `lock.yaml` was already written (the
+    // `defaultLockfileFormat=aube` embedder default on this path), and that
+    // lockfile is the quiet identity marker — the classifier treats a present
+    // `lock.yaml` as nub identity, so identity self-reinforces without touching
+    // `package.json`. We deliberately do NOT auto-stamp `packageManager` /
+    // `devEngines` on a plain install: that field is an exclusivity claim other
+    // PMs hard-reject, so writing it would break cross-PM interop. The explicit
+    // `nub pm use nub` command remains the sanctioned identity stamper.
     Ok(code)
-}
-
-/// Stamp nub identity iff the engine run succeeded (`code == 0`) AND the project
-/// was truly fresh (no lockfile / `packageManager` / `devEngines` / pnpm-named
-/// file anywhere in the walk). Shared by every project-creating verb — `install`,
-/// `add`, `update` — so a truly-fresh `add`/`update` claims identity the same way
-/// a fresh `install` does; without it an `add` would write `lock.yaml` (the
-/// embedder `defaultLockfileFormat=aube` default) yet leave the manifest
-/// unstamped, and a later `install` — now seeing a lockfile, so no longer
-/// truly-fresh — would never stamp either, leaving identity incoherent.
-/// Idempotent by construction: once a lockfile exists `truly_fresh` is false, so
-/// a second mutating verb on the now-stamped project is a no-op here.
-/// `nub ci` is intentionally NOT a caller: it hard-errors on a missing lockfile,
-/// so it can never reach a truly-fresh success.
-fn stamp_if_truly_fresh(code: i32, session: &EngineSession) {
-    if code == 0 && session.truly_fresh {
-        stamp_fresh_nub_identity();
-    }
-}
-
-/// Stamp nub identity into the root `package.json` after a successful
-/// truly-fresh install: `packageManager: "nub@<ver>"` plus
-/// `devEngines.packageManager = { name: "nub", version: "^<ver>", onFail:
-/// "warn" }` — the same shape `nub pm use nub` writes (the sanctioned identity
-/// stamper), so a fresh install and an explicit `use nub` converge on one
-/// manifest shape. Best-effort: a manifest the editor can't rewrite (missing /
-/// unparseable) leaves the lockfile as the identity marker and is not fatal to
-/// an install that already succeeded.
-fn stamp_fresh_nub_identity() {
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    // The stamp lands on the same root the manifest editor resolves (workspace
-    // root if any, else the nearest project root) — identity is repo-wide.
-    let nub_version = env!("CARGO_PKG_VERSION");
-    let result = nub_core::pm::resolve::edit_root_manifest(&cwd, |obj| {
-        obj.insert(
-            "packageManager".into(),
-            serde_json::Value::String(format!("nub@{nub_version}")),
-        );
-        let dev = obj
-            .entry("devEngines")
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if let Some(dev) = dev.as_object_mut() {
-            dev.insert(
-                "packageManager".into(),
-                serde_json::json!({
-                    "name": "nub",
-                    "version": format!("^{nub_version}"),
-                    "onFail": "warn",
-                }),
-            );
-        }
-    });
-    if result.is_ok() {
-        present::info(&format!(
-            "stamped nub identity: packageManager = nub@{nub_version}, \
-             devEngines.packageManager.name = nub"
-        ));
-    }
 }
 
 /// FAIL LOUD if `offline_active` and the session's yarn project configures a
