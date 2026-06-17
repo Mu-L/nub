@@ -46,6 +46,16 @@ The accepted flags are pnpm's spellings:
 --dir, -C             # pnpm's spelling, not npm's --prefix
 ```
 
+In a workspace, `install` and `ci` accept the same selector flags as script running — install only the packages a filter matches:
+
+```bash
+--filter <sel>, -F        # pnpm's selector grammar (see /docs/run#--filter)
+--recursive, -r           # every workspace package
+--filter-prod <sel>       # selector, production deps only
+--include-workspace-root  # add the root package to the recursive set
+--fail-if-no-match        # error if the filter selects zero packages
+```
+
 ## `nub add`
 
 Resolves a package, links it, and writes the dependency into `package.json`:
@@ -55,7 +65,7 @@ nub add <pkg>                  # alias: a
 nub add -D <pkg>               # --save-dev
 nub add -E <pkg>               # --save-exact (pin, no ^)
 nub add -O <pkg>               # --save-optional
-nub add --save-peer <pkg>      # peerDependencies
+nub add --save-peer <pkg>      # peerDependencies + devDependencies (pnpm parity)
 nub add -g <pkg>               # global install
 nub add -w <pkg>               # write to the workspace root
 nub add --save-catalog <pkg>   # add into the workspace catalog
@@ -199,7 +209,7 @@ What Nub reads and writes keys off the project's incumbent package manager — i
         { code: 'catalog:', ok: true },
         { code: 'workspace:', ok: true },
         { code: 'workspaces', ok: true },
-        { code: 'BUN_CONFIG_*', ok: false },
+        { code: 'BUN_CONFIG_REGISTRY / _TOKEN', ok: true, partial: true },
         { code: 'engines / os / cpu', ok: true },
       ],
     },

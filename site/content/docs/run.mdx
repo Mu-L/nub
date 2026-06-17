@@ -93,7 +93,10 @@ npm_config_user_agent
 npm_package_name
 npm_package_version
 npm_package_json
-INIT_CWD              # the directory you invoked `nub run` from
+npm_package_config_*       # per-package config keys from package.json#config
+npm_config_registry        # the resolved registry from the .npmrc chain
+npm_config_node_gyp        # path to a runnable node-gyp, for native builds
+INIT_CWD                   # the directory you invoked `nub run` from
 ```
 
 Inside a script, spawning `node` (by shebang or `child_process.spawn("node", …)`) re-enters Nub through the PATH shim, so child processes stay transpiled and augmented — see [`--node`](#--node) below.
