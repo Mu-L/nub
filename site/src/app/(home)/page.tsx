@@ -1157,11 +1157,11 @@ function HypermanagerBand() {
             title="The fastest warm installs"
             body={
               <>
-                On every install, pnpm recopies the packages into a per-project{' '}
-                <Mono>node_modules</Mono>. Nub keeps one content-addressed store on disk and
-                reflinks the files already there into place, so a warm reinstall is mostly
-                relinking — about 2.5× faster than pnpm on a create-t3-app project, faster than
-                bun, and well ahead of npm.
+                The pnpm installer already links packages from a content-addressed store instead of
+                duplicating bytes. Nub uses the same broad model, then optimizes the warm path: when the store
+                is populated, a reinstall is mostly relinking into <Mono>node_modules</Mono> — about
+                2.5× faster than pnpm on a create-t3-app project, faster than bun, and well ahead
+                of npm.
               </>
             }
             visual={
@@ -1169,7 +1169,7 @@ function HypermanagerBand() {
                 {/* Source: tests/bench/results/warm-t3-20260617-{100017,100453,100743}.json
                     (create-t3-app, Next 16) across nub / bun / pnpm / npm, warm + frozen + offline,
                     node_modules wiped between runs. Bars are the arithmetic MEAN across all 36 timed runs
-                    (12 per file): nub 1122 / bun 1444 / pnpm 2847 / npm 4163 ms. nub fastest by mean,
+                    (12 per file): nub 1122 / bun 1444 / pnpm 2847 / npm 4163 ms. Nub fastest by mean,
                     with disjoint σ-bands vs bun (a real win, not a tie). */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   warm frozen install · create-t3-app · 222 deps · macOS

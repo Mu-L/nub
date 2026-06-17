@@ -437,7 +437,7 @@ Second, on a pnpm project, support is complete: Nub reads and honors every confi
 
 ### Performance
 
-Nub maintains a content-addressed store on disk — each package version lands once, identified by content hash. A warm reinstall reuses that store, reflink- or hardlink-copying files already on disk into `node_modules` instead of redownloading or recopying them. On a real [create-t3-app](https://create.t3.gg/) project that's about 2.5× faster than pnpm and faster than Bun:
+Nub maintains a content-addressed store on disk — each package version lands once, identified by content hash. A warm reinstall reuses that store and links files into `node_modules` with reflinks or hardlinks when the filesystem supports them. On a real [create-t3-app](https://create.t3.gg/) project that's about 2.5× faster than pnpm and faster than Bun:
 
 <Bench
   label="warm frozen install · create-t3-app · 222 deps · macOS"
@@ -452,7 +452,7 @@ Nub maintains a content-addressed store on disk — each package version lands o
   ]}
 />
 
-The win is relinking: when the content-addressed store already holds a package, Nub writes a reflink (APFS/btrfs) or hardlink (ext4) into `node_modules` instead of copying bytes — so a warm reinstall is mostly an inode operation regardless of project size. Bun uses a similar store strategy, which is why it's fast too; Nub edges it out because the linking path avoids extra materialization work Bun still does per project.
+The win is the warm materialization path: when the content-addressed store already holds a package, Nub writes a reflink (APFS/btrfs) or hardlink (ext4) into `node_modules` instead of copying bytes, so a warm reinstall is mostly filesystem metadata work. The pnpm and Bun installers use related store-and-link strategies; this benchmark measures Nub's current implementation of that path.
 
 ### Secure by default
 

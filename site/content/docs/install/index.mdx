@@ -173,7 +173,7 @@ What Nub reads and writes keys off the project's incumbent package manager — i
         { code: 'catalog:', ok: true },
         { code: 'workspace:', ok: true },
         { code: 'workspaces', ok: true },
-        { code: 'dependenciesMeta.injected', ok: false, note: 'pnpm’s injected-dependency hard-link layout is out of scope; nub links the standard isolated tree.' },
+        { code: 'dependenciesMeta.injected', ok: false, note: 'The injected-dependency hard-link layout is out of scope; Nub links the standard isolated tree.' },
         { code: 'nodeLinker: pnp', ok: false, note: 'PnP install generation is out of scope.' },
         { code: 'engines / os / cpu', ok: true },
         { code: 'pnpm_config_*', ok: true, note: 'Registry-client keys (registry, per-URI auth, proxy, strict-ssl). Generic pnpm settings resolve through their own env aliases.' },
@@ -364,7 +364,7 @@ A project is Nub identity when it declares Nub through `nub pm use nub` or when 
 - **Config and env:** the standard `.npmrc` cascade, `npm_config_*`, neutral env such as `CI` and proxy variables, plus Nub's own PM knobs: `NUB_CACHE_DIR`, `NUB_CONCURRENCY`, and `NUB_PRIMER_TTL`.
 - **Install state:** `node_modules/.nub/`, `.nub-state`, and the global store under Nub's own cache/data directories.
 
-Nub identity does **not** read another package manager's branded project config. `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.pnpmfile.mjs`, the `pnpm.*` package.json namespace, `pnpm_config_*`, `.yarnrc.yml`, `bunfig.toml`, Bun `trustedDependencies`, and aube's `AUBE_*` runtime knobs are outside the Nub identity surface. `dependenciesMeta.injected` is also not implemented under Nub identity; `nub pm use nub` refuses projects that rely on injected dependencies. If you want pnpm hooks or pnpm workspace config to apply, keep the project pnpm-owned or run `nub pm use pnpm`.
+Nub identity does **not** read another package manager's branded project config. The `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.pnpmfile.mjs`, `pnpm.*` package.json namespace, `pnpm_config_*`, `.yarnrc.yml`, `bunfig.toml`, Bun `trustedDependencies`, and aube's `AUBE_*` runtime knobs are outside the Nub identity surface. Injected dependencies are also not implemented under Nub identity; `nub pm use nub` refuses projects that rely on `dependenciesMeta.injected`. If you want pnpm hooks or pnpm workspace config to apply, keep the project pnpm-owned or run `nub pm use pnpm`.
 
 <Callout title="Contradictions are loud">
 When signals disagree, Nub stops and reports it. Two lockfiles, no declaration:
@@ -409,17 +409,17 @@ $ nub store path
 /Users/you/.local/share/nub/store/v1
 ```
 
-Files materialize into `node_modules` by reflink (APFS/btrfs), hardlink (ext4), or copy — whichever the filesystem supports — so a populated tree costs little extra disk.
+Files materialize into `node_modules` by reflink (APFS/btrfs), hardlink (ext4), or copy fallback — whichever the filesystem supports — so a populated tree costs little extra disk.
 
 ### Virtual store
 
 The default `node_modules` layout is **isolated**: direct dependencies sit at the top level, transitive packages link into a per-project virtual store, and phantom dependencies fail instead of resolving by accident. Nub's virtual store is `node_modules/.nub/` (pnpm uses `node_modules/.pnpm/`) — same shape, not byte-shared, so alternating tools relinks the tree.
 
-Passing `--node-linker hoisted` produces a flat, npm-style layout instead. npm, Yarn, and Bun incumbents default to `hoisted`; pnpm and nub-identity projects keep `isolated`.
+Passing `--node-linker hoisted` produces a flat, npm-style layout instead. The npm, Yarn, and Bun incumbents default to `hoisted`; pnpm and nub-identity projects keep `isolated`.
 
 ### Offline installs
 
-When the global store already holds every package, a warm install relinks files from that store into `node_modules` via reflink (APFS/btrfs) or hardlink (ext4) — no re-download, no byte-for-byte copy. This is why warm reinstalls are significantly faster: the store avoids redundant I/O regardless of which layout (`isolated` or `hoisted`) the project uses.
+When the global store already holds every package, a warm install relinks files from that store into `node_modules` via reflink (APFS/btrfs) or hardlink (ext4) — no re-download, no byte-for-byte copy. The pnpm installer uses the same broad store-and-link idea; Nub's warm path is faster in this benchmark because it does less work while rebuilding the project layout.
 
 <Bench
   label="warm reinstall · create-t3-app · macOS"
