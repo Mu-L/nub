@@ -478,11 +478,12 @@ fn pm_shim_and_unshim_round_trip_against_a_temp_home() {
     std::fs::write(&zshrc, original).unwrap();
     let env: Vec<(&str, &str)> = vec![("HOME", home.to_str().unwrap()), ("SHELL", "/bin/zsh")];
 
-    // Install: 7 hardlinks land, the marked block is appended once.
+    // Install: the six PM hardlinks land, the marked block is appended once.
+    // `nub` itself is not shimmed (it's on PATH via ~/.nub/bin).
     let (stdout, stderr, code) = run(&nub_binary(), &["pm", "shim"], &home, &env);
     assert_eq!(code, 0, "nub pm shim must succeed; stderr:\n{stderr}");
     let shims = home.join(".nub/shims");
-    for name in ["npm", "npx", "pnpm", "pnpx", "yarn", "yarnpkg", "nub"] {
+    for name in ["npm", "npx", "pnpm", "pnpx", "yarn", "yarnpkg"] {
         assert!(
             shims.join(name).is_file(),
             "{name} must exist in {} — stdout:\n{stdout}",
