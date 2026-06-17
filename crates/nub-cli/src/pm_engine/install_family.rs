@@ -875,19 +875,29 @@ pub fn run_install(flags: InstallFlags) -> Result<i32> {
         return Err(err);
     }
 
+    // Config-derived install knobs (the IMPLEMENT wins): the active PM's
+    // persistent config can pin a dep-axis (`omit`/`production`), request a
+    // frozen install (bun `frozenLockfile` / yarn `--immutable`), or disable
+    // all build scripts (yarn `enableScripts: false`). Resolved here, applied
+    // below — the explicit CLI flag always wins (it's OR'd in, never overridden).
+    let config = super::install_config_signals(&session);
+
     // Mirror `run_install_command`: defaults from clap, nub's flags on top.
     let mut args = default_install_args();
-    args.prod = flags.prod;
-    args.dev = flags.dev;
+    args.prod = flags.prod || config.dep_selection.prod;
+    args.dev = flags.dev || config.dep_selection.dev;
     args.ignore_scripts = flags.ignore_scripts;
-    args.no_optional = flags.no_optional;
+    args.no_optional = flags.no_optional || config.dep_selection.no_optional;
     args.offline = flags.offline;
     args.prefer_offline = flags.prefer_offline;
     args.lockfile_only = flags.lockfile_only;
     args.force = flags.force;
     args.node_linker = flags.node_linker.clone();
     args.network.registry = flags.registry.clone();
-    args.lockfile.frozen_lockfile = flags.frozen_lockfile;
+    // Config-requested frozen seeds the strict mode unless the CLI explicitly
+    // opted out (`--no-frozen-lockfile`).
+    args.lockfile.frozen_lockfile =
+        flags.frozen_lockfile || (config.frozen && !flags.no_frozen_lockfile);
     args.lockfile.no_frozen_lockfile = flags.no_frozen_lockfile;
     args.lockfile.prefer_frozen_lockfile = flags.prefer_frozen_lockfile;
 
@@ -899,6 +909,12 @@ pub fn run_install(flags: InstallFlags) -> Result<i32> {
 
     // yaml_prefer_frozen: None — see KNOWN APPROXIMATIONS in the module doc.
     let mut opts = args.into_options(global_frozen, None, cli_flags, super::env_snapshot());
+    // yarn `enableScripts: false` — honor the security opt-out by forcing a
+    // block-all-builds policy that overrides even nub's `defaultTrust` floor.
+    if config.scripts_disabled {
+        opts.build_policy_override =
+            Some(std::sync::Arc::new(aube_scripts::BuildPolicy::deny_all()));
+    }
     // Workspace scoping (`--filter`/`-r`/…) rides the engine's own
     // `workspace_filter` — the same field `aube install --filter` sets in
     // `run_install_command` (vendor/aube lib.rs) and feeds to
@@ -983,10 +999,21 @@ pub fn run_ci(flags: CiFlags) -> Result<i32> {
     };
     remove_node_modules(&root.join("node_modules"))?;
 
+    // Config-derived knobs (ci is frozen by definition, so only the dep-axis
+    // and the yarn block-all-scripts opt-out apply).
+    let config = super::install_config_signals(&session);
+    let dep = config.dep_selection;
     let opts = InstallOptions {
         mode: FrozenMode::Frozen,
-        dep_selection: DepSelection::from_flags(false, false, flags.no_optional),
+        dep_selection: DepSelection::from_flags(
+            dep.prod,
+            dep.dev,
+            dep.no_optional || flags.no_optional,
+        ),
         ignore_scripts: flags.ignore_scripts,
+        build_policy_override: config
+            .scripts_disabled
+            .then(|| std::sync::Arc::new(aube_scripts::BuildPolicy::deny_all())),
         strict_no_lockfile: true,
         cli_flags: Vec::new(),
         env_snapshot: super::env_snapshot(),

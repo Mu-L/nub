@@ -2933,6 +2933,7 @@ dependencies = [
  "aube-lockfile",
  "aube-manifest",
  "aube-registry",
+ "aube-scripts",
  "aube-settings",
  "aube-util",
  "aube-workspace",

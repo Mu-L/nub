@@ -60,6 +60,7 @@ pub mod log;
 pub mod present;
 pub mod publish_family;
 pub mod store_config_family;
+pub mod unsupported_config;
 pub mod use_align;
 pub mod use_nub;
 
@@ -676,6 +677,41 @@ fn engine_session_inner(dir: Option<&Path>, noise: ConfigScopeNoise) -> Result<E
     })
 }
 
+/// The config-derived install knobs the IMPLEMENT-wins resolve from the active
+/// PM's persistent config: a dependency-selection axis pin, a frozen-install
+/// request, and the yarn block-all-scripts opt-out. Composed onto the install
+/// args by [`install_family::run_install`] / `run_ci`.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct InstallConfigSignals {
+    pub(crate) dep_selection: unsupported_config::DepSelectionConfig,
+    pub(crate) frozen: bool,
+    pub(crate) scripts_disabled: bool,
+}
+
+/// Resolve the config-derived install knobs for one install/ci invocation from
+/// the resolved session identity. Reads the active PM's persistent config
+/// (npm `.npmrc` `omit`/`include`, bun bunfig `production`/`frozenLockfile`,
+/// yarn `.yarnrc.yml` `enableImmutableInstalls`/`immutablePatterns`/
+/// `enableScripts`). Returns all-default when no identity resolves.
+pub(crate) fn install_config_signals(session: &EngineSession) -> InstallConfigSignals {
+    let Some(detected) = session.detected.as_ref() else {
+        return InstallConfigSignals::default();
+    };
+    let declared = nub_core::pm::resolve::declared_pm_raw(&detected.dir);
+    let role = config_scope::role_of(
+        declared.as_ref().map(|(n, _)| n.as_str()),
+        Some(detected.kind),
+    )
+    .unwrap_or(config_scope::Role::Nub);
+    let root = detected.dir.as_path();
+    InstallConfigSignals {
+        dep_selection: unsupported_config::dep_selection_from_config(role, root)
+            .unwrap_or_default(),
+        frozen: unsupported_config::frozen_from_config(role, root),
+        scripts_disabled: unsupported_config::yarn_scripts_disabled(role, root),
+    }
+}
+
 /// Apply the config-scoping policy for one verb invocation: resolve the
 /// active-PM role, scope the manifest's graph-shaping override fields to
 /// that role's dialect, register the scoped source + trusted-deps toggle on
@@ -738,6 +774,15 @@ fn apply_config_scope(
             return Err(catalog_unsupported_error(role, &spec));
         }
         emit_scope_warnings(role, &ignored);
+
+        // Curated unsupported-config scan: FATAL-abort on the genuinely-hard
+        // load-bearing fields nub can't honor (a different graph the user
+        // wouldn't know about), WARN on the non-load-bearing-but-unsupported
+        // set. Runs last so the override scoping above is already applied.
+        match unsupported_config::scan_unsupported_config(role, major, minor, root) {
+            unsupported_config::ScanResult::Fatal(err) => return Err(err),
+            unsupported_config::ScanResult::Warn(extra) => emit_scope_warnings(role, &extra),
+        }
     }
     Ok(())
 }
@@ -1677,7 +1722,17 @@ fn nub_setting_defaults(detected: Option<&DetectedLockfile>) -> Vec<(String, Str
                 | LockfileKind::Bun
         )
     );
-    if hoisted_kind {
+    // `dependenciesMeta.*.injected` is materialized only under the isolated
+    // linker (aube needs the `.nub/` virtual store to sibling-link packed
+    // copies). When a flat-layout incumbent declares injected deps, keep the
+    // engine's `isolated` default instead of forcing `hoisted` — otherwise the
+    // injection directive is silently dropped and peer deps resolve against the
+    // wrong tree. A user-set `nodeLinker` (env/.npmrc/yaml) still wins; this
+    // only declines to push the embedder-tier hoisted default.
+    let injected = detected
+        .map(|d| unsupported_config::injected_deps_present(&d.dir))
+        .unwrap_or(false);
+    if hoisted_kind && !injected {
         defaults.push(("nodeLinker".to_string(), "hoisted".to_string()));
     }
     defaults

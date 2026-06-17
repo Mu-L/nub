@@ -34,6 +34,10 @@ aube-registry = { path = "../../vendor/aube/crates/aube-registry" }
 # presentation layer (src/pm_engine/present.rs) for the ERR_AUBE_→ERR_NUB_
 # rewrite and the cli_main-compatible exit mapping.
 aube-codes = { path = "../../vendor/aube/crates/aube-codes" }
+# Build-script trust policy: `enableScripts: false` (yarn) forces
+# `BuildPolicy::deny_all()` to override even nub's defaultTrust floor
+# (pm_engine/unsupported_config.rs). Same path-dep shape as the rest.
+aube-scripts = { path = "../../vendor/aube/crates/aube-scripts" }
 # Diagnostics / critical-path recorder: nub's engine_session calls diag::init()
 # so AUBE_DIAG_* env vars work when nub install runs the embedded aube engine.
 aube-util = { path = "../../vendor/aube/crates/aube-util" }

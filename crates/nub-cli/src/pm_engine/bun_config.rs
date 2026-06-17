@@ -97,6 +97,32 @@ fn entries_from_bunfig(root: &Value) -> Vec<(String, String)> {
             _ => {}
         }
     }
+    // Bun's supply-chain age gate: `[install].minimumReleaseAge` (minutes,
+    // matching bun's unit) → the engine's `minimumReleaseAge` setting (same
+    // gate nub reads from `.npmrc`/pnpm config). Without this a bun user's
+    // in-bunfig hardening is silently dropped. `minimumReleaseAgeExcludes`
+    // (bun's spelling) maps to the engine's `minimumReleaseAgeExclude`.
+    if let Some(minutes) = install
+        .get("minimumReleaseAge")
+        .and_then(Value::as_integer)
+        .filter(|n| *n >= 0)
+    {
+        out.push(("minimumReleaseAge".to_string(), minutes.to_string()));
+    }
+    if let Some(excludes) = install
+        .get("minimumReleaseAgeExcludes")
+        .and_then(Value::as_array)
+    {
+        let names: Vec<String> = excludes
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        if !names.is_empty() {
+            out.push(("minimumReleaseAgeExclude".to_string(), names.join(",")));
+        }
+    }
     push_tls_entries(&mut out, install);
     out
 }
@@ -311,6 +337,23 @@ mod tests {
             "https://plain.example.com/".to_string()
         )));
         assert!(entries.contains(&("nodeLinker".to_string(), "isolated".to_string())));
+    }
+
+    #[test]
+    fn maps_minimum_release_age_and_excludes() {
+        let entries = parsed(
+            r#"
+            [install]
+            minimumReleaseAge = 1440
+            minimumReleaseAgeExcludes = ["@acme/internal", "trusted-pkg"]
+            "#,
+        );
+
+        assert!(entries.contains(&("minimumReleaseAge".to_string(), "1440".to_string())));
+        assert!(entries.contains(&(
+            "minimumReleaseAgeExclude".to_string(),
+            "@acme/internal,trusted-pkg".to_string()
+        )));
     }
 
     #[test]
