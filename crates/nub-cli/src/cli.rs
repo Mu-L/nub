@@ -41,6 +41,21 @@ static HIDE_STREAM_PREFIX: AtomicBool = AtomicBool::new(false);
 /// tool, matching `npx`/`pnpm dlx` (local-first, DLX as the fallback).
 static NUBX_DLX_FALLBACK: AtomicBool = AtomicBool::new(false);
 
+/// The `nubx` npx-parity flags that steer the DLX (fetch-and-run) fallback in
+/// [`run_exec`]. Only the `nubx` entry point populates this; plain `nub exec`
+/// passes `None` and keeps its no-network behavior. Defaults match a bare
+/// `nubx <tool>` (no `-p`, fetch allowed, progress shown).
+#[derive(Clone, Debug, Default)]
+pub struct NubxDlxFlags {
+    /// `-p`/`--package <spec>`: packages to fetch; the positional becomes the
+    /// bin to run from them. Non-empty forces the fetch path.
+    pub package: Vec<String>,
+    /// `--no-install`/`--no`: refuse to fetch — error on a local miss.
+    pub no_install: bool,
+    /// `-q`/`--quiet`: suppress the fetch progress output.
+    pub quiet: bool,
+}
+
 /// `--reporter <MODE>` for `nub run`. `default` is the existing prefixed /
 /// streamed / aggregated human output; `silent` is `-s`; `ndjson` is machine
 /// output (see [`emit_ndjson`]).
@@ -497,6 +512,89 @@ pub enum Command {
         /// Run the bin in all packages concurrently with no topological ordering.
         #[arg(long)]
         parallel: bool,
+
+        /// Remaining arguments forwarded to the binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Run a tool from `node_modules/.bin`, fetching it on a local miss
+    /// (`npx`/`pnpm dlx`). This is the grammar behind the `nubx` entry point;
+    /// it carries the workspace fan-out flags `nub exec` has PLUS the npx
+    /// fetch-path flags (`-p`, `--no-install`, `-q`, …) that only make sense
+    /// when a tool may be fetched. Hidden from `nub`'s own subcommand list —
+    /// it is reachable only as the `nubx` argv0.
+    #[command(hide = true)]
+    Nubx {
+        /// Binary (or package, with `-p`) name to execute.
+        bin: String,
+
+        /// Disable Nub's runtime augmentation for this invocation.
+        #[arg(long)]
+        node: bool,
+
+        // ── workspace fan-out flags (preserved from `nub exec`) ──
+        /// Run the bin in every workspace package. `--workspaces` is the npm-style alias.
+        #[arg(short = 'r', long = "recursive", visible_alias = "workspaces")]
+        recursive: bool,
+
+        /// Filter workspace packages by name or glob. Repeatable: multiple
+        /// `--filter`s union; `!`-prefixed filters subtract. `-F` is the alias.
+        #[arg(short = 'F', long)]
+        filter: Vec<String>,
+
+        /// npm-style member selection: alias for `--filter <name>`. Long-only
+        /// (the short `-w` is pnpm's `--workspace-root`). Repeatable.
+        #[arg(long = "workspace", value_name = "NAME")]
+        workspace: Vec<String>,
+
+        /// Run from the workspace root regardless of cwd.
+        #[arg(short = 'w', long)]
+        workspace_root: bool,
+
+        /// Add the workspace root package to the recursive set (npm-style;
+        /// distinct from `--workspace-root`, which targets *only* the root).
+        #[arg(long)]
+        include_workspace_root: bool,
+
+        /// Error if the filter selects zero packages.
+        #[arg(long)]
+        fail_if_no_match: bool,
+
+        /// Max concurrent packages per topological chunk.
+        #[arg(long, value_name = "N")]
+        workspace_concurrency: Option<i32>,
+
+        /// Run the bin in all packages concurrently with no topological ordering.
+        #[arg(long)]
+        parallel: bool,
+
+        // ── npx fetch-path flags ──
+        /// Fetch package SPEC and run a bin from it (the bin name may differ
+        /// from the package). Repeatable. Forces the fetch path; `npx -p`.
+        #[arg(short = 'p', long = "package", value_name = "SPEC")]
+        package: Vec<String>,
+
+        /// Never fetch: if the tool isn't installed locally, error instead of
+        /// fetching it (`npx --no-install` / `--yes=false`).
+        #[arg(long = "no-install")]
+        no_install: bool,
+
+        /// Alias of `--no-install`: refuse to fetch a missing tool (`npx --no`).
+        #[arg(long = "no")]
+        no_fetch: bool,
+
+        /// Suppress the fetch progress output (`npx -q`/`--quiet`).
+        #[arg(short = 'q', long)]
+        quiet: bool,
+
+        /// Accepted for `npx` parity; a no-op — nubx never prompts before fetching.
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Accepted for `npx` parity. Removed from npm v9+; nubx warns and ignores it.
+        #[arg(long = "ignore-existing")]
+        ignore_existing: bool,
 
         /// Remaining arguments forwarded to the binary.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -1225,6 +1323,19 @@ fn value_consuming_flags(subcommand: &str) -> &'static [&'static str] {
             "--workspace-concurrency",
             "--cwd",
         ],
+        // nubx carries exec's workspace value-flags PLUS npx's `-p`/`--package`
+        // (repeatable, takes the package spec as a following token). They must be
+        // listed so `nubx -p left-pad cowsay` binds `left-pad` to the package, not
+        // the bin positional.
+        "nubx" => &[
+            "--filter",
+            "-F",
+            "--workspace",
+            "--workspace-concurrency",
+            "--package",
+            "-p",
+            "--cwd",
+        ],
         "watch" => &["--cwd"],
         _ => &[],
     }
@@ -1355,7 +1466,7 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
         return crate::pm_engine::dispatch_verb(spec, &subcommand, &rest[1..], &pm);
     }
 
-    let forwards = matches!(subcommand.as_str(), "run" | "exec" | "watch");
+    let forwards = matches!(subcommand.as_str(), "run" | "exec" | "watch" | "nubx");
 
     let (prefix, suffix) = if forwards {
         split_subcommand_argv(rest)
@@ -1527,6 +1638,86 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
                 run_exec(&bin, node, &args)
             }
         }
+        Some(Command::Nubx {
+            bin,
+            node,
+            recursive,
+            mut filter,
+            workspace,
+            workspace_root,
+            include_workspace_root,
+            fail_if_no_match,
+            workspace_concurrency,
+            parallel,
+            package,
+            no_install,
+            no_fetch,
+            quiet,
+            yes: _,
+            ignore_existing,
+            mut args,
+        }) => {
+            args.extend(suffix);
+            filter.extend(workspace);
+            let recursive = recursive || parallel || include_workspace_root;
+            let workspace_run = recursive || !filter.is_empty() || parallel;
+
+            // `--ignore-existing` was removed from npm v9+; accept it for muscle
+            // memory but warn that it does nothing (matches real npx, which prints
+            // a removed-argument notice and proceeds).
+            if ignore_existing {
+                eprintln!("nubx: --ignore-existing was removed in npm v9 and is ignored.");
+            }
+            // `-y`/`--yes` is a no-op: nubx (like `pnpm dlx`) never prompts before
+            // fetching, so there is nothing to confirm.
+
+            if workspace_run {
+                // The npx fetch-path flags only make sense for the single-tool
+                // fetch fallback, never a workspace fan-out across installed bins.
+                if !package.is_empty() || no_install || no_fetch || quiet {
+                    bail!(
+                        "nubx: the workspace flags (-r/--filter/--parallel) run a \
+                         locally-installed bin across packages and cannot be combined \
+                         with the fetch flags (-p/--package, --no-install/--no, -q)."
+                    );
+                }
+                let ws_opts = WorkspaceOpts {
+                    recursive,
+                    filter,
+                    workspace_root,
+                    include_workspace_root,
+                    fail_if_no_match,
+                    workspace_concurrency,
+                    parallel,
+                    bail: false,
+                    reverse: false,
+                    sort: !parallel,
+                    stream: false,
+                    if_present: false,
+                    ignore_scripts: false,
+                    script_shell: None,
+                    aggregate_output: false,
+                    resume_from: None,
+                };
+                run_workspace_target(
+                    WorkspaceTarget::Bin {
+                        name: &bin,
+                        args: &args,
+                    },
+                    node,
+                    &ws_opts,
+                )
+            } else {
+                let dlx_flags = NubxDlxFlags {
+                    package,
+                    // `--no` is npx's alias for `--no-install` in nubx's
+                    // no-prompt model: both refuse to fetch a missing tool.
+                    no_install: no_install || no_fetch,
+                    quiet,
+                };
+                run_exec_with_dlx(&bin, node, &args, Some(&dlx_flags))
+            }
+        }
         Some(Command::Upgrade {
             version,
             dry_run,
@@ -1610,10 +1801,11 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
 }
 
 fn run_nubx() -> Result<i32> {
-    // nubx <bin> [args...] ≡ nub exec <bin> [args...]. Route through the exact
-    // same split as `nub exec` so the three-position rule is identical: a flag
-    // before the bin (`nubx --node eslint`) is nubx's; a flag after the bin
-    // (`nubx eslint --node`, `nubx eslint --help`) reaches the bin verbatim.
+    // nubx <bin> [args...] routes through the dedicated `Nubx` clap grammar
+    // (its own workspace + npx flag surface; NOT `nub exec`). The three-position
+    // rule is identical: a flag before the bin (`nubx --node eslint`, `nubx -p
+    // left-pad pad`) is nubx's; a flag after the bin (`nubx eslint --node`,
+    // `nubx eslint --help`) reaches the bin verbatim.
     let args: Vec<String> = env::args().skip(1).collect();
 
     // `--help`/`--version` are nubx's own flags only when they appear BEFORE the
@@ -1628,7 +1820,7 @@ fn run_nubx() -> Result<i32> {
         }
         match arg.as_str() {
             "--help" | "-h" => {
-                run_help(Some("exec"));
+                run_help(Some("nubx"));
                 return Ok(0);
             }
             "--version" | "-v" | "-V" => {
@@ -1641,7 +1833,9 @@ fn run_nubx() -> Result<i32> {
 
     if args.is_empty() || args.iter().all(|a| a.starts_with('-') && a != "--") {
         // No bin name at all (empty, or only leading flags like `nubx --node`).
-        bail!("nubx: missing binary name\nUsage: nubx [--node] <bin> [args...]");
+        bail!(
+            "nubx: missing binary name\nUsage: nubx [-p <spec>] [--node] [--no-install] <bin> [args...]"
+        );
     }
 
     // `nubx` is nub's `npx`/`pnpm dlx`: a locally-installed bin runs locally (no
@@ -1650,7 +1844,7 @@ fn run_nubx() -> Result<i32> {
     // the exec path below — `nub exec` itself stays no-network.
     NUBX_DLX_FALLBACK.store(true, Ordering::Relaxed);
 
-    let mut rest = vec!["exec".to_string()];
+    let mut rest = vec!["nubx".to_string()];
     rest.extend(args);
     dispatch_subcommand(rest)
 }
@@ -3195,26 +3389,62 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
 }
 
 fn run_exec(bin: &str, compat_mode: bool, args: &[String]) -> Result<i32> {
+    run_exec_with_dlx(bin, compat_mode, args, None)
+}
+
+/// `run_exec`, plus the `nubx` npx-parity flags that steer the DLX fallback.
+/// `dlx_flags` is `Some` only for the `nubx` entry point (which arms
+/// `NUBX_DLX_FALLBACK`); plain `nub exec` passes `None` and never fetches.
+///
+/// Resolution order: a `-p`/`--package` spec forces the fetch path (the package
+/// may ship a bin under a different name, so a coincidentally-matching local bin
+/// must not shadow it — npx behaves the same). Otherwise local-first: a
+/// `node_modules/.bin/<bin>` (or PnP-resolved bin) wins; on a miss the nubx
+/// fallback fetches unless `--no-install`/`--no` forbids it.
+fn run_exec_with_dlx(
+    bin: &str,
+    compat_mode: bool,
+    args: &[String],
+    dlx_flags: Option<&NubxDlxFlags>,
+) -> Result<i32> {
     let cwd = env::current_dir()?;
 
-    if let Some(bin_path) = nub_core::workspace::scripts::find_bin(bin, &cwd) {
-        return launch_bin(&bin_path, args, compat_mode, &cwd);
+    // `-p <spec>` forces the fetch path: the bin to run may not match any local
+    // bin, and npx never lets a local bin shadow an explicit `--package`.
+    let force_fetch = dlx_flags.is_some_and(|f| !f.package.is_empty());
+
+    if !force_fetch {
+        if let Some(bin_path) = nub_core::workspace::scripts::find_bin(bin, &cwd) {
+            return launch_bin(&bin_path, args, compat_mode, &cwd);
+        }
+
+        // Yarn PnP has no node_modules/.bin, so find_bin misses. Hand off to the
+        // pnp-bin-run.cjs runner through nub's normal augmented path: that re-injects
+        // --require .pnp.cjs (cwd is still a PnP tree), so the runner can resolve the
+        // bin via pnpapi and load it with require() — the way `yarn exec` does, which
+        // reads zip-stored bins on every tier (running the bin as a node *entry* breaks
+        // on the compat tier, where --import forces it through the ESM loader). The
+        // runner prints its own not-found message + exit 127 on a miss. Skipped in
+        // compat mode (--node).
+        if !compat_mode && nub_core::pnp::detect(&cwd).is_some() {
+            if let Some(runner) = pnp_bin_runner_path() {
+                let mut cmd_args = vec![runner, bin.to_string()];
+                cmd_args.extend(args.iter().cloned());
+                return run_file_with_compat(&cmd_args, compat_mode);
+            }
+        }
     }
 
-    // Yarn PnP has no node_modules/.bin, so find_bin misses. Hand off to the
-    // pnp-bin-run.cjs runner through nub's normal augmented path: that re-injects
-    // --require .pnp.cjs (cwd is still a PnP tree), so the runner can resolve the
-    // bin via pnpapi and load it with require() — the way `yarn exec` does, which
-    // reads zip-stored bins on every tier (running the bin as a node *entry* breaks
-    // on the compat tier, where --import forces it through the ESM loader). The
-    // runner prints its own not-found message + exit 127 on a miss. Skipped in
-    // compat mode (--node).
-    if !compat_mode && nub_core::pnp::detect(&cwd).is_some() {
-        if let Some(runner) = pnp_bin_runner_path() {
-            let mut cmd_args = vec![runner, bin.to_string()];
-            cmd_args.extend(args.iter().cloned());
-            return run_file_with_compat(&cmd_args, compat_mode);
-        }
+    // `--no-install`/`--no`: the tool isn't local (we just missed) and the user
+    // forbade fetching — error like `npx --no-install` rather than reaching the
+    // registry. Exit 127 (command not found), matching the not-installed path.
+    if dlx_flags.is_some_and(|f| f.no_install) {
+        let what = dlx_flags
+            .and_then(|f| f.package.first())
+            .map(String::as_str)
+            .unwrap_or(bin);
+        eprintln!("nubx: `{what}` is not installed and --no-install forbids fetching it.");
+        return Ok(127);
     }
 
     // Not in node_modules/.bin. The `nubx` entry point (and only it) falls back
@@ -3224,7 +3454,8 @@ fn run_exec(bin: &str, compat_mode: bool, args: &[String]) -> Result<i32> {
     // shelling out to the project's foreign PM. We follow `pnpm dlx` semantics:
     // no interactive confirm-prompt, just fetch+run (nub is pnpm-compatible).
     if NUBX_DLX_FALLBACK.load(Ordering::Relaxed) {
-        return crate::pm_engine::run_dlx_for_nubx(bin, args);
+        let flags = dlx_flags.cloned().unwrap_or_default();
+        return crate::pm_engine::run_dlx_for_nubx(bin, args, &flags);
     }
 
     // Plain `nub exec`. Per exec.md (decision 2026-05-26): `nub exec` does NOT
@@ -7421,31 +7652,138 @@ mod tests {
 
     // ── nubx argv0 dispatch ─────────────────────────────────────────
 
-    #[test]
-    fn nubx_delegates_to_exec_preserving_the_node_flag_and_bin_args() {
-        // `run_nubx` does no flag handling of its own: it prepends `exec` and lets
-        // clap parse via the exact `nub exec` grammar. So `nubx --node vitest --run`
-        // must parse identically to `nub exec --node vitest --run` — `--node` before
-        // the bin is nubx's (→ Exec.node), and `--run` after it reaches the bin
-        // verbatim. (The real binary path is exercised by the integration suite; this
-        // pins the argv-construction contract `run_nubx` relies on.)
-        let nubx_args = ["--node", "vitest", "--run"];
-        let mut rest = vec!["nub".to_string(), "exec".to_string()];
-        rest.extend(nubx_args.iter().map(|s| s.to_string()));
-        let cli = Cli::try_parse_from(&rest).unwrap();
-        match cli.command {
-            Some(Command::Exec {
-                node,
-                ref bin,
-                ref args,
-                ..
-            }) => {
-                assert!(node, "a leading --node must set Exec.node");
-                assert_eq!(bin, "vitest", "the first non-flag token is the bin");
-                assert_eq!(args, &vec!["--run".to_string()], "post-bin args forward");
+    /// Parse a `nubx <args...>` invocation exactly as `run_nubx` does: prepend
+    /// the `nubx` subcommand, split off the verbatim post-bin suffix, clap-parse
+    /// the prefix, then fold the suffix back into `args`. Returns the settled
+    /// `Command::Nubx { .. }` for assertions.
+    fn parse_nubx(args: &[&str]) -> Command {
+        let mut rest = vec!["nubx".to_string()];
+        rest.extend(args.iter().map(|s| s.to_string()));
+        let (prefix, suffix) = split_subcommand_argv(rest);
+        let cmd = Cli::parse_from(std::iter::once("nub".to_string()).chain(prefix)).command;
+        match cmd {
+            Some(mut nubx @ Command::Nubx { .. }) => {
+                if let Command::Nubx { args, .. } = &mut nubx {
+                    args.extend(suffix);
+                }
+                nubx
             }
-            other => panic!("expected Exec, got {other:?}"),
+            other => panic!("expected Command::Nubx, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn nubx_preserves_node_flag_and_forwards_post_bin_args() {
+        // `--node` before the bin is nubx's (→ compat mode); `--run` after the bin
+        // reaches the tool verbatim (the three-position rule). This is the contract
+        // `run_nubx` relies on when it routes through the `Nubx` grammar.
+        let Command::Nubx {
+            node, bin, args, ..
+        } = parse_nubx(&["--node", "vitest", "--run"])
+        else {
+            unreachable!()
+        };
+        assert!(node, "a leading --node sets compat mode");
+        assert_eq!(bin, "vitest", "the first non-flag token is the bin");
+        assert_eq!(
+            args,
+            vec!["--run".to_string()],
+            "post-bin args forward verbatim"
+        );
+    }
+
+    #[test]
+    fn nubx_package_flag_binds_spec_and_keeps_bin() {
+        // `nubx -p @tanstack/cli tanstack --help`: `@tanstack/cli` is the package
+        // to fetch, `tanstack` the bin to run from it, `--help` the tool's.
+        let Command::Nubx {
+            package, bin, args, ..
+        } = parse_nubx(&["-p", "@tanstack/cli", "tanstack", "--help"])
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            package,
+            vec!["@tanstack/cli".to_string()],
+            "-p binds the spec"
+        );
+        assert_eq!(bin, "tanstack", "the positional is the bin to run");
+        assert_eq!(args, vec!["--help".to_string()], "post-bin args forward");
+    }
+
+    #[test]
+    fn nubx_refuse_fetch_and_quiet_flags_parse() {
+        let Command::Nubx {
+            no_install,
+            quiet,
+            bin,
+            ..
+        } = parse_nubx(&["--no-install", "-q", "cowsay"])
+        else {
+            unreachable!()
+        };
+        assert!(no_install, "--no-install parses");
+        assert!(quiet, "-q parses");
+        assert_eq!(bin, "cowsay");
+
+        let Command::Nubx { no_fetch, .. } = parse_nubx(&["--no", "cowsay"]) else {
+            unreachable!()
+        };
+        assert!(no_fetch, "--no is its own refuse-fetch flag");
+    }
+
+    #[test]
+    fn nubx_parity_noops_parse_without_consuming_the_bin() {
+        // `-y`/`--yes` (no-op) and `--ignore-existing` (warn+ignore) must not be
+        // mistaken for the bin positional.
+        let Command::Nubx {
+            yes,
+            ignore_existing,
+            bin,
+            ..
+        } = parse_nubx(&["-y", "--ignore-existing", "create-vite"])
+        else {
+            unreachable!()
+        };
+        assert!(yes, "-y parses");
+        assert!(ignore_existing, "--ignore-existing parses");
+        assert_eq!(bin, "create-vite", "neither flag steals the bin");
+    }
+
+    #[test]
+    fn nubx_workspace_flags_survive_the_new_grammar() {
+        // The fan-out flags nubx inherited from `nub exec` must still parse.
+        let Command::Nubx {
+            recursive,
+            filter,
+            parallel,
+            bin,
+            ..
+        } = parse_nubx(&["-r", "-F", "@org/api", "--parallel", "tsc"])
+        else {
+            unreachable!()
+        };
+        assert!(recursive, "-r preserved");
+        assert!(parallel, "--parallel preserved");
+        assert_eq!(
+            filter,
+            vec!["@org/api".to_string()],
+            "-F preserved + value-bound"
+        );
+        assert_eq!(bin, "tsc");
+    }
+
+    #[test]
+    fn nub_exec_grammar_is_unaffected_by_nubx_flags() {
+        // nubx's npx flags live on the `Nubx` variant only — `nub exec` must reject
+        // them (its grammar never grew `-p`/`--no-install`/`-q`).
+        assert!(
+            parse(&["nub", "exec", "--no-install", "tsc"]).is_err(),
+            "nub exec must not accept nubx's --no-install"
+        );
+        // And a plain `nub exec` still parses to Exec, not Nubx.
+        let cli = parse(&["nub", "exec", "vitest"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Exec { ref bin, .. }) if bin == "vitest"));
     }
 
     // ── .bin launcher resolution (the node-vs-shim decision) ─────────────

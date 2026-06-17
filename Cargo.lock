@@ -2938,6 +2938,7 @@ dependencies = [
  "aube-workspace",
  "base64",
  "clap",
+ "clx",
  "dirs-next",
  "dotenvy",
  "libc",

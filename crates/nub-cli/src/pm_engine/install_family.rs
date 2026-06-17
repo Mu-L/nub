@@ -493,13 +493,25 @@ fn run_dlx(typed: &str, args: &[String]) -> Result<i32> {
 /// fetching, and resolves the project's Node pin via the user's cwd. We follow
 /// `pnpm dlx` semantics deliberately: no interactive confirm-prompt — fetch+run.
 ///
-/// `<tool>` is passed as the positional (NOT `-p`), so the engine derives the
+/// `<tool>` is passed as the positional, so by default the engine derives the
 /// actual bin name from the installed package's `bin` map when the command name
 /// and package name differ (e.g. `@tanstack/cli` ships `tanstack`). nubx's own
 /// flag handling already split off the bin; everything in `args` is forwarded to
-/// the tool verbatim.
-pub fn run_dlx_for_nubx(bin: &str, args: &[String]) -> Result<i32> {
-    let verb = nubx_dlx_args(bin, args);
+/// the tool verbatim. The npx flags in `flags` steer the fetch: `-p`/`--package`
+/// populates `DlxArgs.package` (the package(s) to fetch, with `<tool>` as the bin
+/// to run from them) and `-q`/`--quiet` switches the engine's progress UI to
+/// text mode.
+pub fn run_dlx_for_nubx(
+    bin: &str,
+    args: &[String],
+    flags: &crate::cli::NubxDlxFlags,
+) -> Result<i32> {
+    if flags.quiet {
+        // Same knob aube's own startup flips for `--silent`: drop the animated
+        // progress UI to plain text so a `-q` fetch stays quiet.
+        clx::progress::set_output(clx::progress::ProgressOutput::Text);
+    }
+    let verb = nubx_dlx_args(bin, args, flags);
     let session = super::engine_session(None)?;
     // NOTE: on child failure the engine propagates the child's exit code via
     // std::process::exit — control does not return here on that path.
@@ -508,17 +520,21 @@ pub fn run_dlx_for_nubx(bin: &str, args: &[String]) -> Result<i32> {
 
 /// Build the `dlx` invocation for a `nubx <tool> [args]` fallback: `<tool>` is
 /// the positional (so the engine derives the actual bin name from the package's
-/// `bin` map) and `args` forward verbatim. None of dlx's own flags (`-p`, `-c`
-/// shell-mode, `--allow-build`) are in nubx's surface, so they stay at their
-/// safe defaults — matching `npx <tool> [args]` / `pnpm dlx <tool> [args]`.
-fn nubx_dlx_args(bin: &str, args: &[String]) -> aube::commands::dlx::DlxArgs {
+/// `bin` map, or runs it from `-p` packages) and `args` forward verbatim. The
+/// dlx-only `-c` shell-mode and `--allow-build` are not in nubx's surface yet, so
+/// they stay at their safe defaults — matching `npx <tool> [args]`.
+fn nubx_dlx_args(
+    bin: &str,
+    args: &[String],
+    flags: &crate::cli::NubxDlxFlags,
+) -> aube::commands::dlx::DlxArgs {
     let mut params = Vec::with_capacity(args.len() + 1);
     params.push(bin.to_string());
     params.extend(args.iter().cloned());
     aube::commands::dlx::DlxArgs {
         params,
         shell_mode: false,
-        package: Vec::new(),
+        package: flags.package.clone(),
         allow_build: Vec::new(),
         lockfile: Default::default(),
         network: Default::default(),
@@ -1263,7 +1279,7 @@ mod tests {
         assert_eq!(pr.packages, ["lodash@4.17.21"]);
     }
 
-    /// The `nubx <tool>` DLX fallback (run when the bin is absent from
+    /// A bare `nubx <tool>` DLX fallback (run when the bin is absent from
     /// `node_modules/.bin`) hands the tool to the engine's `dlx` as a plain
     /// positional with args forwarded verbatim — `npx`/`pnpm dlx` semantics:
     /// the tool name doubles as the package (no `-p`, so the engine resolves the
@@ -1271,12 +1287,16 @@ mod tests {
     /// (no `-c`), and no lifecycle scripts are auto-approved (no `--allow-build`).
     #[test]
     fn nubx_dlx_fallback_forwards_tool_and_args_with_no_dlx_flags() {
-        let verb = nubx_dlx_args("cowsay", &["-f".into(), "tux".into(), "hi there".into()]);
+        let flags = crate::cli::NubxDlxFlags::default();
+        let verb = nubx_dlx_args(
+            "cowsay",
+            &["-f".into(), "tux".into(), "hi there".into()],
+            &flags,
+        );
         // Tool is the positional; args ride after it untouched (a tool flag like
         // `-f` is the tool's, never consumed by nubx/dlx).
         assert_eq!(verb.params, ["cowsay", "-f", "tux", "hi there"]);
-        // None of dlx's own flags are part of nubx's surface — they stay default
-        // so the fallback matches a bare `npx cowsay …` / `pnpm dlx cowsay …`.
+        // With no `-p`, the tool name is the package — the engine derives the bin.
         assert!(verb.package.is_empty(), "no -p: tool name is the package");
         assert!(
             !verb.shell_mode,
@@ -1285,8 +1305,26 @@ mod tests {
         assert!(verb.allow_build.is_empty(), "no scripts auto-approved");
 
         // A tool with no args still produces a single-positional invocation.
-        let bare = nubx_dlx_args("serve", &[]);
+        let bare = nubx_dlx_args("serve", &[], &flags);
         assert_eq!(bare.params, ["serve"]);
+    }
+
+    /// `nubx -p <spec> <bin> [args]` populates `DlxArgs.package` with the spec(s)
+    /// and keeps `<bin>` as the positional, so the engine fetches the package and
+    /// runs the named bin from it (npx's package≠bin decoupling).
+    #[test]
+    fn nubx_dlx_package_flag_drives_the_fetch_set() {
+        let flags = crate::cli::NubxDlxFlags {
+            package: vec!["@tanstack/cli".into()],
+            ..Default::default()
+        };
+        let verb = nubx_dlx_args("tanstack", &["--help".into()], &flags);
+        assert_eq!(verb.package, ["@tanstack/cli"], "-p spec drives the fetch");
+        assert_eq!(
+            verb.params,
+            ["tanstack", "--help"],
+            "the positional bin + its args still ride params[0..]"
+        );
     }
 
     /// The nub-side default edit parent is nub-named (the engine's fallback
