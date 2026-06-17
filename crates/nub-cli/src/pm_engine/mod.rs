@@ -1648,18 +1648,14 @@ fn read_file_head(path: &Path, max_bytes: usize) -> std::io::Result<String> {
 ///   non-settings consumers (git clone cache, node-gyp tool cache, primer,
 ///   adaptive state) never read the setting at all; the process-global
 ///   cache root covers every one of them.
-/// - The gated curated default-trust floor (curated list ∧ registry-resolved ∧
-///   OSV MAL-* gate active ∧ past the cooling window) is ON under nub in both
-///   modes via the embedder profile (`Embedder::curated_default_trust = true`,
-///   set in `identity::NUB`); upstream aube keeps it off. It is NOT a setting in
-///   the defaults map — it's an embedder-fixed posture. The floor is bypassed
-///   when the project supplies its own trust list (any positive `allowBuilds` /
-///   `onlyBuiltDependencies` / `trustedDependencies` entry, or a present-but-
-///   empty one meaning "trust nothing"): that set is authoritative
-///   (presence-of-list). An explicit `allowBuilds: false` carves one package out
-///   of the still-active floor. This replaces the removed `defaultTrust` boolean
-///   setting, which read as "trust everything by default" — the opposite of its
-///   gated behavior.
+/// - `defaultTrust=true` — the gated default-trust floor (curated list ∧
+///   registry-resolved ∧ OSV MAL-* gate active ∧ past the cooling window)
+///   is ON under nub in both modes; upstream aube keeps it off. Precedence
+///   stays the settled chain (explicit `allowBuilds` true/false always wins
+///   — `false` carves a package OUT of the floor; the map's *existence*
+///   never disables it). Off-switch: `.npmrc default-trust=false` /
+///   `npm_config_default_trust=false` — this is the embedder tier, below
+///   every user source.
 ///
 /// Emit a single install-time warning when the Yarn incumbent's effective
 /// linker is PnP but nub will install a `node_modules` tree instead. Yarn
@@ -1780,6 +1776,7 @@ fn nub_setting_defaults(
             "defaultLockfileFormat".to_string(),
             fresh_format.to_string(),
         ),
+        ("defaultTrust".to_string(), "true".to_string()),
         (
             "virtualStoreDir".to_string(),
             "node_modules/.nub".to_string(),
@@ -2230,12 +2227,10 @@ mod tests {
         // Security invariant: nub must NEVER inherit an allow-all build-script
         // default from any incumbent.  Every incumbent — npm, pnpm, yarn,
         // yarn-berry, bun, aube, npm-shrinkwrap, and fresh/no-lockfile — must
-        // NOT carry `dangerouslyAllowAllBuilds` in the defaults map. The curated
-        // default-trust floor is an embedder-fixed posture
-        // (`Embedder::curated_default_trust`, asserted true for NUB in
-        // `identity.rs`), no longer a `defaultTrust` setting in this map — so
-        // neither key should appear here. This test guards against a future
-        // incumbent-specialisation refactor silently leaking an unsafe default.
+        // produce `defaultTrust = "true"` (the safe explicit allowlist posture)
+        // and must NOT carry `dangerouslyAllowAllBuilds` in the defaults map.
+        // This test guards against a future incumbent-specialisation refactor
+        // silently leaking an unsafe default.
         let dir = tempfile::tempdir().unwrap();
         let detected = |kind| DetectedLockfile {
             kind,
@@ -2259,12 +2254,11 @@ mod tests {
             let defaults = nub_setting_defaults(d.as_ref(), false);
             let label = format!("{kind:?}");
 
-            // The curated floor is an embedder posture, not a setting default —
-            // `defaultTrust` must not appear in the defaults map.
+            // Must always carry the safe explicit-allowlist posture.
             assert_eq!(
                 get(&defaults, "defaultTrust"),
-                None,
-                "{label}: defaultTrust is removed — curated trust is an embedder posture, not a default"
+                Some("true"),
+                "{label}: defaultTrust must be \"true\""
             );
 
             // Must never inject an allow-all build-script key.
