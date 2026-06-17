@@ -1,0 +1,186 @@
+// @ts-check
+/**
+ * fray — Stop hook. Fires when the main agent finishes responding (goes idle).
+ * TWO jobs, in priority order:
+ *
+ *   (A) REST-RECONCILIATION GUARD (the #1 recurring failure). A background sub-agent
+ *       coming to REST is recorded by the SubagentStop hook (fray-subagent-rest.mjs)
+ *       in `.fray/.rested-agents.jsonl`. If any rest has happened since we last
+ *       surfaced one, REFUSE to let the orchestrator go idle until it has reconciled
+ *       them — fold findings into the thread, drain the queued follow-ups, and verify
+ *       the agent is genuinely DONE (a rest is NOT "done": an agent can rest mid-step
+ *       and rest repeatedly). This bypasses the cleanup cooldown (rests are urgent),
+ *       but is loop-safe: it only fires on rests NEWER than the last time it fired,
+ *       and never twice in a row (stop_hook_active).
+ *
+ *   (B) CLEANUP NUDGE. Otherwise, the original gentle nudge to make sure threads
+ *       touched this session reflect current truth — rate-limited by a cooldown and
+ *       gated on a thread file actually having been touched.
+ *
+ * THREE loop-guards (defense in depth): stop_hook_active; a per-concern cooldown/marker
+ * in `.fray/.stop-reminder-state.json`; and the activity gate (cleanup nudge only).
+ *
+ * FAIL-OPEN everywhere: any error / missing file / unparseable input → exit 0
+ * (allow the stop). A broken reminder must never trap the user.
+ *
+ * Config (`.fray/config.yml`): master `enabled` gates it; `stop_reminder: on|off`
+ * (default on); `stop_reminder_cooldown_seconds` (default 1800) is the CLEANUP rest window.
+ */
+
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadConfig } from '../../scripts/fray/config.mjs';
+
+const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const FRAY_DIR = join(PROJECT_DIR, '.fray');
+const STATE_FILE = join(FRAY_DIR, '.stop-reminder-state.json');
+const REST_LOG = join(FRAY_DIR, '.rested-agents.jsonl');
+
+/** Allow the stop (no output = no block). */
+function allow() {
+  process.exit(0);
+}
+
+/** Read the two stop_reminder knobs straight from the flat config.yml. */
+function readKnobs() {
+  let enabled = true;
+  let cooldownSeconds = 1800;
+  try {
+    const src = readFileSync(join(FRAY_DIR, 'config.yml'), 'utf8');
+    const onOff = src.match(/^stop_reminder:\s*(\S+)/m);
+    if (onOff) {
+      const v = onOff[1].toLowerCase();
+      if (v === 'off' || v === 'false' || v === 'no') enabled = false;
+    }
+    const cd = src.match(/^stop_reminder_cooldown_seconds:\s*(\d+)/m);
+    if (cd) cooldownSeconds = parseInt(cd[1], 10);
+  } catch {
+    /* defaults */
+  }
+  return { enabled, cooldownSeconds };
+}
+
+/** State: { last_fired, last_rest_surfaced } — both epoch-ms, default 0. */
+function readState() {
+  try {
+    const s = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+    return { last_fired: s.last_fired || 0, last_rest_surfaced: s.last_rest_surfaced || 0 };
+  } catch {
+    return { last_fired: 0, last_rest_surfaced: 0 };
+  }
+}
+
+function writeState(patch) {
+  try {
+    const cur = readState();
+    writeFileSync(STATE_FILE, JSON.stringify({ ...cur, ...patch }) + '\n');
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Count sub-agent rest events recorded with ts (ms) strictly after `sinceMs`. */
+function restsSince(sinceMs) {
+  let n = 0;
+  try {
+    const lines = readFileSync(REST_LOG, 'utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ts = Date.parse(JSON.parse(line).ts);
+        if (Number.isFinite(ts) && ts > sinceMs) n++;
+      } catch {
+        /* skip malformed line */
+      }
+    }
+  } catch {
+    /* no log → no rests */
+  }
+  return n;
+}
+
+/** Was any thread file (`.fray/*.md`) touched since `sinceMs`? */
+function threadTouchedSince(sinceMs) {
+  try {
+    const files = readdirSync(FRAY_DIR).filter((f) => f.endsWith('.md'));
+    for (const f of files) {
+      try {
+        if (statSync(join(FRAY_DIR, f)).mtimeMs > sinceMs) return true;
+      } catch {
+        /* skip unreadable */
+      }
+    }
+  } catch {
+    /* no .fray dir → no threads → no nudge */
+  }
+  return false;
+}
+
+function restReminder(n) {
+  return [
+    `⟦fray REST guard⟧ ${n} background sub-agent rest(s) recorded since you last reconciled.`,
+    'BEFORE going idle: for EACH rested agent, RE-READ its thread .md (not from memory),',
+    'fold its findings, and DRAIN its queued follow-ups — OR confirm it is genuinely still running.',
+    'A "came to rest" is NOT "done": an agent can rest mid-step and rest repeatedly, so verify the',
+    'deliverable actually landed (committed/pushed/CI-green/reported a conclusion) before treating it as complete.',
+    'If every rested agent is already reconciled, just stop.',
+  ].join(' ');
+}
+
+const CLEANUP_REMINDER = [
+  '⟦fray cleanup check⟧ Before going idle: make sure every fray thread you worked on THIS session reflects current truth —',
+  'drain any QUEUED follow-ups whose agent has returned, move answered Open questions into Decisions, and flip completed threads to `done` (or `dismissed` if abandoned).',
+  'Touch ONLY threads you actually worked on recently; do NOT edit unrelated threads.',
+  'If they are ALL already accurate, just stop — do not manufacture work.',
+  '(Rate-limited: this will not fire again for a while.)',
+].join(' ');
+
+async function main() {
+  // Master gate (shared kill-switch) + own switch.
+  let cfg;
+  try {
+    cfg = loadConfig(PROJECT_DIR);
+  } catch {
+    return allow();
+  }
+  if (!cfg.enabled) return allow();
+
+  const { enabled, cooldownSeconds } = readKnobs();
+  if (!enabled) return allow();
+
+  // Read the Stop payload from stdin.
+  let payload = {};
+  try {
+    const raw = readFileSync(0, 'utf8');
+    if (raw.trim()) payload = JSON.parse(raw);
+  } catch {
+    /* no/invalid stdin → treat as empty; guards below still apply */
+  }
+
+  // Guard 1 (applies to BOTH concerns): never block a stop that is itself a
+  // continuation we caused — prevents any no-rest loop.
+  if (payload.stop_hook_active === true) return allow();
+
+  const now = Date.now();
+  const { last_fired, last_rest_surfaced } = readState();
+
+  // (A) REST-RECONCILIATION GUARD — highest priority, bypasses the cleanup cooldown.
+  // Fire only on rests NEWER than the last surface, so each new rest forces exactly
+  // one reconciliation prompt (loop-safe with Guard 1).
+  const newRests = restsSince(last_rest_surfaced);
+  if (newRests > 0) {
+    writeState({ last_rest_surfaced: now, last_fired: now });
+    process.stdout.write(JSON.stringify({ decision: 'block', reason: restReminder(newRests) }));
+    process.exit(0);
+  }
+
+  // (B) CLEANUP NUDGE — original behavior, rate-limited + activity-gated.
+  if (last_fired > 0 && now - last_fired < cooldownSeconds * 1000) return allow();
+  if (last_fired > 0 && !threadTouchedSince(last_fired)) return allow();
+
+  writeState({ last_fired: now });
+  process.stdout.write(JSON.stringify({ decision: 'block', reason: CLEANUP_REMINDER }));
+  process.exit(0);
+}
+
+main().catch(() => allow());
