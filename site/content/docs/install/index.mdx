@@ -239,10 +239,10 @@ What Nub reads and writes keys off the project's incumbent package manager — i
         { code: 'workspace:', ok: true },
         { code: 'workspaces', ok: true },
         {
-          code: 'BUN_CONFIG_REGISTRY / _TOKEN',
+          code: 'BUN_CONFIG_*',
           ok: true,
           partial: true,
-          note: 'Only these two install-registry env vars are read: BUN_CONFIG_REGISTRY (must be an http(s) URL) and BUN_CONFIG_TOKEN. The wider BUN_CONFIG_* family is not read.',
+          note: 'Only two of the BUN_CONFIG_* install env vars are read: BUN_CONFIG_REGISTRY (must be an http(s) URL) and BUN_CONFIG_TOKEN. The rest of the BUN_CONFIG_* family is not read.',
         },
         { code: 'engines / os / cpu', ok: true },
       ],
