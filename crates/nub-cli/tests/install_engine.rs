@@ -67,10 +67,11 @@ fn registry_reachable() -> bool {
 }
 
 /// Truly-fresh project (no lockfile, no PM declaration, no pnpm-named file):
-/// nub claims full identity. The engine resolves, links the isolated
-/// (pnpm-style) layout under `node_modules/.nub`, writes nub's neutral
-/// `lock.yaml`, and stamps `packageManager: nub@<ver>` +
-/// `devEngines.packageManager.name = nub` into `package.json`.
+/// nub claims identity via the neutral lockfile only. The engine resolves, links
+/// the isolated (pnpm-style) layout under `node_modules/.nub`, and writes nub's
+/// neutral `lock.yaml` — the quiet identity marker. It must NOT auto-stamp
+/// `packageManager` / `devEngines` into `package.json`: that exclusivity claim
+/// is reserved for the explicit `nub pm use nub` command.
 #[test]
 #[ignore = "network: resolves + fetches is-positive@3.1.0 from the npm registry"]
 fn install_truly_fresh_project_claims_nub_identity() {
@@ -126,21 +127,19 @@ fn install_truly_fresh_project_claims_nub_identity() {
         "neither pnpm-lock.yaml nor aube-lock.yaml may appear on the truly-fresh path"
     );
 
-    // The manifest is stamped with nub identity (self-reinforcing — the next
-    // install resolves as nub-identity by declaration, not the fresh default).
+    // Identity is self-reinforcing via the lockfile alone (the next install
+    // sees lock.yaml and resolves as nub-identity). The manifest is left
+    // untouched — no `packageManager`, no `devEngines` auto-stamp on a plain
+    // install (that exclusivity claim is reserved for `nub pm use nub`).
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("package.json")).unwrap()).unwrap();
-    assert_eq!(
-        manifest["packageManager"]
-            .as_str()
-            .map(|s| s.starts_with("nub@")),
-        Some(true),
-        "packageManager must be stamped nub@<ver>: {manifest}"
+    assert!(
+        manifest.get("packageManager").is_none(),
+        "a plain install must not auto-stamp packageManager: {manifest}"
     );
-    assert_eq!(
-        manifest["devEngines"]["packageManager"]["name"].as_str(),
-        Some("nub"),
-        "devEngines.packageManager.name must be nub: {manifest}"
+    assert!(
+        manifest.get("devEngines").is_none(),
+        "a plain install must not auto-stamp devEngines: {manifest}"
     );
 }
 
@@ -296,11 +295,10 @@ fn install_refuses_to_mutate_a_drifted_yarn_lock() {
 }
 
 /// A truly-fresh `nub add` claims nub identity exactly like a fresh `install`:
-/// the add resolves + writes nub's neutral `lock.yaml` AND stamps the manifest
-/// (`packageManager: nub@<ver>` + `devEngines.packageManager.name = nub`). The
-/// stamp rides every project-creating verb, not just `install` — otherwise an
-/// `add` would write a lockfile yet leave identity unstamped, and the now-present
-/// lockfile would stop a later `install` from stamping too.
+/// the add resolves + writes nub's neutral `lock.yaml` — the quiet identity
+/// marker — and adds the dep. It must NOT auto-stamp `packageManager` /
+/// `devEngines` into `package.json`; that exclusivity claim is reserved for the
+/// explicit `nub pm use nub` command. Identity self-reinforces via the lockfile.
 #[test]
 #[ignore = "network: resolves + fetches is-positive@3.1.0 from the npm registry"]
 fn add_on_a_truly_fresh_project_claims_nub_identity() {
@@ -329,17 +327,13 @@ fn add_on_a_truly_fresh_project_claims_nub_identity() {
 
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("package.json")).unwrap()).unwrap();
-    assert_eq!(
-        manifest["packageManager"]
-            .as_str()
-            .map(|s| s.starts_with("nub@")),
-        Some(true),
-        "a truly-fresh add must stamp packageManager nub@<ver>: {manifest}"
+    assert!(
+        manifest.get("packageManager").is_none(),
+        "a truly-fresh add must not auto-stamp packageManager: {manifest}"
     );
-    assert_eq!(
-        manifest["devEngines"]["packageManager"]["name"].as_str(),
-        Some("nub"),
-        "a truly-fresh add must stamp devEngines.packageManager.name = nub: {manifest}"
+    assert!(
+        manifest.get("devEngines").is_none(),
+        "a truly-fresh add must not auto-stamp devEngines: {manifest}"
     );
     assert_eq!(
         manifest["dependencies"]["is-positive"].as_str(),
