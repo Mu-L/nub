@@ -147,7 +147,7 @@ const heroLines = (major: string) => [
   { cmd: 'nub index.ts', comment: 'TypeScript-first Node.js runtime' },
   { cmd: 'nub run dev', comment: '24× faster pnpm run' },
   { cmd: 'nubx prisma generate', comment: '19× faster npx' },
-  { cmd: 'nub install', comment: '3× faster pnpm install' },
+  { cmd: 'nub install', comment: '2.7× faster pnpm install' },
   { cmd: 'nub watch src/server.ts', comment: 'native watch mode' },
   { cmd: 'nub pm shim', comment: 'built-in Corepack-style shims' },
   { cmd: `nub node install ${major}`, comment: 'Node version manager' },
@@ -1153,32 +1153,34 @@ function HypermanagerBand() {
           <Feature
             accent="pink"
             eyebrow="Install speed"
-            title="3× faster warm installs"
+            title="The fastest warm installs"
             body={
               <>
                 On every install, pnpm recopies the packages into a per-project{' '}
                 <Mono>node_modules</Mono>. Nub keeps one content-addressed store on disk and
                 reflinks the files already there into place, so a warm reinstall is mostly
-                relinking — about 3× faster than pnpm on a create-t3-app project, and ahead of
-                bun and npm too.
+                relinking — about 2.7× faster than pnpm on a create-t3-app project, faster than
+                bun on average, and well ahead of npm.
               </>
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: tests/bench/run-warm-gvs.sh --fixture t3 (create-t3-app, Next 16) across
-                    nub / bun / pnpm / npm, warm + frozen + offline, node_modules wiped between runs. */}
+                {/* Source: tests/bench/results/warm-t3-20260617-093457.json + warm-t3-20260617-093911.json
+                    (create-t3-app, Next 16) across nub / bun / pnpm / npm, warm + frozen + offline,
+                    node_modules wiped between runs. Bars are the arithmetic MEAN across all 24 timed runs
+                    (12 per file): nub 1632 / bun 1717 / pnpm 4335 / npm 5997 ms. nub fastest by mean. */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   warm install · create-t3-app · 222 deps · macOS · hyperfine
                 </p>
                 <BenchBars
                   accent="pink"
-                  max={4732}
+                  max={5997}
                   unit="ms"
                   rows={[
-                    { cmd: 'nub install', ms: 974, us: true },
-                    { cmd: 'bun install', ms: 1498, label: '54% slower' },
-                    { cmd: 'pnpm install', ms: 2743, ratio: 2.8 },
-                    { cmd: 'npm ci', ms: 4732, ratio: 4.9 },
+                    { cmd: 'nub install', ms: 1632, us: true },
+                    { cmd: 'bun install', ms: 1717, label: '5% slower' },
+                    { cmd: 'pnpm install', ms: 4335, ratio: 2.7 },
+                    { cmd: 'npm ci', ms: 5997, ratio: 3.7 },
                   ]}
                 />
                 <a
