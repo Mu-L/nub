@@ -30,97 +30,102 @@ export interface CompatRow {
   note?: ReactNode;
 }
 
+const SVG_PROPS = {
+  'aria-hidden': true,
+  width: 14,
+  height: 14,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 3,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  className: 'size-3.5 shrink-0',
+} as const;
+
+const STATUS_META: Record<
+  CompatStatus,
+  { color: string; label: string; icon: ReactNode }
+> = {
+  'n/a': {
+    color: 'text-fd-muted-foreground',
+    label: 'Not applicable',
+    icon: (
+      <svg {...SVG_PROPS}>
+        <path d="M5 12h14" />
+      </svg>
+    ),
+  },
+  no: {
+    color: 'text-red-500 dark:text-red-400',
+    label: 'Not supported',
+    icon: (
+      <svg {...SVG_PROPS}>
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
+      </svg>
+    ),
+  },
+  partial: {
+    color: 'text-amber-600 dark:text-amber-400',
+    label: 'Partially supported',
+    icon: (
+      <svg {...SVG_PROPS}>
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    ),
+  },
+  yes: {
+    color: 'text-emerald-600 dark:text-emerald-400',
+    label: 'Supported',
+    icon: (
+      <svg {...SVG_PROPS}>
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    ),
+  },
+};
+
 function StatusGlyph({
   status,
   tooltip,
 }: {
   status: CompatStatus;
-  /** Plain-text breakdown surfaced on hover/focus of an amber (partial) glyph. */
+  /** Plain-text breakdown surfaced on hover/focus of the glyph. */
   tooltip?: string;
 }) {
-  if (status === 'n/a') {
-    return (
-      <span className="inline-flex items-center gap-1.5 font-medium text-fd-muted-foreground">
-        <svg
-          aria-hidden
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="size-3.5 shrink-0"
-        >
-          <path d="M5 12h14" />
-        </svg>
-        <span className="sr-only">Not applicable</span>
-      </span>
-    );
-  }
-  if (status === 'no') {
-    return (
-      <span className="inline-flex items-center gap-1.5 font-medium text-red-500 dark:text-red-400">
-        <svg
-          aria-hidden
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="size-3.5 shrink-0"
-        >
-          <path d="M18 6 6 18" />
-          <path d="m6 6 12 12" />
-        </svg>
-        <span className="sr-only">Not supported</span>
-      </span>
-    );
-  }
-  const amber = status === 'partial';
-  // On an amber glyph, surface the partial-breakdown note on hover/focus: a
-  // CSS-only tooltip (the `group`/`peer` pattern) plus the native `title` and
-  // sr-only text so it's reachable by pointer, keyboard, and screen readers.
-  const hasTip = amber && !!tooltip;
+  const { color, label, icon } = STATUS_META[status];
+  // Surface the note on hover/focus whenever the row has one (not just amber):
+  // a CSS-only reveal (`group` + `group-hover`/`group-focus-within`) plus the
+  // native `title` and sr-only text, so it's reachable by pointer, keyboard,
+  // and screen readers. The wrapper is focusable so keyboard users get it too.
+  const hasTip = !!tooltip;
   const glyph = (
     <span
-      className={`inline-flex items-center gap-1.5 font-medium ${
-        amber
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-emerald-600 dark:text-emerald-400'
-      } ${hasTip ? 'cursor-help underline decoration-dotted decoration-from-font underline-offset-4' : ''}`}
+      className={`inline-flex items-center gap-1.5 font-medium ${color} ${
+        hasTip
+          ? 'cursor-help underline decoration-dotted decoration-from-font underline-offset-4'
+          : ''
+      }`}
     >
-      <svg
-        aria-hidden
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="size-3.5 shrink-0"
-      >
-        <path d="M20 6 9 17l-5-5" />
-      </svg>
+      {icon}
       <span className="sr-only">
-        {amber ? 'Partially supported' : 'Supported'}
+        {label}
         {hasTip ? `. ${tooltip}` : ''}
       </span>
     </span>
   );
   if (!hasTip) return glyph;
   return (
-    <span className="group relative inline-flex" tabIndex={0} title={tooltip}>
+    <span
+      className="group relative inline-flex"
+      tabIndex={0}
+      title={tooltip}
+    >
       {glyph}
       <span
         role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 hidden w-64 -translate-x-1/2 whitespace-normal rounded-md border border-fd-border bg-fd-popover px-3 py-2 text-left text-xs font-normal leading-relaxed text-fd-popover-foreground shadow-md group-hover:block group-focus:block"
+        className="pointer-events-none invisible absolute left-1/2 top-full z-20 mt-1.5 w-64 -translate-x-1/2 whitespace-normal rounded-md border border-fd-border bg-fd-popover px-3 py-2 text-left text-xs font-normal leading-relaxed text-fd-popover-foreground opacity-0 shadow-md transition-opacity duration-100 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
       >
         {tooltip}
       </span>
