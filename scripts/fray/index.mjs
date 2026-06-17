@@ -10,10 +10,11 @@
  * to the orchestrator immediately.
  *
  * Usage:
- *   node scripts/fray/index.mjs               # print the board (grouped by status) + any validation errors
+ *   node scripts/fray/index.mjs               # print the LIVE board (active/enqueued/blocked/needs-decision only)
+ *   node scripts/fray/index.mjs --all         # print all threads (every status)
  *   node scripts/fray/index.mjs --status todo # print only threads in one status
  *   node scripts/fray/index.mjs --validate    # print ONLY validation errors; exit 1 if any (for the hook / CI). --check is an alias.
- *   node scripts/fray/index.mjs --json        # machine-readable {config, threads, errors}
+ *   node scripts/fray/index.mjs --json        # machine-readable {config, threads, errors} — ALWAYS complete, never filtered
  *
  * Thread DEPENDENCIES are expressed entirely in per-thread frontmatter — an optional
  * `depends_on: [slug, ...]` array naming OTHER THREAD SLUGS (the same files the board
@@ -263,18 +264,32 @@ if (qi !== -1) {
   process.exit(0);
 }
 
-// Default: the board. `--status <s>` narrows to one status.
+// Default: the board. `--status <s>` narrows to one status. `--all` shows everything.
 const si = process.argv.indexOf('--status');
 const only = si !== -1 ? process.argv[si + 1] : null;
+const showAll = process.argv.includes('--all');
 if (only && !STATUS.includes(only)) {
   console.error(`unknown status "${only}" (expected one of: ${STATUS.join(', ')})`);
   process.exit(2);
 }
+
+// Statuses hidden from the default board (non-actionable). Read defensively from
+// config.mjs STATUS so we're correct regardless of a `planned`→`todo` rename.
+const HIDDEN_BY_DEFAULT = new Set(['todo', 'planned', 'done', 'dismissed'].filter((s) => STATUS.includes(s)));
+
+// When `--all` or `--status <s>` is given, show the requested set; otherwise show
+// only the live/actionable statuses.
+const showStatuses = only
+  ? [only]
+  : showAll
+    ? STATUS
+    : STATUS.filter((s) => !HIDDEN_BY_DEFAULT.has(s));
+
 const out = [];
-out.push(`fray board — autonomous_mode: ${cfg.autonomousMode ? 'on' : 'off'}${only ? ` — status:${only}` : ''}`);
+out.push(`fray board — autonomous_mode: ${cfg.autonomousMode ? 'on' : 'off'}${only ? ` — status:${only}` : showAll ? ' — all' : ' — live'}`);
 if (allErrors.length) out.push(`\n⚠ VALIDATION ERRORS:\n${allErrors.join('\n')}`);
 if (allWarnings.length) out.push(`\n⚠ DROP-RISK WARNINGS (advisory):\n${allWarnings.join('\n')}`);
-for (const s of only ? [only] : STATUS) {
+for (const s of showStatuses) {
   const group = threads.filter((t) => t.status === s);
   if (!group.length) continue;
   out.push(`\n## ${s} (${group.length})`);
@@ -291,4 +306,14 @@ for (const s of only ? [only] : STATUS) {
 }
 const unknown = threads.filter((t) => !STATUS.includes(t.status));
 if (unknown.length) out.push(`\n## (invalid status) (${unknown.length})\n${unknown.map((t) => `- ${t.id} [${t.status}]`).join('\n')}`);
+
+// Footer: when threads are hidden in the default view, tell the user how many.
+if (!only && !showAll) {
+  const hiddenCount = threads.filter((t) => HIDDEN_BY_DEFAULT.has(t.status)).length;
+  if (hiddenCount > 0) {
+    const hiddenLabels = [...HIDDEN_BY_DEFAULT].filter((s) => threads.some((t) => t.status === s)).join('/');
+    out.push(`\n… ${hiddenCount} hidden (${hiddenLabels}) — \`--all\` to show`);
+  }
+}
+
 console.log(out.join('\n'));
