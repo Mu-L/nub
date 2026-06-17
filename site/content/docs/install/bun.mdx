@@ -9,7 +9,7 @@ When Bun is the incumbent package manager, Nub installs against it and writes no
   rows={[
     { feature: <code>bun.lock</code>, status: 'yes', note: 'text format, read + write' },
     { feature: <code>bun.lockb</code>, status: 'no', note: 'binary format, rejected' },
-    { feature: <code>bunfig.toml</code>, status: 'partial', note: 'registry, scopes, linker only; Bun-incumbent projects only' },
+    { feature: <code>bunfig.toml</code>, status: 'partial', note: 'Read in Bun-incumbent projects: [install] registry, scopes, linker, and TLS (cafile path and inline ca PEM). Not read: runtime/test/serve config, the security scanner, cache and global-dir settings, and the wider BUN_CONFIG_* install-behavior family (retry, lockfile, and skip toggles).' },
     { feature: <code>trustedDependencies</code>, status: 'yes' },
     { feature: <code>overrides</code>, status: 'yes' },
     { feature: <code>resolutions</code>, status: 'yes' },
@@ -95,12 +95,15 @@ Supported today:
 - `[install].registry` as a string URL or `{ url, token, username, password }` object. Auth-only objects without `url` apply to the default npm registry.
 - `[install.scopes]` entries as string URLs or registry objects. Auth-only scoped objects inherit `[install].registry`, or the default npm registry when no default is configured, for registry routing.
 - `[install].linker = "hoisted" | "isolated"`, mapped to Nub's existing `nodeLinker`.
+- `[install].cafile` (a path to a PEM file) and `[install].ca` (inline PEM, single string or array), mapped onto the same TLS trust the `.npmrc` `cafile` / `ca` keys feed.
+
+Plus `BUN_CONFIG_REGISTRY` and `BUN_CONFIG_TOKEN` from the environment, which set the default registry and its auth token and outrank the file config.
 
 Nub identity, npm, pnpm, yarn, and fresh projects do not read `bunfig.toml`; the file is Bun-owned config and stays inert unless Bun is the incumbent. This launch subset is best-effort: unreadable or invalid TOML is ignored instead of failing the install.
 
 ## Gaps
 
-- **Partial `bunfig.toml` only.** Runtime/test/serve fields, security scanner config, cache/global-dir behavior, and the rest of Bun's install config are not implemented. Custom CAs are supported, but through `.npmrc` rather than bunfig's own `cafile` key, which the install-only reader does not parse. The `.npmrc` `cafile` / `ca` keys (top-level and per-registry) work under every incumbent — see [Custom CAs](/docs/install/npm#custom-cas). For registry, auth, or TLS that must be shared across tools, `.npmrc` is the most portable home:
+- **Partial `bunfig.toml` only.** Runtime/test/serve fields, the security scanner, cache and global-dir behavior, and the wider `BUN_CONFIG_*` install-behavior family (retry, lockfile, and skip toggles) are not read. Custom CAs work through bunfig's own `[install] cafile` and `ca` keys as well as `.npmrc` — the `.npmrc` `cafile` / `ca` keys (top-level and per-registry) work under every incumbent, see [Custom CAs](/docs/install/npm#custom-cas). For registry, auth, or TLS that must be shared across tools, `.npmrc` is the most portable home:
 
   ```ini
   # .npmrc — honored by both nub and bun

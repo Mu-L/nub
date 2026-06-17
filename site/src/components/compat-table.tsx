@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
 
+/** Plain-text the amber tooltip needs from a (possibly markdown) note. */
+function noteText(note: ReactNode): string | undefined {
+  if (note == null || note === '') return undefined;
+  if (typeof note === 'string') return note;
+  return undefined;
+}
+
 // Per-package-manager compatibility table. Vertical (one feature per row) so it
 // never overflows horizontally, with a color-coded status glyph:
 //   yes      → green check  (supported)
@@ -14,12 +21,23 @@ export type CompatStatus = 'yes' | 'no' | 'partial' | 'n/a';
 export interface CompatRow {
   /** The config field / capability — markdown rendered, so backticked code works. */
   feature: ReactNode;
+  /** nub's support for the feature. */
   status: CompatStatus;
+  /** The incumbent PM's support, when a two-column (incumbent vs nub) table is
+   *  rendered. Defaults to 'yes' — the rows are the incumbent's own features. */
+  incumbentStatus?: CompatStatus;
   /** The qualifier that was packed into the old cell (e.g. "read+write"). Optional. */
   note?: ReactNode;
 }
 
-function StatusGlyph({ status }: { status: CompatStatus }) {
+function StatusGlyph({
+  status,
+  tooltip,
+}: {
+  status: CompatStatus;
+  /** Plain-text breakdown surfaced on hover/focus of an amber (partial) glyph. */
+  tooltip?: string;
+}) {
   if (status === 'n/a') {
     return (
       <span className="inline-flex items-center gap-1.5 font-medium text-fd-muted-foreground">
@@ -64,13 +82,17 @@ function StatusGlyph({ status }: { status: CompatStatus }) {
     );
   }
   const amber = status === 'partial';
-  return (
+  // On an amber glyph, surface the partial-breakdown note on hover/focus: a
+  // CSS-only tooltip (the `group`/`peer` pattern) plus the native `title` and
+  // sr-only text so it's reachable by pointer, keyboard, and screen readers.
+  const hasTip = amber && !!tooltip;
+  const glyph = (
     <span
       className={`inline-flex items-center gap-1.5 font-medium ${
         amber
           ? 'text-amber-600 dark:text-amber-400'
           : 'text-emerald-600 dark:text-emerald-400'
-      }`}
+      } ${hasTip ? 'cursor-help underline decoration-dotted decoration-from-font underline-offset-4' : ''}`}
     >
       <svg
         aria-hidden
@@ -86,21 +108,55 @@ function StatusGlyph({ status }: { status: CompatStatus }) {
       >
         <path d="M20 6 9 17l-5-5" />
       </svg>
-      <span className="sr-only">{amber ? 'Partially supported' : 'Supported'}</span>
+      <span className="sr-only">
+        {amber ? 'Partially supported' : 'Supported'}
+        {hasTip ? `. ${tooltip}` : ''}
+      </span>
+    </span>
+  );
+  if (!hasTip) return glyph;
+  return (
+    <span className="group relative inline-flex" tabIndex={0} title={tooltip}>
+      {glyph}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 hidden w-64 -translate-x-1/2 whitespace-normal rounded-md border border-fd-border bg-fd-popover px-3 py-2 text-left text-xs font-normal leading-relaxed text-fd-popover-foreground shadow-md group-hover:block group-focus:block"
+      >
+        {tooltip}
+      </span>
     </span>
   );
 }
 
-export function CompatTable({ rows }: { rows: CompatRow[] }) {
+export function CompatTable({
+  rows,
+  incumbent,
+}: {
+  rows: CompatRow[];
+  /** When set, render a two-column "<incumbent> vs nub" parity view — each row's
+   *  feature belongs to the incumbent PM (so its column defaults to ✓) shown
+   *  beside nub's support. Omit it for the default single-(nub-)status table. */
+  incumbent?: string;
+}) {
+  const pmTh =
+    'w-px whitespace-nowrap px-4 py-2.5 text-center font-mono font-medium text-fd-muted-foreground';
+  const pmTd = 'w-px whitespace-nowrap px-4 py-2.5 text-center align-top';
   return (
     <div className="my-6 overflow-hidden rounded-lg border border-fd-border [&_table]:my-0">
       <table className="w-full border-collapse text-left text-sm">
         <thead>
           <tr className="border-b border-fd-border bg-fd-muted/40">
             <th className="px-4 py-2.5 font-medium text-fd-muted-foreground">Feature</th>
-            <th className="w-px whitespace-nowrap px-4 py-2.5 font-medium text-fd-muted-foreground">
-              Status
-            </th>
+            {incumbent ? (
+              <>
+                <th className={pmTh}>{incumbent}</th>
+                <th className={pmTh}>nub</th>
+              </>
+            ) : (
+              <th className="w-px whitespace-nowrap px-4 py-2.5 font-medium text-fd-muted-foreground">
+                Status
+              </th>
+            )}
             <th className="px-4 py-2.5 font-medium text-fd-muted-foreground">Notes</th>
           </tr>
         </thead>
@@ -110,9 +166,24 @@ export function CompatTable({ rows }: { rows: CompatRow[] }) {
               <td className="px-4 py-2.5 align-top font-mono text-fd-foreground [&_code]:bg-transparent [&_code]:p-0">
                 {row.feature}
               </td>
-              <td className="w-px whitespace-nowrap px-4 py-2.5 align-top">
-                <StatusGlyph status={row.status} />
-              </td>
+              {incumbent ? (
+                <>
+                  <td className={pmTd}>
+                    <span className="inline-flex justify-center">
+                      <StatusGlyph status={row.incumbentStatus ?? 'yes'} />
+                    </span>
+                  </td>
+                  <td className={pmTd}>
+                    <span className="inline-flex justify-center">
+                      <StatusGlyph status={row.status} tooltip={noteText(row.note)} />
+                    </span>
+                  </td>
+                </>
+              ) : (
+                <td className="w-px whitespace-nowrap px-4 py-2.5 align-top">
+                  <StatusGlyph status={row.status} tooltip={noteText(row.note)} />
+                </td>
+              )}
               <td className="px-4 py-2.5 align-top text-fd-muted-foreground">
                 {row.note ?? ''}
               </td>
