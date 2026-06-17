@@ -87,3 +87,4 @@ epics/
 # Benchmark results doc — measured numbers (date/machine/load-specific). Kept on
 # disk for reference but never committed; regenerate via tests/bench/run-*.sh.
 tests/bench/RESULTS.md
+/bun.lockb
