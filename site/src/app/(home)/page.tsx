@@ -1144,7 +1144,8 @@ function HypermanagerBand() {
             visual={
               <Terminal
                 lines={[
-                  { cmd: 'nub add -E -D --save-catalog react', comment: 'exact pin · devDeps · workspace catalog' },
+                  { out: '# exact pin · devDeps · workspace catalog' },
+                  { cmd: 'nub add -E -D --save-catalog react' },
                   { cmd: 'nub install --frozen-lockfile --prefer-offline --node-linker hoisted' },
                 ]}
               />
@@ -1154,7 +1155,7 @@ function HypermanagerBand() {
           <Feature
             accent="pink"
             eyebrow="Install speed"
-            title="Warm installs"
+            title="Ultrafast installs"
             body={
               <>
                 Like pnpm, Nub keeps package files in a global content-addressed store and links
