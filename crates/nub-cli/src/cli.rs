@@ -3389,7 +3389,8 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
     // this watch invocation's resolved Node version before spawning — mirror of the
     // two direct-spawn sites in spawn.rs. See flags::strip_unsupported_node_options.
     if let Some(existing) = &node_options {
-        let stripped = nub_core::node::flags::strip_unsupported_node_options(existing, &node.version);
+        let stripped =
+            nub_core::node::flags::strip_unsupported_node_options(existing, &node.version);
         cmd.env("NODE_OPTIONS", stripped);
     }
     let status = cmd.status()?;

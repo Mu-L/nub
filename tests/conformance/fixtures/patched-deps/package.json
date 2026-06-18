@@ -1,0 +1,9 @@
+{
+  "name": "conform-patched-deps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Drop-in PM conformance fixture: pnpm patchedDependencies. is-odd@3.0.1 is patched via patches/is-odd@3.0.1.patch (declared in pnpm-workspace.yaml, the pnpm 9+ location). pnpm records the patch as a hash/path map in the lockfile; nub must frozen-read it as up to date and apply the patch (issue #15 is the bare-scalar-hash variant pnpm 10.x no longer writes).",
+  "dependencies": {
+    "is-odd": "3.0.1"
+  }
+}

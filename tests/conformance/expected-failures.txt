@@ -4,3 +4,10 @@
 # green flip is recorded by deleting the entry in the same commit as the fix.
 # All entries are fixable lockfile-writer bugs (vendor/aube fork); scenarios
 # the ecosystem makes impossible are skip_reason() in run.sh instead.
+
+# overrides-ref (#16): a pnpm.overrides $-ref ($ms) is recorded resolved (^2.1.3)
+# in the lockfile but stays literal ($ms) in package.json; nub's frozen drift
+# check compares literal-vs-resolved and reports ERR_NUB_OUTDATED_LOCKFILE. pnpm
+# resolves the $-ref before comparing. Direction A only — Direction B is an
+# intended brand-boundary divergence (skip_reason in run.sh), not a bug.
+overrides-ref A pnpm #16 pnpm.overrides $-ref read as drift (literal vs resolved)

@@ -1,0 +1,154 @@
+name: Lockfile round-trip
+
+# Bidirectional cross-tool lockfile round-trip gates. Two harnesses, both
+# shelling out to REAL pinned package managers as the honest judge:
+#
+#   tests/conformance/run.sh — drop-in round-trip. Direction A: a real PM
+#     writes its lockfile, nub `--frozen-lockfile` installs from it. Direction
+#     B: nub writes the lockfile, the real PM frozen-installs it with zero
+#     churn (`cmp`). The real PM judges BOTH directions.
+#   tests/conversion/run.sh — cross-format migration: a source PM writes its
+#     lockfile, `nub pm use <target>` converts it, the target PM frozen-accepts.
+#
+# Both harnesses invoke pnpm/npm/bun/yarn by name off PATH (NOT npx-pinned like
+# tests/aube-conformance/run.sh), so this workflow pins each one deterministically
+# on PATH before running — see the "Pin package managers" step. Keep these pins
+# in sync with the tool/version matrices documented in each harness README and
+# with BUN_PIN/PNPM_PIN/NPM_PIN defaults in the run.sh scripts.
+#
+# Two cadences:
+#   per-PR  — the conformance harness on a TIGHT, fast fixture set, so it doesn't
+#             heavily gate every push. Skips yarn (slowest leg) to stay quick.
+#   nightly — the FULL conformance matrix + the full conversion matrix, all PMs.
+#
+# Real registry installs run, so these need network. Known-red scenarios live in
+# each harness's expected-failures.txt and must shrink (a stale entry fails the
+# run).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tests/conformance/**"
+      - "tests/conversion/**"
+      - "crates/**"
+      - "vendor/aube"
+      - "Cargo.lock"
+      - ".github/workflows/lockfile-roundtrip.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tests/conformance/**"
+      - "tests/conversion/**"
+      - ".github/workflows/lockfile-roundtrip.yml"
+  schedule:
+    # Nightly full matrix at 07:00 UTC.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned package-manager versions. Keep in sync with the harness READMEs and
+  # the *_PIN defaults in tests/conversion/run.sh.
+  NPM_PIN: "11.13.0"
+  PNPM_PIN: "10.15.1"
+  BUN_PIN: "1.3.14"
+  YARN_PIN: "1.22.22"
+
+jobs:
+  # ── Per-PR: tight, fast drop-in round-trip ────────────────────────────────
+  conformance-pr:
+    name: drop-in round-trip, tight set (ubuntu)
+    # Skip the scheduled run — the nightly job covers the full set.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Init vendor/aube submodule
+        run: git submodule update --init vendor/aube
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_PIN }}
+      - name: Pin package managers on PATH
+        run: |
+          npm install -g "npm@${NPM_PIN}" "pnpm@${PNPM_PIN}"
+          echo "npm:  $(npm --version)"
+          echo "pnpm: $(pnpm --version)"
+          echo "bun:  $(bun --version)"
+      - name: Build nub
+        run: cargo build -p nub-cli
+      - name: Drop-in round-trip (tight fixture set, no yarn)
+        # The tight set: table-stakes (simple, scoped) + the feature fixtures
+        # that exercise the bug-prone diverging fields. yarn is skipped here to
+        # keep the PR gate fast; the nightly job runs it.
+        env:
+          SKIP_YARN: "1"
+        run: tests/conformance/run.sh target/debug/nub simple scoped peers overrides-ref patched-deps
+
+  # ── Nightly: full conformance matrix + full conversion matrix ─────────────
+  conformance-nightly:
+    name: drop-in round-trip, full matrix (ubuntu)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Init vendor/aube submodule
+        run: git submodule update --init vendor/aube
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_PIN }}
+      - name: Pin package managers on PATH
+        run: |
+          npm install -g "npm@${NPM_PIN}" "pnpm@${PNPM_PIN}" "yarn@${YARN_PIN}"
+          echo "npm:  $(npm --version)"
+          echo "pnpm: $(pnpm --version)"
+          echo "yarn: $(yarn --version)"
+          echo "bun:  $(bun --version)"
+      - name: Build nub
+        run: cargo build -p nub-cli
+      - name: Drop-in round-trip (full fixture matrix, all PMs)
+        run: tests/conformance/run.sh target/debug/nub
+
+  conversion-nightly:
+    name: cross-format conversion, full matrix (ubuntu)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Init vendor/aube submodule
+        run: git submodule update --init vendor/aube
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_PIN }}
+      - name: Pin package managers on PATH
+        run: |
+          npm install -g "npm@${NPM_PIN}" "pnpm@${PNPM_PIN}" "yarn@${YARN_PIN}"
+          echo "npm:  $(npm --version)"
+          echo "pnpm: $(pnpm --version)"
+          echo "yarn: $(yarn --version)"
+          echo "bun:  $(bun --version)"
+      - name: Build nub
+        run: cargo build -p nub-cli
+      - name: Cross-format conversion matrix
+        # run.sh reads NPM_PIN/PNPM_PIN/BUN_PIN (inherited from the workflow-level
+        # env above) to pin the packageManager declaration nub writes — aligned
+        # with the PATH-installed versions.
+        run: tests/conversion/run.sh target/debug/nub

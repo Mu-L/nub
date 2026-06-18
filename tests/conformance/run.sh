@@ -36,7 +36,7 @@ NUB="$(cd "$(dirname "$NUB")" && pwd)/$(basename "$NUB")"
 NUB_VERSION="$("$NUB" --version 2>/dev/null || echo '?')"
 
 # Fixture list — each is a subdirectory of fixtures/
-ALL_FIXTURES=(simple peers scoped optional-deps alias file-dep peer-meta deep-graph postinstall)
+ALL_FIXTURES=(simple peers scoped optional-deps alias file-dep peer-meta deep-graph postinstall overrides-ref patched-deps)
 FIXTURES=("$@")
 [ ${#FIXTURES[@]} -gt 0 ] || FIXTURES=("${ALL_FIXTURES[@]}")
 
@@ -132,6 +132,30 @@ skip_reason() {
     # mismatches, not nub bugs.
     alias--A--yarn) echo "yarn v1 alias syntax diverges from npm: protocol" ;;
     alias--B--yarn) echo "yarn v1 alias syntax diverges from npm: protocol" ;;
+  esac
+
+  # Feature fixtures are scoped to the PM whose lockfile encodes the diverging
+  # field — running them against the other PMs would test nothing. Skip the
+  # off-PM combos by design (the field has no representation there).
+  #   overrides-ref / patched-deps : pnpm-only (pnpm.overrides $-refs;
+  #     patchedDependencies live in pnpm-workspace.yaml / pnpm-lock.yaml).
+  case "$fixture" in
+    overrides-ref|patched-deps)
+      [ "$pm" != "pnpm" ] && echo "$fixture exercises a pnpm-only lockfile field; not represented in $pm"
+      ;;
+  esac
+
+  # overrides-ref carries a `pnpm.overrides` block. A nub-identity project
+  # consumes only neutral cross-tool fields (overrides/resolutions), never
+  # another PM's branded config — so nub deliberately IGNORES `pnpm.overrides`
+  # when it writes the lockfile (the symmetric brand boundary). Direction B
+  # then can't match real pnpm, which DOES honor `pnpm.overrides`: pnpm rejects
+  # nub's override-free lockfile with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH. That is
+  # intended divergence, not a fixable lockfile-writer bug. (Direction A is a
+  # real bug — pnpm wrote the lockfile, nub mis-reads the $-ref — gated in
+  # expected-failures.txt as #16.)
+  case "$fixture--$dir" in
+    overrides-ref--B) echo "nub-identity ignores pnpm.overrides by design (brand boundary); pnpm honors it" ;;
   esac
 }
 
