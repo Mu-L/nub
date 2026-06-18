@@ -17,6 +17,15 @@ npm install -g --ignore-scripts=false @nubjs/nub
 
 That puts `nub` and `nubx` on your `PATH`.
 
+For GitHub Actions, use [`nubjs/setup-nub`](https://github.com/nubjs/setup-nub) in place of `actions/setup-node`:
+
+```diff
+- - uses: actions/setup-node@v4
++ - uses: nubjs/setup-nub@v1
+```
+
+It installs Nub, can pre-provision the project's Node, and can cache Nub's store.
+
 ## Quickstart
 
 ```sh

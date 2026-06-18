@@ -349,9 +349,10 @@ Signals, in precedence order:
    - `bun.lock` → Bun
    - `yarn.lock` → Yarn
    - `package-lock.json` / `npm-shrinkwrap.json` → npm
+   - `lock.yaml` → Nub
 
    Lockfiles for two different managers are a hard error (`ERR_AUBE_LOCKFILE_AMBIGUOUS`) — Nub refuses to guess which owns the project. Declare one with `nub pm use <pm>`, or remove the stale lockfile.
-4. **Nothing present** — a fresh project starts in pnpm-compatible shape and writes `pnpm-lock.yaml`. Use `nub pm use nub` when you want Nub, rather than pnpm compatibility, to own the project.
+4. **Nothing present** — a fresh project starts in Nub identity and writes `lock.yaml`.
 
 In a workspace, only the **root** carries the declaration and lockfile; Nub walks up from the working directory, so a member package resolves to the root's identity.
 
@@ -389,7 +390,7 @@ Error: ERR_NUB_LOCKFILE_DECLARATION_MISMATCH
   help: set the declaration: nub pm use <pm> — or remove the stale lockfile
 ```
 
-Under nub identity, Nub's own `pnpm-lock.yaml` does **not** silently outrank a foreign lockfile beside it — that pairing is the ambiguity error.
+Under Nub identity, `lock.yaml` beside a foreign lockfile is the ambiguity error.
 </Callout>
 
 <Callout title="Inference vs the pinned PM">
@@ -431,6 +432,7 @@ Like pnpm, Nub relinks files from the global store into `node_modules` via refli
     { cmd: 'pnpm install', ms: 2847, ratio: 2.5 },
     { cmd: 'npm ci', ms: 4163, ratio: 3.7 },
   ]}
+  source="https://github.com/nubjs/nub/tree/main/tests/bench/install"
 />
 
 <Callout title="Warm reinstall, not cold">

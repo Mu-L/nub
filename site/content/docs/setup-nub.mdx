@@ -5,12 +5,13 @@ description: A drop-in replacement for the official setup-node action. Swap one 
 
 Swap `actions/setup-node` for `nubjs/setup-nub` and the rest of your workflow keeps working:
 
-```yaml
+```diff
 steps:
   - uses: actions/checkout@v4
-  - uses: nubjs/setup-nub@v1
+-   - uses: actions/setup-node@v4
++   - uses: nubjs/setup-nub@v1
   - run: nub install
-  - run: nub test
+  - run: nub run test
 ```
 
 The action installs the `nub` CLI onto the runner. From there Nub resolves and provisions the project's pinned Node itself, so you no longer pick a Node version in the workflow — the pin in `.node-version` / `.nvmrc` / `engines.node` is the single source of truth.
@@ -21,16 +22,14 @@ The `actions/setup-node` action installs a Node version *you* name in the workfl
 
 That makes the inputs you'd reach for different:
 
-```yaml
-# setup-node — the workflow picks the Node version
-- uses: actions/setup-node@v4
-  with:
-    node-version: 22
-
-# setup-nub — the project pin picks the Node version
-- uses: nubjs/setup-nub@v1
-# nub reads .node-version / .nvmrc / engines.node on first run
+```diff
+- - uses: actions/setup-node@v4
+-   with:
+-     node-version: 22
++ - uses: nubjs/setup-nub@v1
 ```
+
+Nub reads `.node-version`, `.nvmrc`, or `engines.node` on first run.
 
 The setup-node inputs (`node-version`, `cache`, `registry-url`, …) are all accepted, so a mechanical swap is safe. The ones Nub can't honor are accepted and ignored rather than erroring.
 
@@ -89,7 +88,7 @@ A `cache-hit` output reports whether the store was restored. A `restore-keys` la
 
 ## registry-url
 
-Set up authenticated registry access. The action writes a project-level `.npmrc` — the neutral file Nub's package manager reads — and binds the auth token to the `NODE_AUTH_TOKEN` environment variable:
+Set up authenticated registry access. The action writes a temporary `.npmrc` — the neutral file Nub's package manager reads — and binds the auth token to the `NODE_AUTH_TOKEN` environment variable:
 
 ```yaml
 - uses: nubjs/setup-nub@v1
@@ -132,12 +131,11 @@ Pin the CLI version to install — any semver range npm understands. Defaults to
 | `node-version-file` | | Read a Node version from a file and pre-provision it. |
 | `cache` | `false` | Cache Nub's store and provisioned Node toolchains across runs. |
 | `cache-dependency-path` | | Lockfile path(s) whose hash keys the cache. |
-| `registry-url` | | Registry to set up for auth; writes a project-level `.npmrc`. |
+| `registry-url` | | Registry to set up for auth; writes a temporary `.npmrc`. |
 | `scope` | | Scope for a scoped registry; falls back to the repository owner for GitHub Packages. |
 | `always-auth` | `false` | Authenticate on every registry request. |
-| `token` | `github.token` | Token for GitHub-API rate-limit relief when resolving versions. |
 
-The setup-node inputs `check-latest`, `architecture`, `mirror`, and `mirror-token` are accepted and ignored — present so a swap never errors, with no effect in v1. A `version` input survives as a deprecated alias for `nub-version` and emits a warning.
+The setup-node inputs `token`, `check-latest`, `architecture`, `mirror`, and `mirror-token` are accepted and ignored — present so a swap never errors, with no effect in v1. A `version` input survives as a deprecated alias for `nub-version` and emits a warning.
 
 ## Outputs
 

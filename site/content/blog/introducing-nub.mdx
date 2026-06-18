@@ -33,7 +33,7 @@ Bun and Deno proved there's enormous appetite for an all-in-one toolkit that rep
 
 ## Introducing Nub
 
-Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so the runtime underneath *is* Node. On Deno's own cross-runtime Node-compatibility corpus it clears 98.8% of what real Node passes, versus 77.9% for Deno and 40.7% for Bun. It combines:
+Nub embraces it instead. It's a single Rust binary that transpiles your code and executes it on the stock `node` your project pins — so the runtime underneath *is* Node. On Deno's own cross-runtime Node-compatibility corpus it clears 98.8% of what real Node passes, versus 77.4% for Deno and 40.5% for Bun. It combines:
 
 ```console
 $ nub index.ts             # file runner — full TypeScript, on stock Node
@@ -66,7 +66,7 @@ The transpile costs nothing measurable: running a TypeScript file adds negligibl
 
 <Bench
   label="hello.ts · 20 runs"
-  source="https://github.com/nubjs/nub/tree/main/benchmarks"
+  source="https://github.com/nubjs/nub/blob/main/benchmarks/results.md#direct-ts-execution-nub-hellots-vs-node-vs-tsx-vs-bun"
   accent="ember"
   max={128}
   rows={[
@@ -351,18 +351,19 @@ Both `pnpm` and `npm` are themselves Node.js programs: every `pnpm run <script>`
 **Script-runner overhead** — a pure-shell `echo` noop, so the figure isolates the runner's dispatch overhead, removing the per-call JS startup that `pnpm` and `npm` pay before your script's first byte:
 
 <Bench
-  label="echo noop · pure shell · 100 runs"
-  source="https://github.com/nubjs/nub/tree/main/benchmarks"
+  label="script dispatch · warm · 50 runs"
+  source="https://github.com/nubjs/nub/tree/main/tests/bench/script-runner"
   accent="acid"
-  max={356}
+  max={442.7}
   rows={[
-    { cmd: 'nub run', ms: 14, us: true },
-    { cmd: 'npm run', ms: 320, ratio: 22 },
-    { cmd: 'pnpm run', ms: 356, ratio: 25 },
+    { cmd: 'nub run', ms: 14.7, us: true },
+    { cmd: 'node --run', ms: 32.2, ratio: 2.2 },
+    { cmd: 'npm run', ms: 329.9, ratio: 22 },
+    { cmd: 'pnpm run', ms: 442.7, ratio: 30 },
   ]}
 />
 
-The benchmarked script is identical on every row — the delta is pure wrapper overhead. Methodology: 3 warmup runs, 100 timed runs, Apple M1 Max, Node 24.14.0 — the numbers are machine-specific, the ratios are the portable claim. Reproduce with [`benchmarks/`](https://github.com/nubjs/nub/tree/main/benchmarks).
+The benchmarked script is identical on every row — the delta is pure wrapper overhead. The numbers are machine-specific; the ratios are the portable claim. Reproduce with [`tests/bench/script-runner`](https://github.com/nubjs/nub/tree/main/tests/bench/script-runner).
 
 ### Workspace-aware
 
@@ -382,7 +383,7 @@ nub -r --workspace-concurrency 4 build   # cap parallel jobs
 
 Everything your scripts depend on still works — `npm_*` env vars, `pre`/`post` lifecycle hooks, `node_modules/.bin` resolution in monorepos, and the `.npmrc#script-shell` config key.
 
-> Node 22 shipped its own script runner, `node --run` — roughly 6× faster than `npm run` per Node's own benchmarks, but deliberately stripped down (no lifecycle hooks, no `npm_*` env vars, no workspaces) in ways that break most real projects.
+> Node 22 shipped its own script runner, `node --run` — genuinely fast, but deliberately stripped down (no lifecycle hooks, no `npm_*` env vars, no workspaces) in ways that break most real projects.
 
 ### Subprocesses inherit augmentation
 
@@ -406,7 +407,7 @@ The `.bin` walk-up happens in Rust and the binary is exec'd directly — no Node
 
 <Bench
   label="esbuild --version · 20 runs"
-  source="https://github.com/nubjs/nub/tree/main/benchmarks"
+  source="https://github.com/nubjs/nub/blob/main/benchmarks/results.md#bin-runner-nubx--nub-exec-vs-pnpm-exec-vs-npx"
   accent="sky"
   max={226}
   rows={[
@@ -441,7 +442,7 @@ Like pnpm, Nub keeps package files in a global content-addressed store and links
 
 <Bench
   label="warm frozen install · create-t3-app · 222 deps · macOS"
-  source="https://github.com/nubjs/nub/tree/main/tests/bench"
+  source="https://github.com/nubjs/nub/tree/main/tests/bench/install"
   accent="pink"
   max={4163}
   rows={[
@@ -489,7 +490,7 @@ There are no Nub-specific APIs.
 - No `nub:*` module namespace
 - No `@nub/*` npm scope
 - No `"nub"` field in `package.json`
-- No Nub lockfile
+- No nub-named lockfile
 - No Nub-named config files
 
 Everything Nub ships is one of:

@@ -8,9 +8,10 @@
     "nubx",
     "install",
     "node",
-    "setup-nub",
     "pm",
     "pm-shim",
-    "faq"
+    "faq",
+    "---",
+    "setup-nub"
   ]
 }

@@ -90,7 +90,14 @@ Yes — Linux (x64, arm64), macOS (x64, arm64), Windows (x64). Same platforms th
 
 ## How do I use it in CI / GitHub Actions?
 
-Swap `actions/setup-node` for [`nubjs/setup-nub`](/docs/setup-nub) — it installs the nub CLI onto the runner, and from there Nub provisions the project's pinned Node itself. The action also pre-provisions a warm-up Node version and caches Nub's store across runs. See the [GitHub Action](/docs/setup-nub) page for the full input surface.
+Swap `actions/setup-node` for [`nubjs/setup-nub`](/docs/setup-nub):
+
+```diff
+- - uses: actions/setup-node@v4
++ - uses: nubjs/setup-nub@v1
+```
+
+The action installs the nub CLI onto the runner, and from there Nub provisions the project's pinned Node itself. It also pre-provisions a warm-up Node version and caches Nub's store across runs. See the [GitHub Action](/docs/setup-nub) page for the full input surface.
 
 ## Does it replace my package manager?
 
@@ -266,7 +273,7 @@ The rest of the hot path delegates to crates the Rust JavaScript-tooling ecosyst
 
 ## How is it different from Bun?
 
-Bun is a from-scratch JavaScript runtime built on JavaScriptCore, with its own module loader, package manager, test runner, bundler, and `Bun.*` API surface. The tradeoff is lock-in: "I wrote this on Bun" eventually becomes "this only runs on Bun," because these get baked into application code, and the path back to Node is a rewrite:
+Bun is a from-scratch JavaScript runtime built on JavaScriptCore, with its own module loader, package manager, test runner, bundler, and `Bun.*` API surface. Code that uses those surfaces is Bun-specific:
 
 ```text
 Bun.serve()
@@ -276,20 +283,20 @@ the Bun global
 @types/bun
 ```
 
-Nub is the inverse bet — the compatibility surface stays Node's, with nothing baked in:
+Nub keeps application code on Node's public surface:
 
 ```text
 no globalThis.nub
 no nub:* module namespace
 no @nub/* npm scope
-no NUB_* environment variables
+no "nub" field in package.json
 ```
 
-The augmentations Nub applies all work on plain Node with the matching `module.register()` / `--import` / npm addon. Most of Bun's "all-in-one" pitch is now either native to Node or implementable on top of it; Nub assembles the rest. Bun was designed in 2022, before Node exposed `module.register()` (Node 20.6, August 2023) and `module.registerHooks()` (Node 22.15, April 2025) — the build-vs.-extend tradeoff has tipped since.
+The augmentations Nub applies all work on plain Node with the matching `module.register()` / `--import` / npm addon. Nub focuses on the pieces Node now exposes as extension surfaces: TypeScript loading, script and package orchestration, package management, and version provisioning.
 
 ## How is it different from Deno?
 
-Deno is a from-scratch runtime built on V8, with its own permissions model, standard library, module resolution (URL imports, `jsr:` specifiers), and `Deno.*` API surface. Like Bun, it bakes the runtime name into application code, and the path back to Node is a rewrite:
+Deno is a from-scratch runtime built on V8, with its own permissions model, standard library, module resolution (URL imports, `jsr:` specifiers), and `Deno.*` API surface. Code that uses those surfaces is Deno-specific:
 
 ```text
 Deno.serve()
@@ -297,7 +304,7 @@ Deno.env
 Deno.readTextFile
 ```
 
-Deno's Node compatibility layer has improved a lot, but it's a compatibility layer — a translation of Node semantics into Deno's runtime — not the same execution surface. Nub runs on the actual Node binary you installed; if a package works on Node, it works on Nub, by construction. Deno's first commit is from 2018, three years before `module.register()` and seven before `module.registerHooks()` — the build-vs.-extend tradeoff was different then.
+Deno implements Node compatibility inside Deno. Nub runs on the actual Node binary you installed; if a package works on Node, it works on Nub, by construction.
 
 ## How is it different from `node --run`?
 
@@ -307,7 +314,7 @@ Node shipped a built-in script runner in 22.0 — `node --run` — and it's genu
 - No workspaces — no recursive or filtered runs across a monorepo.
 - No `npm_*` environment variables (`npm_package_*`, `npm_config_*`, `npm_lifecycle_event`) that countless scripts read.
 
-The `nub run` command is just as fast and closes all three, so scripts written for `npm` or `pnpm` keep working unchanged.
+The `nub run` command is just as fast in the [script-runner benchmark](https://github.com/nubjs/nub/tree/main/tests/bench/script-runner) and closes all three, so scripts written for `npm` or `pnpm` keep working unchanged.
 
 ## What if I want to stop using Nub?
 
@@ -317,7 +324,6 @@ Your codebase keeps working on plain Node, unchanged. Nub adds no APIs to your c
 no globalThis.nub
 no nub:* module namespace
 no @nub/* npm scope
-no NUB_* environment variables
 no "nub" field in package.json
 ```
 

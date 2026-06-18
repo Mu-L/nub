@@ -147,7 +147,7 @@ const heroLines = (major: string) => [
   { cmd: 'nub index.ts', comment: 'TypeScript-first Node.js runtime' },
   { cmd: 'nub run dev', comment: '24× faster pnpm run' },
   { cmd: 'nubx prisma generate', comment: '19× faster npx' },
-  { cmd: 'nub install', comment: '2.7× faster pnpm install' },
+  { cmd: 'nub install', comment: '2.5× faster pnpm install' },
   { cmd: 'nub watch src/server.ts', comment: 'native watch mode' },
   { cmd: 'nub pm shim', comment: 'built-in Corepack-style shims' },
   { cmd: `nub node install ${major}`, comment: 'Node version manager' },
@@ -439,7 +439,7 @@ import flags  from "./feature.jsonc" // comments stripped
 import pkg    from "./Cargo.toml"    // parsed object
 import prompt from "./prompt.txt"    // string
 
-import { host, port } from "./config.yaml" // named exports`}
+const { host, port } = config        // destructure fields`}
               />
             }
           />
@@ -520,9 +520,7 @@ import { host, port } from "./config.yaml" // named exports`}
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: benchmarks/README.md "Direct TS execution" + benchmark-credibility.md §2.
-                    nub transpiles via native addon (no second process) → ties node on a .ts file;
-                    ~2.9× faster than tsx. Absolutes from a quiet M1 Max (re-cite from quiet box). */}
+                {/* Source: benchmarks/results.md "Direct TS execution". */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   run a TypeScript file · macOS
                 </p>
@@ -536,7 +534,7 @@ import { host, port } from "./config.yaml" // named exports`}
                   ]}
                 />
                 <a
-                  href="https://github.com/nubjs/nub/tree/main/benchmarks"
+                  href="https://github.com/nubjs/nub/blob/main/benchmarks/results.md#direct-ts-execution-nub-hellots-vs-node-vs-tsx-vs-bun"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 inline-block py-1.5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground underline decoration-dotted decoration-fd-muted-foreground/60 underline-offset-4 hover:text-fd-foreground"
@@ -618,7 +616,7 @@ const APIS: { name: string; label: string }[] = [
   { name: 'URLPattern', label: 'Polyfilled < 24' },
   { name: 'WebSocket', label: 'Unflagged < 22' },
   { name: 'navigator.locks', label: 'Auto-polyfilled' },
-  { name: 'localStorage', label: 'Unflagged < 25' },
+  { name: 'localStorage', label: 'Auto-unflagged' },
   { name: 'EventSource', label: 'Auto-unflagged' },
   { name: 'node:sqlite', label: 'Unflagged < 23' },
   { name: 'vm.Module', label: 'Auto-unflagged' },
@@ -695,11 +693,7 @@ function RunScriptBand() {
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: warm script-dispatch bench, M1 Max, Node v26.2.0, hyperfine 50 runs.
-                    nub run 14.7 / node --run 32.2 / npm run 329.9 / pnpm run 442.7 ms.
-                    nub dispatches in Rust with no Node bootstrap, so it beats Node's own
-                    `node --run` (~2.2×), which boots V8 just to dispatch. Same four numbers
-                    as the script-runner docs bench (site/content/docs/run.mdx) — keep in sync. */}
+                {/* Source: tests/bench/script-runner, warm script-dispatch bench, M1 Max, Node v26.2.0, hyperfine 50 runs. */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   script dispatch · warm · 50 runs · macOS
                 </p>
@@ -714,7 +708,7 @@ function RunScriptBand() {
                   ]}
                 />
                 <a
-                  href="https://github.com/nubjs/nub/tree/main/benchmarks"
+                  href="https://github.com/nubjs/nub/tree/main/tests/bench/script-runner"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 inline-block py-1.5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground underline decoration-dotted decoration-fd-muted-foreground/60 underline-offset-4 hover:text-fd-foreground"
@@ -732,7 +726,7 @@ function RunScriptBand() {
             title={<>Flag-for-flag compatible with <HeadingCode>pnpm run</HeadingCode></>}
             body={
               <>
-                Nub speaks <Mono>pnpm run</Mono>&rsquo;s flags with the same spelling and
+                Nub accepts <Mono>pnpm run</Mono>&rsquo;s flags with the same spelling and
                 semantics, down to the obscure recursive ones. Swap <Mono>pnpm</Mono>{' '}for{' '}
                 <Mono>nub</Mono>{' '}and your CI scripts run unchanged, only faster.
               </>
@@ -813,9 +807,7 @@ function NubxBand() {
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: benchmarks/README.md + benchmarks/results.md "Bin runner" section.
-                    esbuild (native Go binary, no Node boot) is the clean wrapper-speed measure.
-                    Numbers: wiki/research/benchmark-credibility.md §4 (round 20× → ~19× npx / ~17× pnpm exec; re-cite from quiet box). */}
+                {/* Source: benchmarks/results.md "Bin runner". */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   esbuild --version · macOS
                 </p>
@@ -829,7 +821,7 @@ function NubxBand() {
                   ]}
                 />
                 <a
-                  href="https://github.com/nubjs/nub/tree/main/benchmarks"
+                  href="https://github.com/nubjs/nub/blob/main/benchmarks/results.md#bin-runner-nubx--nub-exec-vs-pnpm-exec-vs-npx"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 inline-block py-1.5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground underline decoration-dotted decoration-fd-muted-foreground/60 underline-offset-4 hover:text-fd-foreground"
@@ -894,16 +886,12 @@ function NubxBand() {
 
 /* ------------------------------------------------------------ Compatibility */
 
-/* Source: the Deno cross-runtime Node-compat corpus (colinhacks/node_test @ node-25.8.1), node-relative.
-   nub + Node are OUR fresh measurement (tests/cross-runtime/ run.mjs, quiet-box, Node 25.8.1):
-   nub 4315 / node 4368 = 98.8%. The Deno and Bun figures are Deno's own published numbers
-   (deno.com/blog/v2.8) — NOT re-measured here. Rates = runtime_pass / node_pass. The same 98.8%
-   nub figure is the headline in the blog. */
+/* Source: tests/cross-runtime/results.json, using Deno's Node-compat corpus (colinhacks/node_test @ node-25.8.1). Rates = runtime_pass / node_pass. */
 const COMPAT = [
   { name: 'Node 25.8', rate: 100, tests: '4,368 / 4,368', us: false, dim: false },
   { name: 'Nub', rate: 98.8, tests: '4,315 / 4,368', us: true, dim: false },
-  { name: 'Deno 2.8', rate: 77.9, tests: '3,370 / 4,324', us: false, dim: true },
-  { name: 'Bun 1.3.14', rate: 40.7, tests: '1,760 / 4,324', us: false, dim: true },
+  { name: 'Deno 2.8', rate: 77.4, tests: '3,380 / 4,368', us: false, dim: true },
+  { name: 'Bun 1.3.14', rate: 40.5, tests: '1,770 / 4,368', us: false, dim: true },
 ];
 
 function Compatibility() {
@@ -953,7 +941,7 @@ function Compatibility() {
           })}
         </div>
         <p className="mx-auto mt-6 max-w-lg text-center text-sm leading-relaxed text-fd-muted-foreground">
-          Deno&rsquo;s own Node-compat corpus, scored against stock Node. Nub's failures are due to the fact that it auto-enables experimental features and uses Node addons.<br/>
+          Deno&rsquo;s Node-compat corpus, scored against stock Node.<br/>
           <a
             href="https://github.com/nubjs/nub/tree/main/tests/cross-runtime"
             target="_blank"
@@ -974,7 +962,7 @@ const RULES = [
   'No nub:* module namespace',
   'No @nub/* npm scope',
   'No "nub" field in package.json',
-  'No Nub lockfile',
+  'No nub-named lockfile',
 ];
 
 /* -------------------------------------------------------------- Final CTA */
@@ -1082,7 +1070,7 @@ function HypermanagerBand() {
           command="nub install"
           title={
             <>
-              A <span className="text-pink">3×</span> faster pnpm
+              A <span className="text-pink">2.5×</span> faster pnpm
             </>
           }
           subhead={
@@ -1135,7 +1123,7 @@ function HypermanagerBand() {
             title={<>Drop-in <HeadingCode>pnpm</HeadingCode> compatibility</>}
             body={
               <>
-                Nub&rsquo;s <Mono>install</Mono>{' '}and <Mono>add</Mono>{' '}speak pnpm&rsquo;s flags
+                Nub&rsquo;s <Mono>install</Mono>{' '}and <Mono>add</Mono>{' '}accept pnpm&rsquo;s flags
                 with the same spelling and semantics, down to advanced features like the workspace
                 catalog. Swap <Mono>pnpm</Mono>{' '}for <Mono>nub</Mono>{' '}and your install commands
                 run unchanged.
@@ -1166,11 +1154,7 @@ function HypermanagerBand() {
             }
             visual={
               <div className="rounded-xl border border-fd-border bg-[#0b0a08] p-6">
-                {/* Source: tests/bench/results/warm-t3-20260617-{100017,100453,100743}.json
-                    (create-t3-app, Next 16) across nub / bun / pnpm / npm, warm + frozen + offline,
-                    node_modules wiped between runs. Bars are the arithmetic MEAN across all 36 timed runs
-                    (12 per file): nub 1122 / bun 1444 / pnpm 2847 / npm 4163 ms. Nub fastest by mean,
-                    with disjoint σ-bands vs bun (a real win, not a tie). */}
+                {/* Source: tests/bench/install/results/warm-t3-20260617-{100017,100453,100743}.json (create-t3-app, Next 16), warm + frozen + offline, node_modules wiped between runs. Bars are arithmetic means across 36 timed runs. */}
                 <p className="mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground">
                   warm frozen install · create-t3-app · 222 deps · macOS
                 </p>
@@ -1186,7 +1170,7 @@ function HypermanagerBand() {
                   ]}
                 />
                 <a
-                  href="https://github.com/nubjs/nub/blob/main/tests/bench/README.md"
+                  href="https://github.com/nubjs/nub/blob/main/tests/bench/install/README.md"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 inline-block py-1.5 font-mono text-[0.7rem] uppercase tracking-[0.14em] text-fd-muted-foreground underline decoration-dotted decoration-fd-muted-foreground/60 underline-offset-4 hover:text-fd-foreground"

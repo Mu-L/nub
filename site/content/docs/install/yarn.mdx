@@ -60,7 +60,7 @@ nub dedupe          # → yarn dedupe
 
 The same gate fires on an `install` / `ci` that *would* rewrite the lockfile rather than just read it: a project that declares Yarn but has no `yarn.lock` yet, `nub install --force` / `--no-frozen-lockfile` / `--lockfile-only`, or a `yarn.lock` that no longer satisfies `package.json`. Run `yarn install` for those.
 
-There is no path that converts *to* `yarn.lock`. The `nub import` command produces Nub's own `pnpm-lock.yaml`:
+There is no path that converts *to* `yarn.lock`. The `nub import` command produces a `pnpm-lock.yaml`:
 
 ```console
 $ nub import        # in a yarn project

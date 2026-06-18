@@ -39,10 +39,10 @@ The central fact that reshapes everything: **nub already does jobs (1) and (3) i
 | `node-version-file` | **ADAPT** | nub reads `.node-version`/`.nvmrc`/`package.json` natively — so a passthrough is mostly redundant. Keep it as a thin pre-warm hint: if set, read that file and `nub node install` the resolved version (same warm-cache benefit, explicit file). Most users set neither and rely on nub's own resolution. See [HQ1](#hq1). |
 | `check-latest` | **ADAPT** | In `setup-node` this means "re-resolve the spec against the dist index instead of the tool-cache." For nub it maps to: when pre-provisioning, pass nub's "resolve latest matching" rather than reuse a cached match. LOW value (nub's resolver already does the right thing on first run). Recommend **N/A for v1**, add later if asked. See [HQ1](#hq1). |
 | `architecture` | **N/A** | nub picks the runner's native arch automatically (the `@nubjs/nub-<platform>` optional dep is os/cpu-filtered by npm; provisioned Node matches the runner). Cross-arch Node on CI is a rare/expert case nub doesn't expose. Document as unsupported rather than add a knob nobody exercises. |
-| `registry-url` | **MIRROR (semantics adapted to neutral file)** | Write a project `.npmrc` with `registry=<url>` + `//<host>/:_authToken=${NODE_AUTH_TOKEN}`. **This is brand-clean**: `.npmrc` is the neutral, cross-tool file nub's PM already reads (`publish_family.rs:25`). No branded file. See [HQ3](#hq3). |
+| `registry-url` | **MIRROR (semantics adapted to neutral file)** | Write a temporary `.npmrc` with `registry=<url>` + `//<host>/:_authToken=${NODE_AUTH_TOKEN}`. **This is brand-clean**: `.npmrc` is the neutral, cross-tool file nub's PM already reads (`publish_family.rs:25`). No branded file. See [HQ3](#hq3). |
 | `scope` | **MIRROR** | `<scope>:registry=<url>` line in the same `.npmrc`. Falls back to repo owner for `npm.pkg.github.com` (exact `setup-node` behavior). See [HQ3](#hq3). |
 | `always-auth` | **MIRROR (as `always-auth`)** | Writes `always-auth=true` into `.npmrc`. (Note: `setup-node`'s current `action.yml` doesn't list `always-auth` as a named input anymore but `authutil` history + many workflows still pass it; mirror for compat. LOW priority.) See [HQ3](#hq3). |
-| `token` | **MIRROR** | Same default expression (`github.token` on github.com, else empty). Used only for GitHub-API rate-limit relief when resolving nub's *own* version range from npm, and (if we pre-provision) for Node downloads from a mirror. See [HQ3](#hq3). |
+| `token` | **IGNORE v1** | Accepted for setup-node compatibility; not used by the composite action. |
 | `cache` | **ADAPT** | `setup-node`'s `cache: npm\|yarn\|pnpm` selects WHICH pm's store to cache. nub has ONE store regardless of incumbent lockfile, so the value is a **boolean** `cache: true`, not a pm name. When true, cache nub's CAS store + PM cache + provisioned toolchains (paths below). See [HQ2](#hq2) — highest-value field. |
 | `package-manager-cache` | **N/A** | This is `setup-node`'s auto-enable-npm-caching heuristic. nub's `cache` is explicit opt-in; no auto-detection layer needed. Fold into `cache`. |
 | `cache-dependency-path` | **MIRROR** | The lockfile glob that forms the cache key. nub keys on the project's lockfile (`pnpm-lock.yaml` / `package-lock.json` / `bun.lock` / `yarn.lock`, whichever is present) plus the resolved `.node-version`. See [HQ2](#hq2). |
@@ -102,11 +102,11 @@ Keying on the lockfile (`cache-dependency-path`, default = auto-detect the prese
 
 **Implementation primitives (don't hardcode paths).** nub exposes scriptable commands the action should lean on instead of literal paths: `nub store path` prints the resolved CAS store dir (`store_config_family.rs:13-15`) — derive the `actions/cache` path from it rather than hardcoding `~/.local/share/nub/store/v1`, so an `XDG_DATA_HOME` override or a future layout change doesn't silently break caching. For an explicit pre-warm beyond restore, `nub store add <pkg>` populates the global store without touching `node_modules` (`wiki/commands/pm/store.md:28`) — though for CI the simpler warm path is just `nub ci` after a cache restore.
 
-### HQ3 — `registry-url` / `scope` / `always-auth` / `token` (auth)
+### HQ3 — `registry-url` / `scope` / `always-auth` (auth)
 
 **The brand-boundary check passes cleanly.** `setup-node` writes a project-level `.npmrc` with the registry + `:_authToken=${NODE_AUTH_TOKEN}` and exports `NPM_CONFIG_USERCONFIG` to point at it. nub's PM reads exactly that standard `.npmrc` (registry, `_authToken`, `<scope>:registry`, `NPM_TOKEN` — `publish_family.rs:25`, `aube-resolver/error.rs:335`). So `setup-nub` writes the **identical neutral `.npmrc`** `setup-node` does — no branded file, no `nub`-named config, fully consistent with the symmetric brand boundary (nub never emits its brand into your config and reads only neutral fields).
 
-**RECOMMENDATION: MIRROR `registry-url` / `scope` / `token` exactly** (same `.npmrc` lines, same `NODE_AUTH_TOKEN` env contract, same `RUNNER_TEMP/.npmrc` + `NPM_CONFIG_USERCONFIG` export). **Mirror `always-auth`** too (low priority). The auth story is byte-for-byte `setup-node`'s — that's the point, and it's brand-clean because the file is neutral. **To confirm:** reuse `setup-node`'s `NODE_AUTH_TOKEN` env-var name (yes — it's the ecosystem convention every workflow already sets; a `NUB_AUTH_TOKEN` rename would break the drop-in and add brand surface for no gain).
+**RECOMMENDATION: MIRROR `registry-url` / `scope` exactly** (same `.npmrc` lines, same `NODE_AUTH_TOKEN` env contract, same `RUNNER_TEMP/.npmrc` + `NPM_CONFIG_USERCONFIG` export). **Mirror `always-auth`** too. The auth story is byte-for-byte `setup-node`'s — that's the point, and it's brand-clean because the file is neutral. **To confirm:** reuse `setup-node`'s `NODE_AUTH_TOKEN` env-var name (yes — it's the ecosystem convention every workflow already sets; a `NUB_AUTH_TOKEN` rename would break the drop-in and add brand surface for no gain).
 
 ### HQ4 — Outputs
 
@@ -161,19 +161,18 @@ inputs:
     description: "Lockfile path(s) whose hash keys the cache. Supports globs / newline-delimited lists. Default: auto-detect the project's lockfile."
     required: false
   registry-url:
-    description: "Registry to set up for auth. Writes a project-level .npmrc (neutral, the file nub's PM reads) and wires auth to env.NODE_AUTH_TOKEN."
+    description: "Registry to set up for auth. Writes a temporary .npmrc (neutral, the file nub's PM reads) and wires auth to env.NODE_AUTH_TOKEN."
     required: false
   scope:
     description: "Scope for a scoped registry. Falls back to the repository owner for GitHub Packages (npm.pkg.github.com)."
     required: false
   always-auth:
-    description: "Write always-auth=true into the project .npmrc."
+    description: "Write always-auth=true into the temporary .npmrc."
     required: false
     default: "false"
   token:
-    description: "Token for GitHub-API rate-limit relief when resolving nub's version range (and Node downloads on GHES). Defaults to github.token on github.com."
+    description: "Accepted for setup-node compatibility; ignored in v1."
     required: false
-    default: ${{ github.server_url == 'https://github.com' && github.token || '' }}
 
 outputs:
   nub-version:
@@ -210,7 +209,7 @@ runs:
       if: inputs.registry-url != ''
       shell: bash
       run: |
-        # Write neutral project .npmrc (registry, scope:registry, _authToken=${NODE_AUTH_TOKEN},
+        # Write neutral temporary .npmrc (registry, scope:registry, _authToken=${NODE_AUTH_TOKEN},
         # always-auth) into $RUNNER_TEMP/.npmrc and export NPM_CONFIG_USERCONFIG — byte-for-byte
         # the setup-node authutil contract. nub's PM reads this standard file.
 
@@ -248,7 +247,7 @@ Recommended: a `v0` branch (or lightweight tag) the release workflow advances to
 
 1. **`version` → `nub-version` rename** (HQ5) — public-input rename. Hard-rename now, or keep `version` as a deprecated alias for one minor? **Recommend: rename, with a one-minor warning alias** (cheap, action is barely adopted).
 2. **Expose `node-version` as a pre-provision hint** (HQ1, option ii) vs omit Node inputs entirely (option i). **Recommend: expose as warm-up hint, document it's not a pin, warn on mismatch.**
-3. **Drop `check-latest` / `architecture` / `mirror` / `mirror-token` from v1** (N/A). **Recommend: drop; add only on real demand.**
+3. **Accept and ignore `token` / `check-latest` / `architecture` / `mirror` / `mirror-token` in v1** (setup-node compatibility).
 4. **`cache` default** (HQ2) — `false` (opt-in, pnpm-like) vs `true` (aggressive, setup-node-like). **Recommend: `false` for v1, flip after the smoke matrix proves the paths.**
 5. **`cache` is a boolean, not a pm-name enum** (HQ2) — confirm nub's single-store model means we diverge from `setup-node`'s `cache: npm|yarn|pnpm`. **Recommend: boolean.**
 6. **Cache the three dirs** (`store/v1`, `pm`, `node`), NOT `node_modules/.nub`; key on lockfile + node-version with the `restore-keys` ladder (HQ2). **Recommend: as specified.**
