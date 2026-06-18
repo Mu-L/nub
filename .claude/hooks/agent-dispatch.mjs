@@ -16,7 +16,9 @@ import { loadConfig } from '../../scripts/fray/config.mjs';
 const EPILOGUE = `
 
 ---
-[ORCHESTRATION EPILOGUE — auto-appended by the dispatch hook] End your final report with a \`## Follow-ups\` section so the orchestrator can chain the next steps:
+[ORCHESTRATION EPILOGUE — auto-appended by the dispatch hook] Your final message IS the handoff — make it orchestration-ready: verdict/status; what you did; changed files/artifacts/clone-path/commit SHA when applicable; verification commands + their results; caveats/risks; one concrete next action. A bare "done" or progress-only final message is an INCOMPLETE handoff (a bug), not success.
+THREAD WRITE-OWNERSHIP: if a \`THREAD: <slug>\` tag is at the top of this prompt, you OWN \`.fray/<slug>.md\` — edit it IN PLACE (the Edit tool) to reflect what you did: update \`## Status\` / \`## Decisions\` / \`## Next step\` / \`## Steps\`, keeping the single-voice current-truth discipline (no full-file rewrite, no changelog append — git holds the past). Write detailed artifacts (long traces/tables/write-ups) to a \`.fray/<slug>.findings/<id>.md\` sidecar. Edit ONLY your own dispatched thread, never another thread's \`.md\` or \`config.yml\`.
+End your final report with a \`## Follow-ups\` section so the orchestrator can chain the next steps:
 1. Concrete FOLLOW-UP work your findings/changes imply.
 2. If you implemented something substantial → recommend a SELF-REVIEW pass (a fresh adversarial sub-agent reviewing your diff for correctness/regressions).
 3. If you added/changed code or tests CI should exercise → recommend cutting a push to \`main\` + a CI-watch follow-up to confirm green.
