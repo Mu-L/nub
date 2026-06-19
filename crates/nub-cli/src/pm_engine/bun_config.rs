@@ -97,16 +97,28 @@ fn entries_from_bunfig(root: &Value) -> Vec<(String, String)> {
             _ => {}
         }
     }
-    // Bun's supply-chain age gate: `[install].minimumReleaseAge` (minutes,
-    // matching bun's unit) → the engine's `minimumReleaseAge` setting (same
-    // gate nub reads from `.npmrc`/pnpm config). Without this a bun user's
-    // in-bunfig hardening is silently dropped. `minimumReleaseAgeExcludes`
-    // (bun's spelling) maps to the engine's `minimumReleaseAgeExclude`.
-    if let Some(minutes) = install
+    // Bun's supply-chain age gate: `[install].minimumReleaseAge` → the engine's
+    // `minimumReleaseAge` setting (same gate nub reads from `.npmrc`/pnpm
+    // config). Without this a bun user's in-bunfig hardening is silently
+    // dropped. UNITS DIFFER: bunfig is in SECONDS (bun's
+    // `bunfig.zig`: `minimum_release_age_ms = seconds * ms_per_s`; the error
+    // is "Expected number of seconds"), while the engine setting is in MINUTES
+    // (settings.toml `[minimumReleaseAge]` "(minutes)"; resolver error "older
+    // than N minute(s)"). Convert seconds → minutes (÷60), rounding UP so a
+    // small non-zero bunfig value never collapses to 0 and silently disables
+    // the gate. `minimumReleaseAgeExcludes` (bun's spelling) maps to the
+    // engine's `minimumReleaseAgeExclude`.
+    if let Some(seconds) = install
         .get("minimumReleaseAge")
         .and_then(Value::as_integer)
         .filter(|n| *n >= 0)
     {
+        let minutes = if seconds == 0 {
+            0
+        } else {
+            // Ceiling division: a 30s gate maps to 1 minute, not 0.
+            (seconds + 59) / 60
+        };
         out.push(("minimumReleaseAge".to_string(), minutes.to_string()));
     }
     if let Some(excludes) = install
@@ -340,20 +352,42 @@ mod tests {
     }
 
     #[test]
-    fn maps_minimum_release_age_and_excludes() {
+    fn converts_minimum_release_age_seconds_to_engine_minutes_and_maps_excludes() {
+        // bunfig is in SECONDS (bun docs' example: `259200 # seconds` = 3 days);
+        // the engine setting is in MINUTES. 259200s ÷ 60 = 4320 minutes (3 days),
+        // NOT 259200 of the engine's unit (which would be a 60× over-aggressive
+        // 180-day gate).
         let entries = parsed(
             r#"
             [install]
-            minimumReleaseAge = 1440
+            minimumReleaseAge = 259200
             minimumReleaseAgeExcludes = ["@acme/internal", "trusted-pkg"]
             "#,
         );
 
-        assert!(entries.contains(&("minimumReleaseAge".to_string(), "1440".to_string())));
+        assert!(
+            entries.contains(&("minimumReleaseAge".to_string(), "4320".to_string())),
+            "expected 259200 seconds to convert to 4320 minutes, got {entries:?}"
+        );
         assert!(entries.contains(&(
             "minimumReleaseAgeExclude".to_string(),
             "@acme/internal,trusted-pkg".to_string()
         )));
+    }
+
+    #[test]
+    fn minimum_release_age_rounds_up_so_small_gates_never_disable() {
+        // A 30-second gate must not collapse to 0 minutes (which disables the
+        // gate); ceiling division yields 1 minute.
+        let entries = parsed("[install]\nminimumReleaseAge = 30\n");
+        assert!(
+            entries.contains(&("minimumReleaseAge".to_string(), "1".to_string())),
+            "expected 30 seconds to round up to 1 minute, got {entries:?}"
+        );
+
+        // An explicit 0 stays 0 (gate disabled, matching bun).
+        let zero = parsed("[install]\nminimumReleaseAge = 0\n");
+        assert!(zero.contains(&("minimumReleaseAge".to_string(), "0".to_string())));
     }
 
     #[test]
