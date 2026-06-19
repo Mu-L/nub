@@ -36,7 +36,7 @@ NUB="$(cd "$(dirname "$NUB")" && pwd)/$(basename "$NUB")"
 NUB_VERSION="$("$NUB" --version 2>/dev/null || echo '?')"
 
 # Fixture list — each is a subdirectory of fixtures/
-ALL_FIXTURES=(simple peers scoped optional-deps alias file-dep peer-meta deep-graph postinstall overrides-ref overrides-nested patched-deps catalog workspace workspace-dedup empty-root-importer git-dep platform-optional dist-tag-spec range-forms alias-scoped)
+ALL_FIXTURES=(simple peers scoped optional-deps alias file-dep peer-meta deep-graph postinstall overrides-ref overrides-nested patched-deps catalog workspace workspace-dedup empty-root-importer git-dep platform-optional dist-tag-spec range-forms alias-scoped has-install-script)
 FIXTURES=("$@")
 [ ${#FIXTURES[@]} -gt 0 ] || FIXTURES=("${ALL_FIXTURES[@]}")
 
@@ -161,6 +161,14 @@ skip_reason() {
   case "$fixture" in
     overrides-ref|overrides-nested|patched-deps|catalog)
       [ "$pm" != "pnpm" ] && echo "$fixture exercises a pnpm-only lockfile field; not represented in $pm"
+      ;;
+    has-install-script)
+      # hasInstallScript / deprecated / inBundle / hasShrinkwrap /
+      # bundleDependencies are npm-package-lock.json-specific per-package
+      # keys. pnpm/yarn/bun encode install-script trust differently and
+      # carry no representation of these fields, so the round-trip only
+      # has meaning against npm.
+      [ "$pm" != "npm" ] && echo "$fixture exercises npm-only package-lock.json keys; not represented in $pm"
       ;;
   esac
 

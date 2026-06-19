@@ -56,6 +56,7 @@ Direction A: pnpm 11 writes `pnpm-lock.yaml` (lockfileVersion 9.0) → nub `--fr
 | --- | --- |
 | `simple` | plain registry deps, direct + transitive overlap (`debug` → `ms`), a devDep |
 | `peers` | peer dependencies — `react-dom@18` with a `peerDep` on `react@18`, exercising peer resolution and auto-install |
+| `has-install-script` | npm's per-package verbatim keys — Direction A asserts nub reads a real npm `hasInstallScript` (on `esbuild`) and re-emits it with zero churn; scoped to npm via `skip_reason()` since no other PM's lockfile encodes them. (The `deprecated`/`inBundle`/`hasShrinkwrap`/`bundleDependencies` siblings round-trip through the same verbatim path; `aube-lockfile`'s `test_roundtrip_preserves_npm_verbatim_meta_fields` covers all five.) |
 
 Both are small by design; the goal is a fast, signal-dense suite. The aube-conformance harness (`tests/aube-conformance/`) covers larger fixtures (workspaces, overrides, platform-conditionals, patched deps, git deps) for the Direction B side; this harness adds Direction A and is the regression guard for the bidirectional contract.
 
