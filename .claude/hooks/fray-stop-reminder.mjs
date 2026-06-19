@@ -119,10 +119,13 @@ function threadTouchedSince(sinceMs) {
 function restReminder(n) {
   return [
     `⟦fray REST guard⟧ ${n} background sub-agent rest(s) recorded since you last reconciled.`,
-    'BEFORE going idle: for EACH rested agent, RE-READ its thread .md (not from memory),',
+    'Treat these as a strict INBOX: drain the OLDEST first, ONE at a time, never batch into one merged summary.',
+    'For EACH rested agent, RE-READ its thread .md (not from memory),',
     'fold its findings, and DRAIN its queued follow-ups — OR confirm it is genuinely still running.',
     'A "came to rest" is NOT "done": an agent can rest mid-step and rest repeatedly, so verify the',
     'deliverable actually landed (committed/pushed/CI-green/reported a conclusion) before treating it as complete.',
+    'An EMPTY/missing/progress-only final message is an INCOMPLETE handoff (a bug, not success):',
+    'do NOT mark such a thread done — record it as incomplete/needs-retry and re-dispatch if still needed.',
     'If every rested agent is already reconciled, just stop.',
   ].join(' ');
 }
