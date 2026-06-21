@@ -16,15 +16,21 @@
  * correlation or transcript-read needed.
  *
  * WHAT it does: if `tool_input.prompt` carries a `THREAD: <slug>` tag and the result yields an
- * agentId, APPEND `{id, label}` to `${CLAUDE_PROJECT_DIR}/.fray/<slug>.md`'s `agents:` array
- * (create the array if absent; DEDUPE by id). label = the dispatch `description`. It writes NO
- * per-agent `status:` field — binding only, per derive-don't-store (liveness is DERIVED from
- * output-file mtime + thread status).
+ * agentId, two in-place frontmatter edits on `${CLAUDE_PROJECT_DIR}/.fray/<slug>.md`:
+ *   1. APPEND `{id, label}` to the `agents:` array (create the array if absent; DEDUPE by id).
+ *      label = the dispatch `description`. NO per-agent `status:` is written — binding only, per
+ *      derive-don't-store (agent liveness is DERIVED from output-file mtime + thread status).
+ *   2. SET the thread `status: active` — a fresh THREAD-tagged dispatch means an agent is now
+ *      working it, and `active` is the invariant the liveness derivation flags on. (Active-only
+ *      flagging: a stale agent is surfaced iff the thread is `active`.) This auto-flip ONLY
+ *      happens on a fresh THREAD-tagged Agent dispatch — NOT on a warm-resume (SendMessage) and
+ *      NOT on an untagged dispatch; for those the orchestrator must set `active` by hand (see the
+ *      fray SKILL.md labeling discipline).
  *
  * CONCURRENCY: read-modify-write of the thread .md. Single hook process per dispatch; the only
- * other writer of `agents:` is a human/agent editing the same file rarely — we re-read right
- * before writing and dedupe by id, so a duplicate can't be introduced and a concurrent body
- * edit isn't clobbered (we only rewrite the single `agents:` line / insert one line).
+ * other writer of `agents:`/`status:` is a human/agent editing the same file rarely — each edit
+ * re-reads right before writing and rewrites only its own single line (the `agents:` line and the
+ * `status:` line), so a duplicate can't be introduced and a concurrent body edit isn't clobbered.
  *
  * FAIL-OPEN, ABSOLUTELY: any parse/IO error → no-op (emit {}/exit 0), NEVER block or alter the
  * dispatch. A binding-recorder must never disrupt orchestration.
@@ -119,6 +125,38 @@ function appendBinding(path, id, label) {
   return true;
 }
 
+/**
+ * Set the thread's frontmatter `status: active` (in-flight agent work ⟹ active). Edits only the
+ * single `status:` line within the leading frontmatter block; no-op if already `active` or if the
+ * thread is already terminal (`done`/`dismissed` — a fresh dispatch onto a terminal thread is
+ * unusual, but we don't want to silently reopen one without an explicit decision). Returns true if
+ * a write happened. Fail-soft: re-reads right before writing so a concurrent body edit isn't lost.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function setThreadActive(path) {
+  let src;
+  try {
+    src = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  }
+  // Only operate within the leading frontmatter block.
+  const fm = src.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return false;
+  const statusLine = fm[1].match(/^status:\s*(\S+).*$/m);
+  if (!statusLine) return false; // no status field → leave it for the validator to flag
+  const cur = statusLine[1];
+  if (cur === 'active') return false; // already active → no-op
+  if (cur === 'done' || cur === 'dismissed') return false; // don't silently reopen a terminal thread
+  // Replace only the status line's value, preserving any trailing comment/text after it.
+  const replaced = statusLine[0].replace(/^status:\s*\S+/, 'status: active');
+  const out = src.replace(statusLine[0], replaced);
+  if (out === src) return false;
+  writeFileSync(path, out);
+  return true;
+}
+
 try {
   let input = {};
   try {
@@ -149,6 +187,7 @@ try {
   if (!existsSync(path)) done(); // thread file gone → fail-open
 
   appendBinding(path, agentId, label); // best-effort; ignore false (already bound / no write)
+  setThreadActive(path); // a fresh THREAD-tagged dispatch ⟹ an agent is now working it
   done();
 } catch {
   done(); // fail-open — never disrupt the dispatch

@@ -41,11 +41,6 @@ import { join } from 'node:path';
 
 export const DEFAULT_IDLE_MIN = 10;
 export const DEFAULT_FROZEN_MIN = 25;
-// Upper bound (min) of the recency band for `needs-decision` threads: a stale bound agent
-// on a needs-decision thread is flagged ONLY while younger than this ceiling. Catches the
-// ~37m release-stall window; ignores agents parked for hours (5–11h) on a thread genuinely
-// awaiting a human — those are EXPECTED, not drift. Env-overridable (`FRAY_STALE_CEILING_MIN`).
-export const DEFAULT_STALE_CEILING_MIN = 120;
 
 /**
  * GROUND-TRUTH age of an agent's last activity, in minutes — globbed across ALL local
@@ -105,35 +100,33 @@ export function findAgentOutputAge(agentId, now = Date.now()) {
 
 /**
  * Derive one agent's state PURELY from ground truth. No per-agent stored status is
- * consulted — `ageMin` comes from the output-file mtime and `threadTerminal` from the
+ * consulted — `ageMin` comes from the output-file mtime and the thread status from the
  * thread's own `status:` frontmatter.
  *
- * SCOPING — a BANDED predicate by thread status (revised 2026-06-21 after two extremes both
- * failed). `active`-only scoping HID a stalled-mid-merge agent on a `needs-decision` thread
- * (a 37m release-stall went unflagged). But flagging EVERY non-terminal status with no upper
- * bound produced ~9 spurious UNRECONCILED/turn on `needs-decision` threads whose agents had
- * legitimately finished 5–11h ago. The decided middle ground, by thread status:
- *   - `active` / `enqueued` / `blocked` → ALWAYS flag a stale agent (no upper bound — these
- *     are actively-worked or triggered; a stale agent there is a real stall at any age).
- *   - `needs-decision` → flag ONLY within a recency BAND: stale beyond frozenMin but younger
- *     than `staleCeilingMin` (default 120m). Catches the ~37m stall; ignores hours-parked
- *     agents on a thread genuinely awaiting a human.
- *   - `todo` / `planned` → never flag (no in-flight work expected; nothing dispatched yet).
- *   - `done` / `dismissed` (terminal) → never flag (deliberately reconciled).
+ * SCOPING — ACTIVE-ONLY flagging. `status: active` is the invariant that an agent is WORKING
+ * the thread RIGHT NOW (the binding hook auto-sets it on dispatch; the orchestrator sets it on
+ * a warm-resume). So a stale agent on an `active` thread is a REAL stall — flag it, at any age.
+ * EVERY other status means no agent is supposed to be live on the thread, so a stale agent is
+ * expected, never flagged:
+ *   - `needs-decision` = the agent FINISHED and parked the thread on a human decision — it
+ *     clears the instant the status is set, so it is NEVER flagged.
+ *   - `blocked` / `enqueued` / `planned` / `todo` = nothing is actively running.
+ *   - `done` / `dismissed` (terminal) = deliberately reconciled.
+ * There is no recency band: a stale agent is flagged iff the thread is `active`, regardless of
+ * age. A done-but-parked thread therefore stops false-flagging IMMEDIATELY (no time-window wait).
  *
  * @param {object} a
  * @param {string} [a.threadStatus]      the owning thread's `status:` (active / needs-decision
  *                                       / enqueued / blocked / planned / todo / done /
- *                                       dismissed). Drives the banded predicate above. If
- *                                       omitted, falls back to the legacy `threadTerminal`
- *                                       boolean (treated as `active` when non-terminal).
+ *                                       dismissed). Only `active` is flaggable. If omitted,
+ *                                       falls back to the legacy `threadTerminal` boolean
+ *                                       (treated as `active` when non-terminal).
  * @param {boolean} [a.threadTerminal]   LEGACY — is the thread done/dismissed? Used only when
  *                                       `threadStatus` is not supplied (back-compat).
  * @param {number|null} a.ageMin         minutes since the agent's output last changed, or
  *                                       null when there is no readable output file.
  * @param {number} [a.idleMin]           idle threshold (min). Default {@link DEFAULT_IDLE_MIN}.
  * @param {number} [a.frozenMin]         frozen/stale threshold (min). Default {@link DEFAULT_FROZEN_MIN}.
- * @param {number} [a.staleCeilingMin]   needs-decision recency-band ceiling (min). Default {@link DEFAULT_STALE_CEILING_MIN}.
  * @returns {'terminal'|'unreconciled'|'idle'|'fresh'|'unknown'}
  */
 export function deriveAgentState({
@@ -142,26 +135,19 @@ export function deriveAgentState({
   threadTerminal,
   idleMin = DEFAULT_IDLE_MIN,
   frozenMin = DEFAULT_FROZEN_MIN,
-  staleCeilingMin = DEFAULT_STALE_CEILING_MIN,
 }) {
   // Normalize to a status string. If only the legacy boolean was passed, map it: terminal →
-  // a terminal status; non-terminal → treat as `active` (the pre-band always-flag behavior).
+  // a terminal status; non-terminal → treat as `active` (the active-only flag behavior).
   const status = threadStatus ?? (threadTerminal ? 'done' : 'active');
 
-  // Terminal + the deliberately-quiet, nothing-dispatched-yet phases never flag.
-  if (status === 'done' || status === 'dismissed' || status === 'todo' || status === 'planned') return 'terminal';
+  // ACTIVE-ONLY: a stale/idle agent is surfaced ONLY when the thread is `active`. Every other
+  // status (needs-decision / blocked / enqueued / planned / todo / done / dismissed) means no
+  // agent should be live on the thread → never flag.
+  if (status !== 'active') return 'terminal';
 
   if (ageMin == null) return 'unknown'; // no activity file → can't judge (fail-open)
 
-  const stale = ageMin > frozenMin;
-  if (stale) {
-    if (status === 'needs-decision') {
-      // Recency band: flag only a RECENTLY-stalled agent; hours-parked = expected, not drift.
-      return ageMin < staleCeilingMin ? 'unreconciled' : 'terminal';
-    }
-    // active / enqueued / blocked (and any unrecognized non-terminal status) → always flag.
-    return 'unreconciled';
-  }
+  if (ageMin > frozenMin) return 'unreconciled';
   if (ageMin > idleMin) return 'idle';
   return 'fresh';
 }

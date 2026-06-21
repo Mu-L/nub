@@ -163,7 +163,7 @@ const threads = readdirSync(FRAY_DIR)
     }
     const dependsOn = parseList(fm?.depends_on);
     const next = nextStep(src);
-    const threadStatus = fm?.status ?? ''; // drives the banded predicate in deriveAgentState
+    const threadStatus = fm?.status ?? ''; // ACTIVE-ONLY flagging in deriveAgentState: flagged iff `active`
     // Agent liveness is DERIVED, never read from a stored per-agent flag: the binding
     // carries only immutable `{id, label}`; state comes from output-file age (ground
     // truth) + the thread's own status, via the SAME derivation the Stop hook uses.
