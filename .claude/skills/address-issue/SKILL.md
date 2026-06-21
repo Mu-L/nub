@@ -18,7 +18,7 @@ This is the playbook for taking a GitHub issue from "reported" to "shipped and t
 
 **Guardrails (read first):**
 
-- **Tone is always factual, neutral, professional — never braggy, competitive, or over-promising.** Every comment follows the project's tone bar (AGENTS.md "The repo is PUBLIC" + the commit-message tone rule; the cross-project GitHub-comment + prose guide is [`wiki/prose-style.md`](../../../wiki/prose-style.md)). Acknowledge sincerely; state what you found and what you did; don't promise a timeline you can't keep.
+- **Tone is always factual, neutral, professional — never braggy, competitive, or over-promising.** Every comment follows the project's tone bar (AGENTS.md "The repo is PUBLIC" + the commit-message tone rule; the cross-project GitHub-comment + prose guide is [`.github/prose-style.md`](../../../.github/prose-style.md)). Acknowledge sincerely; state what you found and what you did; don't promise a timeline you can't keep.
 - **A fix lands via the PR-from-a-worktree flow, not directly on the shared `main` tree.** Substantive fixes are reviewable PRs opened from an isolated worktree (AGENTS.md "Default to a PR flow"). Trivial doc/typo fixes are the documented exception.
 - **Verify the fix end-to-end before pushing — don't outsource verification to CI.** Run the pre-push local-verification loop (AGENTS.md "VERIFY LOCALLY BEFORE PUSHING"). A green test suite with a stubbed fix is worse than an unchecked one.
 - **Don't autonomously land a change to a default / security posture / product behavior / API-config-env surface.** Those are recommend-only until the maintainer signs off (AGENTS.md). A mechanical, clearly-a-bug fix may land; a behavior decision routes back as a question.
