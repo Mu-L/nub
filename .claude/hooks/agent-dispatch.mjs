@@ -25,7 +25,8 @@ End your final report with a \`## Follow-ups\` section so the orchestrator can c
 3. If you added/changed code or tests CI should exercise → recommend cutting a push to \`main\` + a CI-watch follow-up to confirm green.
 4. The single most important NEXT STEP, and whether it needs maintainer sign-off (a default/security/product/brand/API-config-env call → recommend-only) or can proceed autonomously.
 Your FINAL MESSAGE is your whole report to the orchestrator — there is no mid-run channel back to it, so put everything it needs to chain the next step in that final message.
-If you COMMITTED: verify the tree COMPILES at your commit (a parallel agent may share a file — build before committing so you don't ship a broken HEAD). If there are no follow-ups, write "Follow-ups: none."`;
+If you COMMITTED: verify the tree COMPILES at your commit (a parallel agent may share a file — build before committing so you don't ship a broken HEAD). If there are no follow-ups, write "Follow-ups: none."
+PUSH-THEN-EXIT (NO IN-AGENT CI WAITS, EVER): if you create a commit, \`git push\` it IMMEDIATELY (safe pre-CI — CI runs on the pushed commit), the instant it exists, BEFORE any verification wait or rest. NEVER arm a CI watcher / poll loop / \`sleep\`-on-CI / "wait for the notification" on CI: in-agent CI waits strand work and die at caps. Run any local verification in the FOREGROUND to completion, then push. If your deliverable is a PR push/merge, after pushing append one JSON line to \`.fray/merge-queue.jsonl\` (\`{"pr","sha","branch","thread","enqueued_at"}\`), report "pushed <sha>, awaiting CI", and EXIT — the orchestrator's heartbeat owns poll-CI → merge-on-green. Do NOT hold the agent open watching CI.`;
 
 /**
  * Write the hook decision object and exit.
