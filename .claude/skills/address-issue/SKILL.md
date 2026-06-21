@@ -61,6 +61,10 @@ cd /tmp/nub-fix-<n> && export CARGO_TARGET_DIR=/tmp/nub-fix-<n>-target
 
 Before pushing, run the **pre-push local-verification loop** (AGENTS.md "VERIFY LOCALLY BEFORE PUSHING"): incremental build → the exact CI gates (`cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, scoped `cargo test`) → an e2e tmp-fixture run of the specific behavior the issue is about → Docker for anything touching the global cache/config → and promote a durable check into the test suite where reasonable (a regression test for this bug). Get it green locally and push ONCE.
 
+## Step 3b — Update docs if the fix changes user-facing behavior
+
+If the fix changes something a user observes — a flag's effect, a default, an error message, a formerly-broken feature that now works, a new workaround that's now unnecessary — update the relevant page in `site/content/docs/` as part of the same effort. The fix is not done until the docs reflect it. Land the doc update in the same PR as the code fix.
+
 ## Step 4 — Open the PR, referencing the issue
 
 The PR body MUST reference the issue. Use a closing keyword for a bug the PR resolves so the merge auto-closes it; use `Refs #N` for a related-but-not-resolving PR.
@@ -118,6 +122,7 @@ In practice you don't run this per-issue at release time — the `release` skill
 | Triage | `gh issue view <n> --comments` · read the thread · reproduce with a differential fixture |
 | Acknowledge | `gh issue comment <n> --body "Investigating — thanks for the report…"` (external only) |
 | Fix | fray-driven, in a worktree off `origin/main`; self-review; pre-push loop green; add a regression test |
+| Docs | Update `site/content/docs/` if behavior changed — same PR as the fix |
 | PR | `gh pr create` with `Closes #<n>` in the body; report the URL; don't self-merge |
 | On merge | `gh issue comment <n> --body "Fixed in #<pr>…"` (or `gh issue close --comment` if not auto-closed) |
 | On release | `gh issue comment <n> --body "Shipped in v<ver>: <release URL>"` (via the `release` skill, across the whole changeset) |
