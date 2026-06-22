@@ -26,10 +26,6 @@
 <br/>
 <br/>
 
-### [Read the docs →](https://nubjs.com/docs)
-
-<br/>
-<br/>
 
 
 A Bun-like DX on top of stock `node`, written in Rust.
@@ -103,8 +99,7 @@ nub --watch app.ts       # same path, restart-on-change
 - ⚡ 2.9× faster startup than `tsx`
 
 
-> [!NOTE]
-> Nub takes advantage of Node extension surfaces that mostly didn't exist when Deno and Bun were built: 
+> **How it works** — Nub takes advantage of Node extension surfaces that mostly didn't exist when Deno and Bun were built: 
 > 
 > - [`--import`](https://nodejs.org/api/cli.html#--importmodule)/[`--require`](https://nodejs.org/api/cli.html#-r---require-module) preloads
 > - [`module.registerHooks()`](https://nodejs.org/api/module.html#moduleregisterhooksoptions) for transpilation and resolution 
@@ -112,7 +107,7 @@ nub --watch app.ts       # same path, restart-on-change
 
 ### Modern APIs
 
-Modern globals — TC39, web-platform, and newer Node built-ins — work out of the box under Nub, native where Node ships them and polyfilled or unflagged where it doesn't.
+Modern API work out of the box under Nub. Node.js experimental APIs are unflagged, others are auto-polyfilled (e.g. `Temporal` on Node 25 and earlier), and others are downleveled in the transpiler (`using`).
 
 | API | How |
 |---|---|
