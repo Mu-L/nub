@@ -3,7 +3,7 @@ title: Script runner
 description: A drop-in for pnpm run and npm run — every flag carries over with the same spelling and semantics, 24× faster on the cold path, with the full workspace and lifecycle-hook surface preserved.
 ---
 
-`nub run` is a drop-in for `pnpm run` — every flag carries over with the same spelling and semantics, including the recursive and workspace-filter ones a real monorepo leans on. It is equally a drop-in for `npm run`. Existing invocations work unchanged:
+`nub run` is a drop-in for `pnpm run` and `npm run` — every flag carries over with the same spelling and semantics, down to the recursive and workspace-filter ones a real monorepo leans on. Existing invocations work unchanged:
 
 ```bash
 nub run -r --resume-from @scope/pkg build      # resume an interrupted recursive run mid-graph
@@ -15,7 +15,7 @@ nub run -r --if-present test                   # skip members without the script
 
 It reads your `package.json` directly — 24× faster on the cold path — and package management stays with whatever you already use (`pnpm`, `npm`, `yarn`, `bun`). This page is a cookbook: each section is a task with the exact command to run.
 
-A few minor behavioral notes: `--report-summary` streams results live via `--reporter=ndjson` rather than writing a static file; `--if-present` is workspace-scoped (skips members missing the script during a recursive run); and the legacy npm knobs `--scripts-prepend-node-path`, `--unsafe-perm`, and `--npm-path` are not needed and not accepted.
+A few flags behave differently. The `--report-summary` flag streams results live via `--reporter=ndjson` instead of writing a static file. The `--if-present` flag is workspace-scoped: it skips members missing the script during a recursive run. The legacy npm knobs `--scripts-prepend-node-path`, `--unsafe-perm`, and `--npm-path` are not needed and not accepted.
 
 ## `nub run <script>`
 

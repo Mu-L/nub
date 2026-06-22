@@ -14,7 +14,7 @@ steps:
   - run: nub run test
 ```
 
-The action installs the `nub` CLI and eagerly provisions the project's pinned Node — downloaded and cached during setup, before any of your steps run. The pin is resolved from the project files on disk (`devEngines.runtime` → `.node-version` → `.nvmrc` → `engines.node`), so `actions/checkout` must run before `nubjs/setup-nub`.
+The action installs the `nub` CLI and eagerly provisions the project's pinned Node — downloaded and cached during setup, so it is ready before any of your steps run. The pin is resolved from the project files on disk (`devEngines.runtime` → `.node-version` → `.nvmrc` → `engines.node`), so `actions/checkout` must run first.
 
 All `actions/setup-node` inputs are accepted, so the swap is always mechanical — inputs Nub can't honor are accepted and ignored rather than erroring.
 
