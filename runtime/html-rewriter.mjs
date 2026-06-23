@@ -132,22 +132,10 @@ class HTMLRewriter {
     return engine;
   }
 
+  // Cloudflare-exact: transform a Response, returning a new streaming Response.
   transform(input) {
-    // String form (Bun-style ergonomic extension): rewrite eagerly, return a string.
-    if (typeof input === "string") {
-      const chunks = [];
-      const engine = this.#buildEngine((buf) => chunks.push(buf));
-      const { TextEncoder, TextDecoder } = globalThis;
-      engine.write(Buffer.from(new TextEncoder().encode(input)));
-      engine.end();
-      return new TextDecoder().decode(concatChunks(chunks));
-    }
-
-    // Response form (Cloudflare parity): stream the body through the engine.
     if (!(input instanceof Response)) {
-      throw new TypeError(
-        "HTMLRewriter.transform: input must be a Response or a string",
-      );
+      throw new TypeError("HTMLRewriter.transform: input must be a Response");
     }
 
     const sourceBody = input.body;
@@ -157,12 +145,15 @@ class HTMLRewriter {
     }
 
     const self = this;
+    let engine = null;
+    let reader = null;
+
     const stream = new ReadableStream({
       async start(controller) {
-        const engine = self.#buildEngine((buf) => {
+        engine = self.#buildEngine((buf) => {
           if (buf && buf.length) controller.enqueue(new Uint8Array(buf));
         });
-        const reader = sourceBody.getReader();
+        reader = sourceBody.getReader();
         try {
           for (;;) {
             const { done, value } = await reader.read();
@@ -174,7 +165,22 @@ class HTMLRewriter {
         } catch (err) {
           controller.error(err);
         } finally {
-          reader.releaseLock();
+          // `cancel` may have already released + nulled the reader.
+          if (reader) reader.releaseLock();
+          reader = null;
+          engine = null;
+        }
+      },
+      // Consumer aborted the output stream: stop reading the source body and drop
+      // the engine so neither the lol-html engine nor the source body lock leaks.
+      cancel(reason) {
+        engine = null;
+        if (reader) {
+          const r = reader;
+          reader = null;
+          const c = r.cancel(reason);
+          r.releaseLock();
+          return c;
         }
       },
     });
@@ -188,18 +194,6 @@ class HTMLRewriter {
       headers,
     });
   }
-}
-
-function concatChunks(chunks) {
-  let total = 0;
-  for (const c of chunks) total += c.length;
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
 }
 
 export function installHTMLRewriter() {

@@ -889,6 +889,4 @@ declare class HTMLRewriter {
   onDocument(handlers: DocumentContentHandlers): this;
   /** Stream a Response body through the registered handlers, returning a new Response. */
   transform(response: Response): Response;
-  /** Rewrite an HTML string eagerly, returning the rewritten string (nub/Bun extension). */
-  transform(html: string): string;
 }

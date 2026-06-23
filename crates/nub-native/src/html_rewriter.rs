@@ -623,6 +623,24 @@ pub struct HtmlRewriterEngine {
     inner: Option<NativeHtmlRewriter<'static, JsOutputSink>>,
     started: bool,
     env_cell: EnvCell,
+    /// Re-entrancy guard. lol-html drives the JS handlers synchronously from
+    /// inside `write`/`end`; a handler that calls `write`/`end` AGAIN on the SAME
+    /// instance would alias `&mut self` (napi-rs 3 has no borrow guard) and re-enter
+    /// lol-html on an already-borrowed rewriter — reachable aliasing UB from safe
+    /// user JS. The flag is set for the duration of `write`/`end` and cleared by an
+    /// RAII guard (so it also clears on unwind). Cross-INSTANCE re-entrancy (a
+    /// handler of engine A driving engine B) keeps working — this is per-instance.
+    active: Rc<Cell<bool>>,
+}
+
+/// RAII flag-clearer for the engine's re-entrancy guard: clears `active` on drop
+/// so the flag is released whether `write`/`end` returns normally or unwinds.
+struct ActiveGuard(Rc<Cell<bool>>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 #[napi]
@@ -638,7 +656,24 @@ impl HtmlRewriterEngine {
             inner: None,
             started: false,
             env_cell: Rc::new(Cell::new(env.raw())),
+            active: Rc::new(Cell::new(false)),
         })
+    }
+
+    /// Acquire the per-instance re-entrancy guard, or return a clean JS error if a
+    /// `write`/`end` is already in progress on this instance (i.e. a handler tried
+    /// to drive the same engine re-entrantly). Returns the RAII guard that releases
+    /// the flag on drop.
+    fn enter(&self) -> Result<ActiveGuard> {
+        if self.active.get() {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "HTMLRewriter is already processing; cannot write() or transform() \
+                 re-entrantly from within a handler on the same instance.",
+            ));
+        }
+        self.active.set(true);
+        Ok(ActiveGuard(Rc::clone(&self.active)))
     }
 
     fn ensure_not_started(&self) -> Result<()> {
@@ -745,6 +780,7 @@ impl HtmlRewriterEngine {
     /// by value), then feed `chunk` through it.
     #[napi]
     pub fn write(&mut self, env: &Env, chunk: Buffer) -> Result<()> {
+        let _guard = self.enter()?;
         self.env_cell.set(env.raw());
         self.ensure_started()?;
         // `inner` is Some after `ensure_started`.
@@ -758,6 +794,7 @@ impl HtmlRewriterEngine {
     /// Flush remaining output and finalize. The engine cannot be reused after.
     #[napi]
     pub fn end(&mut self, env: &Env) -> Result<()> {
+        let _guard = self.enter()?;
         self.env_cell.set(env.raw());
         self.ensure_started()?;
         self.inner.take().unwrap().end().map_err(rewriting_error)

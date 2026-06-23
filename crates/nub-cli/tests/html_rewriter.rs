@@ -80,6 +80,11 @@ fn rewrites_html_across_the_workers_api_surface() {
         stdout.contains("STREAM: <title>Streamed</title>"),
         "Response streaming wrong:\n{stdout}"
     );
+    // Cloudflare-exact: a non-Response input throws a TypeError.
+    assert!(
+        stdout.contains("BADINPUT: true"),
+        "non-Response transform input must throw:\n{stdout}"
+    );
     // Invalid selector throws synchronously at .on().
     assert!(
         stdout.contains("BADSEL: true"),
@@ -94,6 +99,30 @@ fn rewrites_html_across_the_workers_api_surface() {
     assert!(
         stdout.contains("DONE"),
         "fixture did not run to completion:\n{stdout}"
+    );
+}
+
+/// A handler that drives the SAME native engine re-entrantly (write/end from
+/// inside a handler) must be rejected cleanly, never alias `&mut` the engine and
+/// re-enter lol-html (reachable aliasing UB from safe JS). Cross-instance
+/// re-entrancy (a handler of engine A driving engine B) must keep working. A
+/// missing guard would CRASH the process, so a clean exit-0 with the asserted
+/// markers is the regression proof.
+#[test]
+fn rejects_same_instance_reentrancy_but_allows_cross_instance() {
+    let (stdout, stderr, code) = run("reentrancy.mjs", &[], &[]);
+    assert_eq!(code, 0, "fixture must exit 0 (no crash)\nstderr: {stderr}");
+    assert!(
+        stdout.contains("SAME_INSTANCE_GUARDED: true"),
+        "same-instance re-entrant write must throw a clean error:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("CROSS_INSTANCE_WORKS: true"),
+        "cross-instance re-entrancy must keep working:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("DONE"),
+        "fixture did not complete:\n{stdout}"
     );
 }
 

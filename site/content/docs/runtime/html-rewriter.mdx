@@ -23,18 +23,6 @@ console.log(await res.text());
 
 The transform is streaming: the response body is parsed and rewritten chunk by chunk, never buffered whole, so memory stays bounded regardless of document size.
 
-## Rewriting a string
-
-Alongside the Workers `Response` form, `transform` accepts a string and returns the rewritten string — convenient for tests and one-off rewrites:
-
-```ts
-const html = new HTMLRewriter()
-  .on("h1", { element(el) { el.setInnerContent("Hello"); } })
-  .transform("<h1>placeholder</h1>");
-
-console.log(html); // → <h1>Hello</h1>
-```
-
 ## Handlers
 
 `on(selector, handlers)` registers handlers for elements matching a CSS selector; `onDocument(handlers)` registers document-level handlers. Both return the rewriter for chaining.
