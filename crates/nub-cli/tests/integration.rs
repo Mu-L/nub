@@ -2291,7 +2291,7 @@ fn worker_from_blob_url() {
 }
 
 #[test]
-fn blob_wrapping_preserves_file_instanceof_blob() {
+fn worker_blob_wrapping_preserves_file_instanceof_blob() {
     // Regression: nub subclasses globalThis.Blob to support blob: workers. `File`
     // is a bootstrap global extending the NATIVE Blob, so the swap must re-point
     // File's prototype chain or `new File(...) instanceof Blob` silently turns
