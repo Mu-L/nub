@@ -78,6 +78,17 @@ where
 /// seccomp hook. On Windows it is currently a reporting no-op (TODO: restricted
 /// token — see [`backend::stub`]).
 pub fn apply_to_command(cmd: &mut Command, policy: &SandboxPolicy) -> std::io::Result<Degradation> {
+    // Write roots MUST exist before the OS jail is applied: Landlock can only
+    // grant an extant path, and macOS `canonicalize()` (for the /var->/private
+    // form) fails on a missing path — so a cache dir the build will create
+    // (e.g. ~/.cache/node-gyp on a cold cache) would get NO write grant and the
+    // build's first write there would be silently denied. Pre-create the
+    // confined write roots so the grant always lands. (Caught in review.)
+    if policy.fs.write_enforce {
+        for root in &policy.fs.write_allow {
+            let _ = std::fs::create_dir_all(root);
+        }
+    }
     backend::apply(cmd, policy)
 }
 
@@ -92,6 +103,7 @@ mod tests {
             allow_exact: vec!["PATH".into(), "HOME".into()],
             allow_prefix: vec!["npm_config_".into()],
             deny_substring: vec!["token".into()],
+            deny_token: vec![],
             enforce: true,
         };
         let inherited: Vec<(String, String)> = vec![

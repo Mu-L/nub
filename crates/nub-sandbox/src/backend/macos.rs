@@ -52,11 +52,12 @@ pub(crate) fn build_profile(policy: &SandboxPolicy) -> String {
         // lets a script reach /var/run/docker.sock). Re-allow only loopback IP
         // to the proxy when wired.
         if let Some(port) = PROXY_PORT {
+            // Seatbelt requires the host in a `remote ip` literal to be `*` or
+            // `localhost` — a `127.0.0.1` literal is a PARSE ERROR that fails the
+            // WHOLE profile load (caught in review). `localhost` covers the
+            // loopback proxy on both 127.0.0.1 and ::1.
             rules.push(format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))"
-            ));
-            rules.push(format!(
-                "(allow network-outbound (remote ip \"127.0.0.1:{port}\"))"
             ));
         }
     }
@@ -134,15 +135,32 @@ pub fn apply(cmd: &mut Command, policy: &SandboxPolicy) -> std::io::Result<Degra
     wrapped.arg("-p").arg(&profile).arg("--").arg(&program);
     wrapped.args(&args);
 
-    // Carry env + cwd from the original command. std::process::Command does not
-    // expose a way to copy its full env map, so the CALLER is responsible for
-    // applying env (the env-scrub) to the wrapped command via apply_env_scrub
-    // BEFORE this call returns it. To keep the contract simple, we move env
-    // and cwd here using the public getters.
+    // Carry env + cwd from the original command onto the wrapped one.
+    //
+    // CRITICAL (caught in adversarial review): `wrapped` is a FRESH Command and
+    // would otherwise inherit this process's FULL parent environment at spawn —
+    // so replaying only `cmd.get_envs()` (which after the caller's env_clear()
+    // yields just the allowlist) would silently re-leak every parent secret the
+    // scrub removed. We MUST start the wrapped command from a cleared env and
+    // apply exactly what `cmd` carries. `env_clear()` here makes the wrapped
+    // command's env authoritative; `get_envs()` then re-applies the scrubbed
+    // allowlist (or the full inherited set when env enforcement is off — in which
+    // case `cmd` was never cleared and carries no explicit keys, so we instead
+    // do NOT clear and let inheritance stand). The discriminator: if the caller
+    // scrubbed, `cmd` has explicit keys; if not, it has none.
     if let Some(dir) = cmd.get_current_dir() {
         wrapped.current_dir(dir);
     }
-    for (k, v) in cmd.get_envs() {
+    let explicit: Vec<_> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+        .collect();
+    // env enforcement is signaled by the policy axis, not inferred — clear iff
+    // the env axis is enforced so the scrubbed allowlist is the WHOLE child env.
+    if policy.env.enforce {
+        wrapped.env_clear();
+    }
+    for (k, v) in explicit {
         match v {
             Some(val) => {
                 wrapped.env(k, val);

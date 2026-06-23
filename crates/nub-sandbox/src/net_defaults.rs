@@ -14,16 +14,24 @@ pub fn default_allow_hosts() -> Vec<String> {
         // node-gyp Node headers / SHASUMS / win node.lib (default disturl)
         "nodejs.org",
         "*.nodejs.org",
-        // GitHub release ASSETS only — NOT the github.com apex, NOT *.github.io
+        // GitHub release ASSETS only. Deliberately NOT `*.githubusercontent.com`
+        // — that wildcard admits `raw.githubusercontent.com`, which serves
+        // arbitrary user-controlled repo content (an exfil-read / payload-fetch
+        // channel; the TrapDoor lesson generalizes past `*.github.io`). Release
+        // assets 302 to `objects.githubusercontent.com` specifically, so name it
+        // exactly. NOT the github.com apex, NOT *.github.io.
         "objects.githubusercontent.com",
-        "*.githubusercontent.com",
         // prebuild-install --token resolves the asset id first
         "api.github.com",
         // git-archive / tarball fetches for github: deps (separate host)
         "codeload.github.com",
-        // node-pre-gyp's common (not universal) binary.host region buckets
+        // node-pre-gyp's common (not universal) binary.host region buckets.
+        // `*.` matches only one wildcard segment, so the regional form
+        // (`mapbox-node-binary.s3.us-east-1.amazonaws.com`) needs its own
+        // entry — a `*.s3.*.amazonaws.com` double-wildcard matches NOTHING in
+        // this matcher (fail-closed). Region buckets that don't fit either
+        // global form go through the `jail-allow-hosts` per-project override.
         "*.s3.amazonaws.com",
-        "*.s3.*.amazonaws.com",
     ]
     .iter()
     .map(|s| s.to_string())

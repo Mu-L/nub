@@ -40,13 +40,31 @@ fn fixture_policy(root: &Path) -> (SandboxPolicy, PathBuf, PathBuf, PathBuf) {
     (policy, project, package_dir, home)
 }
 
-/// Run a `sh -c <script>` under the jail; return (exit_ok, stdout+stderr).
+/// Run a `sh -c <script>` under the jail (fs/net only); return (exit_ok, log).
 fn run_jailed(policy: &SandboxPolicy, cwd: &Path, script: &str) -> (bool, String) {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(script).current_dir(cwd);
-    // The build-jail re-homes HOME at jail_home; mirror what the embedder does
-    // so absolute-secret-path probes resolve against the REAL home (the deny
-    // set covers the real home too).
+    apply_to_command(&mut cmd, policy).expect("apply jail");
+    let out = cmd.output().expect("spawn jailed");
+    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), s)
+}
+
+/// Run a `sh -c <script>` with the FULL jail incl. the env-axis scrub applied
+/// against `inherited` (then injected plumbing), exactly the embedder path. This
+/// is the only helper that exercises the env axis end-to-end.
+fn run_jailed_with_env(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+    inherited: Vec<(String, String)>,
+    script: &str,
+) -> (bool, String) {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(script).current_dir(cwd);
+    // env-scrub FIRST (clears + re-admits the allowlist), then the OS backend
+    // wrap — the documented order.
+    nub_sandbox::apply_env_scrub(&mut cmd, &policy.env, inherited);
     apply_to_command(&mut cmd, policy).expect("apply jail");
     let out = cmd.output().expect("spawn jailed");
     let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -157,4 +175,79 @@ fn network_egress_is_blocked() {
         !log.contains("CONNECTED"),
         "jail allowed an outbound network connection: ok={ok} log={log}"
     );
+}
+
+#[test]
+fn parent_env_secret_does_not_leak_into_jailed_script() {
+    // Regression for the macOS sandbox-exec wrap env-leak (the wrapped Command
+    // would otherwise inherit this process's FULL env). The scrubbed allowlist
+    // must be the WHOLE child env — a parent secret must be ABSENT.
+    let tmp = tempfile::tempdir().unwrap();
+    let (policy, _project, package_dir, _home) = fixture_policy(tmp.path());
+
+    let inherited = vec![
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+        (
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "LEAKED-SECRET".to_string(),
+        ),
+        ("NPM_TOKEN".to_string(), "LEAKED-TOKEN".to_string()),
+        ("GH_PAT".to_string(), "LEAKED-PAT".to_string()),
+    ];
+    let (_ok, log) = run_jailed_with_env(
+        &policy,
+        &package_dir,
+        inherited,
+        "echo S=$AWS_SECRET_ACCESS_KEY T=$NPM_TOKEN P=$GH_PAT",
+    );
+    assert!(
+        !log.contains("LEAKED"),
+        "parent secret env leaked into the jailed script: {log}"
+    );
+}
+
+#[test]
+fn node_gyp_style_cache_write_succeeds_even_when_dir_absent() {
+    // The §5-mandatory carve-out: a build writes into ~/.cache/node-gyp, which on
+    // a COLD cache does not exist at jail-apply time. apply_to_command must
+    // pre-create the confined write roots so the grant lands and the write
+    // succeeds (regression for the canonicalize-on-missing-path silent-deny bug).
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let package_dir = project.join("node_modules/dep");
+    let home = tmp.path().join("home");
+    let jail_home = tmp.path().join("jailhome");
+    for d in [&package_dir, &home, &jail_home] {
+        fs::create_dir_all(d).unwrap();
+    }
+    // node-gyp cache dir DELIBERATELY not created — simulate a cold cache.
+    let gyp_cache = home.join(".cache/node-gyp");
+    assert!(!gyp_cache.exists());
+
+    let policy = build_jail::policy(&BuildJailParams {
+        package_dir: package_dir.clone(),
+        project_root: project.clone(),
+        jail_home: jail_home.clone(),
+        user_home: home.clone(),
+        extra_write: build_jail::default_extra_write(&home, None),
+        registry_hosts: vec![],
+        extra_hosts: vec![],
+        bundle_browser_cdns: false,
+    });
+
+    let target = gyp_cache.join("26.0.0/node.lib");
+    let (ok, log) = run_jailed(
+        &policy,
+        &package_dir,
+        &format!(
+            "mkdir -p {dir} && echo hdr > {f}",
+            dir = gyp_cache.join("26.0.0").display(),
+            f = target.display()
+        ),
+    );
+    assert!(ok, "node-gyp cache write was blocked by the jail: {log}");
+    assert!(target.exists(), "node-gyp cache file not written: {log}");
 }

@@ -47,10 +47,33 @@ fn default_env_deny_substrings() -> Vec<String> {
         "auth".into(),
         "password".into(),
         "passwd".into(),
+        "passphrase".into(),
         "credential".into(),
         "secret".into(),
         "key".into(),
         "session".into(),
+        // crypto-wave (BeaverTail/TrapDoor §8.5) + common CI secret conventions
+        "mnemonic".into(),
+        "cookie".into(),
+        "private".into(),
+        "apikey".into(),
+        "bearer".into(),
+    ]
+}
+
+/// Short secret markers matched as whole boundary-delimited tokens (anchored,
+/// not raw substring) so they reject `GH_PAT`/`DB_PWD`/`WALLET_SEED` without
+/// false-positiving on `compatible`/`cwd`/`speedup`. See
+/// [`EnvPolicy::deny_token`](crate::EnvPolicy).
+fn default_env_deny_tokens() -> Vec<String> {
+    vec![
+        "pat".into(),  // GitHub personal-access-token convention (GH_PAT)
+        "pwd".into(),  // *_PWD password convention
+        "seed".into(), // wallet seed phrase
+        "pem".into(),  // TLS/private-key material
+        "cert".into(), // client cert material
+        "jwt".into(),  // bearer JWTs
+        "dsn".into(),  // sentry/db DSNs often embed credentials
     ]
 }
 
@@ -99,14 +122,40 @@ fn build_jail_env() -> EnvPolicy {
             "electron_config_cache",
             "PRISMA_ENGINES_CACHE_DIR",
             "GECKODRIVER_CACHE_DIR",
+            // from-source native-compile toolchain inputs (node-gyp / gyp /
+            // make read these as BARE vars — not npm_config_-prefixed). Safe
+            // build-shaping values, none secret-shaped; without them a custom-
+            // toolchain / cross / parallel build silently loses its settings.
+            "CC",
+            "CXX",
+            "CPP",
+            "CXXCPP",
+            "LD",
+            "AR",
+            "CFLAGS",
+            "CXXFLAGS",
+            "CPPFLAGS",
+            "LDFLAGS",
+            "MAKE",
+            "MAKEFLAGS",
+            "PYTHON",
+            "NODE_GYP_FORCE_PYTHON",
+            "ARCHFLAGS",
+            "GYP_DEFINES",
+            "JOBS",
+            "V",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect(),
-        // npm_config_* + npm_package_* (manifest fields) pass; NODE_OPTIONS is
-        // injected by the embedder overlay, not inherited.
+        // npm_config_* + npm_package_* (manifest fields) pass. NOTE: npm_package_*
+        // materializes the DEPENDENCY's own package.json fields — attacker-
+        // controlled, but the attacker authors both ends, so no USER secret flows
+        // through it; the deny rules still reject any secret-shaped field name.
+        // NODE_OPTIONS is injected by the embedder overlay, not inherited.
         allow_prefix: vec!["npm_config_".into(), "npm_package_".into()],
         deny_substring: default_env_deny_substrings(),
+        deny_token: default_env_deny_tokens(),
         enforce: true,
     }
 }

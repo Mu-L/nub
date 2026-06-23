@@ -144,12 +144,23 @@ fn apply_seccomp_net() -> Result<(), String> {
         ])
         .map_err(|e| format!("net filter: {e}"))
     };
+    // Match aube's full denied-family list (defense-in-depth, pure upside — these
+    // are exotic families no legit build needs). AF_UNIX is deliberately NOT
+    // denied (node IPC / worker_threads socketpair need it).
     let denied = [
         libc::AF_INET,
         libc::AF_INET6,
         libc::AF_NETLINK,
         libc::AF_PACKET,
         libc::AF_VSOCK,
+        libc::AF_XDP,
+        libc::AF_ALG,
+        libc::AF_BLUETOOTH,
+        libc::AF_RDS,
+        libc::AF_CAN,
+        libc::AF_TIPC,
+        libc::AF_IB,
+        libc::AF_NFC,
     ];
     let mut family_rules = Vec::with_capacity(denied.len());
     for f in denied {
@@ -188,6 +199,19 @@ pub fn apply(cmd: &mut Command, policy: &SandboxPolicy) -> std::io::Result<Degra
     if !ll_ok {
         deg.lost.push("fs".into());
         deg.reason = Some("Landlock unavailable on this kernel".into());
+    } else if !policy.fs.read_enforce && !policy.fs.read_deny.is_empty() {
+        // HONESTY (caught in review): Landlock is allow-only, so the generous-
+        // read build-jail posture grants `/` read and CANNOT deny the secret
+        // subpaths the way macOS Seatbelt does. The recursive read-carve walk
+        // (sandbox-fs-deny-list.md) is the follow-on; until then report the gap
+        // so the reduced-mode WARNING fires — never claim a read-deny we don't
+        // enforce. (Env-scrub + net-deny still close the exfil path; this is the
+        // defense-in-depth layer that's deferred on Linux.)
+        deg.lost.push("fs-read-deny".into());
+        if deg.reason.is_none() {
+            deg.reason =
+                Some("Landlock is allow-only — secret read-deny not yet enforced on Linux".into());
+        }
     }
     if policy.net.enforce && !policy.net.allow_hosts.is_empty() {
         // per-host egress needs the proxy (follow-on); seccomp gives all-or-

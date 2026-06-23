@@ -41,7 +41,15 @@ pub struct EnvPolicy {
     pub allow_prefix: Vec<String>,
     /// Substrings that reject a key even if it matched an allow rule
     /// (`token`/`auth`/`password`/`credential`/`secret`/`key`). Case-insensitive.
+    /// Use only for substrings long enough to be unambiguous — a short one like
+    /// `pat` would false-positive on `compatible`, so those go in `deny_token`.
     pub deny_substring: Vec<String>,
+    /// Short secret markers matched as a WHOLE underscore/boundary-delimited
+    /// token, not a raw substring — so `pat` rejects `GH_PAT`/`MY_PAT` but NOT
+    /// `compatible`, and `pwd` rejects `DB_PWD` but not `cwd`-containing keys.
+    /// Case-insensitive. (HIGH-2: blunt substring matching over-denies for short
+    /// markers; anchored matching closes the secret class without breakage.)
+    pub deny_token: Vec<String>,
     /// `true` once the allowlist is active (deny-by-default). `false` = no env
     /// confinement (the absent-policy / runtime-default case).
     pub enforce: bool,
@@ -50,7 +58,9 @@ pub struct EnvPolicy {
 impl EnvPolicy {
     /// Decide whether an inherited env key survives the scrub. Mirrors aube's
     /// `safe_jail_env_key` but driven by data so the build-jail and runtime
-    /// profiles share one decision function.
+    /// profiles share one decision function. A deny (substring OR token) is
+    /// checked FIRST and wins over any allow — so a secret riding an allow
+    /// prefix (`npm_config_<scope>:_authToken`) is still rejected.
     pub fn admits(&self, key: &str) -> bool {
         if !self.enforce {
             return true;
@@ -63,11 +73,42 @@ impl EnvPolicy {
         {
             return false;
         }
+        if self
+            .deny_token
+            .iter()
+            .any(|t| key_contains_token(&lower, &t.to_ascii_lowercase()))
+        {
+            return false;
+        }
         if self.allow_exact.iter().any(|k| k == key) {
             return true;
         }
         self.allow_prefix.iter().any(|p| key.starts_with(p))
     }
+}
+
+/// True when `token` appears in `key` as a whole boundary-delimited segment.
+/// Boundaries are the start/end of the string or a non-alphanumeric char
+/// (`_`/`-`/`.`/`/`/`:`). So `pat` matches `gh_pat`, `pat`, `x.pat` — but not
+/// `compatible` or `path`. Both args must already be lowercased.
+fn key_contains_token(key: &str, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let bytes = key.as_bytes();
+    let is_boundary = |b: u8| !b.is_ascii_alphanumeric();
+    let mut start = 0;
+    while let Some(pos) = key[start..].find(token) {
+        let i = start + pos;
+        let before_ok = i == 0 || is_boundary(bytes[i - 1]);
+        let after = i + token.len();
+        let after_ok = after == bytes.len() || is_boundary(bytes[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = i + 1;
+    }
+    false
 }
 
 /// Filesystem confinement. Read is generous-allow + deny-the-secret-set
@@ -125,13 +166,34 @@ impl NetPolicy {
     }
 }
 
-/// `*.example.com` matches `a.example.com` AND `example.com`; an exact pattern
-/// matches only itself (case-insensitive — DNS is case-insensitive).
+/// Normalize a host for matching: lowercase (DNS is case-insensitive) and strip
+/// a single trailing `.` (an absolute FQDN `github.com.` resolves identically to
+/// `github.com` — without this a deny entry is trailing-dot bypassable).
+fn normalize_host(h: &str) -> String {
+    let h = h.trim().to_ascii_lowercase();
+    h.strip_suffix('.').unwrap_or(&h).to_string()
+}
+
+/// Match `host` against an allow/deny `pattern`. A leading `*.` is the ONLY
+/// wildcard form: `*.example.com` matches `a.example.com`, `a.b.example.com`,
+/// AND the apex `example.com`. A `*` in any OTHER position is NOT a wildcard —
+/// such a pattern matches NOTHING (fail-closed), so a malformed multi-`*` entry
+/// like `*.s3.*.amazonaws.com` does not silently mis-match (enumerate region
+/// buckets instead). Exact patterns match only themselves. Both sides are
+/// normalized (lowercase + trailing-dot strip).
 pub fn host_matches(pattern: &str, host: &str) -> bool {
-    let pattern = pattern.to_ascii_lowercase();
-    let host = host.to_ascii_lowercase();
+    let host = normalize_host(host);
+    let pattern = normalize_host(pattern);
     if let Some(suffix) = pattern.strip_prefix("*.") {
+        // a second `*` past the leading wildcard is unsupported — fail closed
+        // rather than match a literal asterisk no real host carries.
+        if suffix.contains('*') {
+            return false;
+        }
         host == suffix || host.ends_with(&format!(".{suffix}"))
+    } else if pattern.contains('*') {
+        // a bare `*` not in leading position is not a wildcard; never matches.
+        false
     } else {
         pattern == host
     }
@@ -170,6 +232,7 @@ mod tests {
             allow_exact: vec!["PATH".into()],
             allow_prefix: vec!["npm_config_".into()],
             deny_substring: vec!["token".into(), "secret".into()],
+            deny_token: vec!["pat".into(), "pwd".into()],
             enforce: true,
         };
         assert!(p.admits("PATH"));
@@ -183,9 +246,43 @@ mod tests {
     }
 
     #[test]
+    fn env_deny_token_is_anchored_not_substring() {
+        let p = EnvPolicy {
+            allow_exact: vec!["COMPATIBLE_MODE".into(), "CWD_HINT".into()],
+            allow_prefix: vec![],
+            deny_substring: vec![],
+            deny_token: vec!["pat".into(), "pwd".into()],
+            enforce: true,
+        };
+        // anchored token rejects GH_PAT / DB_PWD ...
+        assert!(!p.admits("GH_PAT"));
+        assert!(!p.admits("DB_PWD"));
+        assert!(!p.admits("PAT"));
+        // ... but does NOT false-positive on substrings of longer words
+        assert!(p.admits("COMPATIBLE_MODE")); // contains "pat" mid-word
+        assert!(p.admits("CWD_HINT")); // contains "pwd"? no — "cwd"; sanity
+    }
+
+    #[test]
     fn env_no_enforce_admits_everything() {
         let p = EnvPolicy::default();
         assert!(p.admits("ANYTHING_AT_ALL"));
+    }
+
+    #[test]
+    fn host_trailing_dot_and_bad_wildcard_are_normalized() {
+        // trailing-dot FQDN must match (and be deny-able)
+        assert!(host_matches("github.com", "github.com."));
+        assert!(host_matches("*.example.com", "a.example.com."));
+        // a non-leading wildcard matches nothing (fail-closed)
+        assert!(!host_matches(
+            "*.s3.*.amazonaws.com",
+            "x.s3.us-east-1.amazonaws.com"
+        ));
+        assert!(!host_matches("evil*.com", "evilfoo.com"));
+        // *.foo.com must NOT match foo.com.attacker.net or evil-foo.com
+        assert!(!host_matches("*.foo.com", "foo.com.attacker.net"));
+        assert!(!host_matches("*.foo.com", "evil-foo.com"));
     }
 
     #[test]
