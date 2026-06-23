@@ -9,6 +9,14 @@ Promise resolves, then rewound to continue the transform).
 
 Both html-rewriter-wasm and lol-html are BSD 3-Clause licensed.
 
+NUB LOCAL PATCH — asyncify.js: upstream `wrap()` only rewinds the Asyncify stack
+on the success path, so a REJECTED async-handler promise leaves the suspended Rust
+frame holding its wasm-bindgen RefCell borrow, leaking the engine (`engine.free()`
+then throws "recursive use of an object"). nub patches `wrap()` to also rewind on
+rejection (releasing the borrow), swallow the secondary error the rewind
+re-triggers, and re-throw the ORIGINAL rejection. RE-APPLY this patch on any
+re-vendor of asyncify.js — it is marked in-file with a "NUB PATCH" comment.
+
 ----------------------------------------------------------------------
 Copyright (C) 2019, Cloudflare, Inc.
 All rights reserved.

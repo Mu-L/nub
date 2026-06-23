@@ -97,12 +97,46 @@ async function wrap(rewriter, fn, ...args) {
 
     assertNoneState();
     assert(promises.has(stackPtr));
-    await promises.get(stackPtr);
+    // NUB PATCH (not in upstream html-rewriter-wasm asyncify.js): the upstream
+    // loop awaits the promise WITHOUT a catch and only rewinds on success, so a
+    // REJECTED handler promise throws out of `wrap()` leaving the suspended Rust
+    // `write`/`end` frame abandoned with its wasm-bindgen RefCell borrow held —
+    // any later `engine.free()` then throws "recursive use of an object ... unsafe
+    // aliasing in rust" and the WASM engine leaks (+~20KB/engine). The fix: on
+    // rejection STILL rewind so the suspended frame returns and drops its borrow,
+    // swallow the secondary error the rewind re-triggers (the handler re-runs on
+    // rewind and re-throws), then re-throw the ORIGINAL rejection (original wins).
+    // Re-apply this on any re-vendor of asyncify.js — see the PR / runtime/
+    // html-rewriter-engine/LICENSE provenance note.
+    const pending = promises.get(stackPtr);
     promises.delete(stackPtr);
+    let rejected = null;
+    try {
+      await pending;
+    } catch (e) {
+      rejected = e;
+    }
 
     assertNoneState();
     wasm.asyncify_start_rewind(stackPtr);
-    result = fn();
+    try {
+      result = fn();
+    } catch (reErr) {
+      // On the success path a rewind error is real; on the rejection path the
+      // re-run handler re-throws the same rejection, which we discard in favor of
+      // the original below.
+      if (rejected === null) throw reErr;
+    }
+    if (rejected !== null) {
+      // The re-run may itself suspend (the handler awaits again before throwing);
+      // settle that so the borrow is released, then surface the original error.
+      if (wasm.asyncify_get_state() === State.UNWINDING) {
+        wasm.asyncify_stop_unwind();
+        promises.delete(stackPtr);
+      }
+      assertNoneState();
+      throw rejected;
+    }
   }
 
   assertNoneState();

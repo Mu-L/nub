@@ -136,54 +136,79 @@ class HTMLRewriter {
     const self = this;
     let engine = null;
     let reader = null;
+    // Set when the consumer cancels the output stream. The source-read loop bails
+    // and skips end()/close() so it can't write/enqueue into a torn-down stream.
+    let cancelled = false;
 
-    // Free the WASM engine + release the source reader exactly once.
-    const cleanup = () => {
-      if (reader) {
-        reader.releaseLock();
-        reader = null;
-      }
-      if (engine) {
+    // Free the WASM engine, tolerating a held wasm-bindgen borrow. If the consumer
+    // cancels WHILE an async handler is suspended (Asyncify), the suspended Rust
+    // write frame still holds its RefCell borrow, so free() throws "recursive use
+    // of an object". Swallowing that here is safe: the suspended write resumes when
+    // its handler promise settles, its frame returns and drops the borrow, and
+    // start()'s `finally{cleanup()}` then frees the engine on that resume. Without
+    // the guard the throw escapes reader.cancel() (rejecting an ordinary abort) AND
+    // leaks the engine.
+    const safeFree = () => {
+      if (!engine) return;
+      try {
         engine.free();
         engine = null;
+      } catch (_) {
+        // Borrow still held (cancel-mid-suspend); freed on resume — see above.
       }
+    };
+
+    // Release the source reader + free the engine. Idempotent.
+    const cleanup = () => {
+      if (reader) {
+        try {
+          reader.releaseLock();
+        } catch (_) {
+          // already released (e.g. by reader.cancel in the cancel path)
+        }
+        reader = null;
+      }
+      safeFree();
     };
 
     const stream = new ReadableStream({
       async start(controller) {
         engine = self.#buildEngine((chunk) => {
           // The engine hands back a Uint8Array view into WASM memory; copy it,
-          // since the buffer is reused across chunks.
-          if (chunk && chunk.length) controller.enqueue(new Uint8Array(chunk));
+          // since the buffer is reused across chunks. Skip once cancelled — the
+          // controller is torn down.
+          if (!cancelled && chunk && chunk.length) controller.enqueue(new Uint8Array(chunk));
         });
         reader = sourceBody.getReader();
         try {
           for (;;) {
+            if (cancelled) break;
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || cancelled) break;
             // Async: the engine awaits any Promise a handler returns (Asyncify).
             await engine.write(value);
           }
-          await engine.end();
-          controller.close();
+          if (!cancelled) {
+            await engine.end();
+            controller.close();
+          }
         } catch (err) {
-          controller.error(err);
+          if (!cancelled) controller.error(err);
         } finally {
           cleanup();
         }
       },
       // Consumer aborted the output stream: stop reading the source body and free
-      // the engine so neither the WASM engine nor the source body lock leaks.
+      // the engine so neither the WASM engine nor the source body lock leaks. If an
+      // async handler is in flight, safeFree() tolerates the held borrow (freed on
+      // resume), so this resolves cleanly instead of rejecting.
       cancel(reason) {
+        cancelled = true;
         const r = reader;
-        // cleanup() releases+frees; capture the source-cancel promise first.
+        // r.cancel(reason) releases the reader lock; capture its promise first.
         const c = r ? r.cancel(reason) : undefined;
-        // r.cancel already released? releaseLock after cancel is safe/no-throw.
         reader = null;
-        if (engine) {
-          engine.free();
-          engine = null;
-        }
+        safeFree();
         return c;
       },
     });

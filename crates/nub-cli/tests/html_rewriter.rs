@@ -1,10 +1,11 @@
 //! HTMLRewriter integration tests: run fixture scripts through the built `nub`
 //! binary and assert the rewrite output. Exercises the Cloudflare-Workers-shape
-//! global backed by the lol-html binding in nub-native.
-//!
-//! These require the nub-native addon to be present at `runtime/addons/nub-native.node`
-//! (built by `make addon` / `make addon-fast`), the same prerequisite as the
-//! data-format loader tests.
+//! global backed by the vendored WASM lol-html engine
+//! (`runtime/html-rewriter-engine/`, lol-html compiled to WebAssembly with
+//! Asyncify), which ships in nub's distribution — no native addon needed for
+//! HTMLRewriter. Covers the API surface, async handlers (awaited mid-transform),
+//! async-handler rejection, consumer cancel (incl. mid-suspend), the engine
+//! leak-loop, and compat-mode absence.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,8 +44,8 @@ fn run(file: &str, extra_args: &[&str], env: &[(&str, &str)]) -> (String, String
 
 /// The full surface: the global is present + non-enumerable, attribute/content
 /// mutation, escaped-vs-raw insertion, element removal, document-end append,
-/// doctype read, text rewriting, streaming over a Response, synchronous
-/// selector-error, and the first-cut async-handler rejection.
+/// doctype read, text rewriting, async handlers awaited mid-transform, streaming
+/// over a Response, the non-Response TypeError, and the synchronous selector-error.
 #[test]
 fn rewrites_html_across_the_workers_api_surface() {
     let (stdout, stderr, code) = run("rewrite.mjs", &[], &[]);
@@ -101,6 +102,67 @@ fn rewrites_html_across_the_workers_api_surface() {
     assert!(
         stdout.contains("DONE"),
         "fixture did not run to completion:\n{stdout}"
+    );
+}
+
+/// A rejecting async handler must propagate the ORIGINAL error (not the secondary
+/// borrow/aliasing error the Asyncify rewind would surface), and a subsequent
+/// transform on a fresh instance must still work. Guards the asyncify.js
+/// rewind-on-reject patch.
+#[test]
+fn async_handler_rejection_propagates_original_error() {
+    let (stdout, stderr, code) = run("async-reject.mjs", &[], &[]);
+    assert_eq!(code, 0, "fixture must exit 0\nstderr: {stderr}");
+    assert!(
+        stdout.contains("REJECT_ORIGINAL: true"),
+        "rejecting async handler must surface the ORIGINAL error:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("REJECT_RECOVERS: true"),
+        "a fresh transform after a rejection must still work:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("DONE"),
+        "fixture did not complete:\n{stdout}"
+    );
+}
+
+/// Cancelling the transformed output stream must resolve cleanly — including when
+/// an async handler is suspended mid-transform (the held WASM borrow is tolerated
+/// and the engine is freed on resume). Guards the safeFree + cancelled-flag fix.
+#[test]
+fn consumer_cancel_resolves_even_mid_suspend() {
+    let (stdout, stderr, code) = run("cancel.mjs", &[], &[]);
+    assert_eq!(code, 0, "fixture must exit 0\nstderr: {stderr}");
+    assert!(
+        stdout.contains("CANCEL_PLAIN_RESOLVED: true"),
+        "plain consumer cancel must resolve:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("CANCEL_MIDSUSPEND_RESOLVED: true"),
+        "cancel during an in-flight async handler must resolve (not reject):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("DONE"),
+        "fixture did not complete:\n{stdout}"
+    );
+}
+
+/// The WASM engine must be freed even on the rejecting / cancelled paths — RSS
+/// must stay bounded over many such transforms. An unbounded per-engine leak (the
+/// pre-fix behavior) would balloon RSS past the threshold.
+#[test]
+fn rejecting_and_cancelled_transforms_do_not_leak_the_engine() {
+    // --expose-gc gives a stable RSS reading; nub forwards V8 flags to Node.
+    let (stdout, stderr, code) = run("leak-loop.mjs", &["--expose-gc"], &[]);
+    assert_eq!(code, 0, "fixture must exit 0\nstderr: {stderr}");
+    assert!(
+        stdout.contains("LEAK_BOUNDED: true"),
+        "rejecting/cancelled transforms must not leak the engine (RSS unbounded):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("DONE"),
+        "fixture did not complete:\n{stdout}"
     );
 }
 
