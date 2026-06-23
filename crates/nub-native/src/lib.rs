@@ -13,6 +13,7 @@
 
 mod cache;
 mod detect;
+mod html_rewriter;
 mod resolve;
 mod transform;
 mod tsconfig;

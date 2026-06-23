@@ -434,6 +434,26 @@ pub static FEATURES: &[Feature] = &[
         )],
         evidence: "browser-shape Worker not in any Node; wraps node:worker_threads",
     },
+    // ── HTMLRewriter (Cloudflare-Workers-shape global) ──────────────────────
+    // Not shipped by ANY Node version. nub installs a Cloudflare-Workers-parity
+    // `HTMLRewriter` global backed by a first-party lol-html binding in the
+    // nub-native N-API addon (the same .node already cross-built for all 8
+    // platforms). The JS wrapper (runtime/html-rewriter.mjs) feature-detects and
+    // bows out when the global is already present (forward-compat), so no Rust
+    // version gate is needed; it is absent under --node/NODE_COMPAT because compat
+    // mode skips all preload injection (spawn.rs). The native engine is resolved
+    // lazily on first transform, keeping the addon off the common startup path.
+    Feature {
+        name: "HTMLRewriter",
+        mitigations: &[(
+            band((18, 19, 0), None),
+            Mitigation::Polyfill {
+                runtime_file: "html-rewriter.mjs",
+                global: "globalThis.HTMLRewriter",
+            },
+        )],
+        evidence: "CF/edge API; not in any Node through 26; first-party lol-html binding in nub-native",
+    },
     // ── navigator.locks (Web Locks API) ─────────────────────────────────────
     // Native on Node 24.5+ (worker: add web locks api, #58666 — NOT 24.0: the
     // global is undefined on 24.0–24.4); below that nub installs a Web Locks
