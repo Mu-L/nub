@@ -36,8 +36,8 @@
 use crate::backend::Degradation;
 use crate::policy::SandboxPolicy;
 use landlock::{
-    ABI, Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
-    RulesetAttr, RulesetCreated, RulesetCreatedAttr, RulesetStatus,
+    ABI, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    RulesetCreated, RulesetCreatedAttr, RulesetStatus,
 };
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
@@ -184,13 +184,33 @@ fn apply_seccomp_net() -> Result<(), String> {
     Ok(())
 }
 
-/// Probe whether Landlock is available on this kernel (cheap, one-time-ish).
+/// Probe whether Landlock can enforce the V2 policy `apply_landlock` needs.
+/// `Ruleset::create()` succeeds even on no-Landlock kernels (it degrades to a
+/// dummy), so it is not a reliable probe — and landlock 0.4 exposes no public
+/// ABI introspection. We query the kernel directly via the raw
+/// `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` syscall,
+/// which returns the supported ABI version (>= 2 means our V2 HardRequirement
+/// apply will FullyEnforce). This is allocation-free and async-signal-safe — no
+/// fork (unsafe under nub's tokio runtime), no degraded-dummy false-positive.
+/// A kernel without Landlock (e.g. Docker Desktop's LinuxKit VM) returns
+/// -EOPNOTSUPP/-ENOSYS → we degrade and skip the fs hook instead of EINVAL-ing
+/// the spawn (caught by the Linux e2e under Docker).
 fn landlock_available() -> bool {
-    // Creating a minimal ruleset and querying the ABI is the standard probe.
-    Ruleset::default()
-        .handle_access(AccessFs::from_all(ABI::V1))
-        .and_then(|r| r.create())
-        .is_ok()
+    // syscall numbers: landlock_create_ruleset = 444 on all Linux arches.
+    const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
+    // LANDLOCK_CREATE_RULESET_VERSION = 1<<0
+    const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
+    // SAFETY: passing NULL attr + size 0 + the VERSION flag is the documented
+    // ABI-query form; it allocates nothing and only reads the supported version.
+    let abi = unsafe {
+        libc::syscall(
+            SYS_LANDLOCK_CREATE_RULESET,
+            std::ptr::null::<libc::c_void>(),
+            0usize,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    };
+    abi >= ABI::V2 as i64
 }
 
 pub fn apply(cmd: &mut Command, policy: &SandboxPolicy) -> std::io::Result<Degradation> {
@@ -225,6 +245,14 @@ pub fn apply(cmd: &mut Command, policy: &SandboxPolicy) -> std::io::Result<Degra
     let policy = policy.clone();
     unsafe {
         cmd.pre_exec(move || {
+            // PR_SET_NO_NEW_PRIVS is REQUIRED before BOTH Landlock restrict_self
+            // and seccomp apply_filter — set it unconditionally so the no-Landlock
+            // (seccomp-only) tier doesn't EINVAL at apply_filter. (Caught by the
+            // Linux e2e: NNP was only set inside apply_landlock.)
+            let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+            if ret != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             if ll_ok {
                 apply_landlock(&policy).map_err(std::io::Error::other)?;
             }
