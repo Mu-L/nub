@@ -159,39 +159,97 @@ fn dotenv_read_is_blocked_at_any_depth() {
 
 #[test]
 fn network_egress_is_blocked() {
+    use std::io::Read;
+    use std::net::TcpListener;
+
     let tmp = tempfile::tempdir().unwrap();
     let (policy, _project, package_dir, _home) = fixture_policy(tmp.path());
 
-    // a raw TCP beacon to an external host must fail (net fully denied until
-    // the proxy lands). Use /dev/tcp via bash if present, else nc; the assert is
-    // "no successful connection".
-    let (ok, log) = run_sandboxed(
-        &policy,
-        &package_dir,
-        // bash's /dev/tcp; success would print CONNECTED. The sandbox denies the
-        // outbound socket, so this must fail.
-        "exec 3<>/dev/tcp/1.1.1.1/80 && echo CONNECTED || echo BLOCKED",
+    // NEGATIVE CONTROL — bind a loopback listener OUTSIDE the sandbox that is
+    // provably accepting, so a failed connect can ONLY mean the sandbox denied
+    // the socket (no routing/firewall/DNS confound, unlike dialing 1.1.1.1).
+    // The accept thread reads one byte so a real connection leaves a trace.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+    let port = listener.local_addr().unwrap().port();
+    // Accept in a LOOP for the whole test (detached; dies on process exit). The
+    // listener stays live through BOTH dials — so the sandboxed dial WOULD
+    // connect if the sandbox were a no-op. (A one-shot accept would let the
+    // sandboxed assertion pass vacuously once the listener closed — the exact
+    // hollowness this control exists to kill.)
+    std::thread::spawn(move || {
+        while let Ok((mut s, _)) = listener.accept() {
+            let mut buf = [0u8; 4];
+            let _ = s.read(&mut buf);
+        }
+    });
+
+    // Same dial script for both runs — bash's /dev/tcp (macOS `/bin/sh` is bash
+    // in POSIX mode and supports it). The ONLY difference is the sandbox wrap.
+    let dial = format!(
+        "exec 3<>/dev/tcp/127.0.0.1/{port} && printf ping >&3 && echo CONNECTED || echo BLOCKED"
     );
-    // the command itself returns 0 via the `|| echo BLOCKED` branch; what
-    // matters is it did NOT connect.
+
+    // (a) BASELINE — unsandboxed: the dial MUST connect. If this fails, the test
+    // environment can't even reach its own loopback listener and the sandboxed
+    // assertion below would be vacuous — so this proves the target is reachable.
+    let baseline = Command::new("sh")
+        .arg("-c")
+        .arg(&dial)
+        .current_dir(&package_dir)
+        .output()
+        .expect("spawn baseline dial");
+    let baseline_log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&baseline.stdout),
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    assert!(
+        baseline_log.contains("CONNECTED"),
+        "negative control FAILED: unsandboxed dial to a live loopback listener \
+         did not connect — the sandboxed assertion would be vacuous: {baseline_log}"
+    );
+
+    // (b) SANDBOXED — the identical dial, listener STILL live. Seatbelt denies the
+    // outbound socket at creation, so the dial cannot CONNECT.
+    let (ok, log) = run_sandboxed(&policy, &package_dir, &dial);
     assert!(
         !log.contains("CONNECTED"),
-        "sandbox allowed an outbound network connection: ok={ok} log={log}"
+        "sandbox allowed an outbound network connection (loopback): ok={ok} log={log}"
     );
 }
 
 #[test]
 fn parent_env_secret_does_not_leak_into_sandboxed_script() {
-    // Regression for the macOS sandbox-exec wrap env-leak (the wrapped Command
-    // would otherwise inherit this process's FULL env). The scrubbed allowlist
-    // must be the WHOLE child env — a parent secret must be ABSENT.
+    // TWO-SIDED allowlist proof through the macOS sandbox-exec re-wrap (the exact
+    // site of the env-leak regression — the wrapped Command would otherwise
+    // inherit this process's FULL env). Both halves must hold END-TO-END, post-
+    // wrap, or the scrub is wrong:
+    //   DENY half  — a seeded `AWS_*`/`*_TOKEN`/`*_PAT` secret must be ABSENT.
+    //   ALLOW half — a seeded ALLOWLISTED var (`npm_config_registry`) must be
+    //                PRESENT, and PATH must be non-empty. WITHOUT this half an
+    //                all-nuking scrub (`env_clear` + empty re-admit) would pass
+    //                the deny-only assertion while silently breaking every build.
     let tmp = tempfile::tempdir().unwrap();
     let (policy, _project, package_dir, _home) = fixture_policy(tmp.path());
+
+    // Seed a secret into THIS process's REAL environment too — under a unique,
+    // never-allowlisted name. This is what makes the deny half guard the actual
+    // env-leak REGRESSION SITE: the macOS wrap builds a FRESH `sandbox-exec`
+    // Command that would inherit our full real env unless it `env_clear()`s. If
+    // that clear ever regresses, this real-env secret leaks into the child —
+    // independent of the `inherited` vec (which only exercises `apply_env_scrub`).
+    // SAFETY: single-threaded test setup, before any spawn reads the env.
+    unsafe { std::env::set_var("NUB_TEST_REAL_PARENT_SECRET", "REAL-LEAK-XYZ") };
 
     let inherited = vec![
         (
             "PATH".to_string(),
             std::env::var("PATH").unwrap_or_default(),
+        ),
+        // allowlisted via the `npm_config_` prefix — a benign, build-essential var.
+        (
+            "npm_config_registry".to_string(),
+            "https://safe-registry.example".to_string(),
         ),
         (
             "AWS_SECRET_ACCESS_KEY".to_string(),
@@ -204,11 +262,32 @@ fn parent_env_secret_does_not_leak_into_sandboxed_script() {
         &policy,
         &package_dir,
         inherited,
-        "echo S=$AWS_SECRET_ACCESS_KEY T=$NPM_TOKEN P=$GH_PAT",
+        // print every var so both halves are asserted from ONE child env dump.
+        // R= proves the REAL-env secret was cleared by the wrap (regression site).
+        "echo S=$AWS_SECRET_ACCESS_KEY T=$NPM_TOKEN P=$GH_PAT R=$NUB_TEST_REAL_PARENT_SECRET \
+         REG=$npm_config_registry PATHLEN=${#PATH}",
     );
+    // DENY half (scrub) — no `inherited` secret survived `apply_env_scrub`.
     assert!(
         !log.contains("LEAKED"),
         "parent secret env leaked into the sandboxed script: {log}"
+    );
+    // DENY half (wrap env_clear regression site) — the REAL-env secret must NOT
+    // appear; if the macOS wrap stops clearing the inherited env, this leaks.
+    assert!(
+        !log.contains("REAL-LEAK-XYZ"),
+        "real parent-env secret leaked past the sandbox-exec re-wrap env_clear: {log}"
+    );
+    // ALLOW half — the allowlisted var reached the child through the re-wrap.
+    assert!(
+        log.contains("REG=https://safe-registry.example"),
+        "allowlisted npm_config_registry did NOT reach the sandboxed child \
+         (an over-nuking scrub would drop it and silently break builds): {log}"
+    );
+    // PATH must be non-empty in the child (PATHLEN=0 means PATH was dropped).
+    assert!(
+        !log.contains("PATHLEN=0") && log.contains("PATHLEN="),
+        "allowlisted PATH was empty in the sandboxed child: {log}"
     );
 }
 

@@ -101,3 +101,65 @@ pub fn apply(
 ) -> std::io::Result<Degradation> {
     stub::apply(cmd, policy)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The fail-safe-not-silent contract lives entirely in `Degradation`: a lost
+    // axis MUST surface a non-empty WARNING, and full enforcement MUST surface
+    // NONE. These tests are the negative control for the "silently no-op the
+    // warning" refactor (e.g. a future `warning()` that returns `None` when axes
+    // are lost) — that bug would flip both `degraded_*` cases to a panic here.
+    // Pure data, no OS needed.
+
+    #[test]
+    fn warning_is_none_when_fully_enforced() {
+        let full = Degradation::full();
+        assert!(full.is_full(), "empty `lost` must read as full enforcement");
+        assert!(
+            full.warning().is_none(),
+            "full enforcement must NOT emit a reduced-mode warning"
+        );
+    }
+
+    #[test]
+    fn degraded_axis_with_reason_names_the_axis_and_reason() {
+        let deg = Degradation {
+            lost: vec!["fs".into(), "net-per-host".into()],
+            reason: Some("Landlock unavailable on this kernel".into()),
+        };
+        assert!(!deg.is_full(), "a non-empty `lost` is NOT full enforcement");
+        let w = deg
+            .warning()
+            .expect("a lost axis MUST produce a warning — never silent");
+        // The contract: the warning is the reduced-mode banner, names EVERY lost
+        // axis, and carries the reason. (A fail-OPEN regression — running unjailed
+        // while reporting full — would make this `None` and fail the .expect.)
+        assert!(w.contains("reduced mode"), "warning text changed: {w}");
+        assert!(w.contains("fs"), "lost axis `fs` missing from warning: {w}");
+        assert!(
+            w.contains("net-per-host"),
+            "lost axis `net-per-host` missing from warning: {w}"
+        );
+        assert!(
+            w.contains("Landlock unavailable on this kernel"),
+            "reason missing from warning: {w}"
+        );
+    }
+
+    #[test]
+    fn degraded_axis_without_reason_still_warns() {
+        // A backend that loses an axis but supplies no reason string must STILL
+        // warn (the axis loss alone is the signal) — never silently no-op because
+        // `reason` was None.
+        let deg = Degradation {
+            lost: vec!["fs".into()],
+            reason: None,
+        };
+        let w = deg
+            .warning()
+            .expect("a lost axis with no reason MUST still warn");
+        assert!(w.contains("reduced mode") && w.contains("fs"), "{w}");
+    }
+}
