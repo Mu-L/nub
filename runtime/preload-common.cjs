@@ -257,20 +257,31 @@ function registerLoaderWorker(specifier, parentURL, options) {
   }
 }
 
-// Resolve a specifier through the parent module's own CommonJS resolver and return a
-// `{ url, shortCircuit }` the registerHooks resolve chain can return. Used ONLY as the
+// Resolve a specifier to a URL the registerHooks resolve chain can return, as the
 // recovery path when Node's default resolve step throws the async-loader `resolveSync`
-// stub (see the resolve hook). CJS resolution honors `node_modules`, package `exports`,
-// relative + absolute paths, and bare/scoped specifiers — the same surface Node's
-// default ESM resolve would have produced for the cases that reach here. Returns null
-// if it cannot resolve (caller re-throws the original error so behavior is unchanged).
+// stub (see the resolve hook). Returns `{ url, shortCircuit }`, or null if it cannot
+// resolve (caller re-throws the original error so behavior is unchanged).
+//
+// Resolution uses the parent's CommonJS resolver (`createRequire().resolve`), which is
+// the only fully-synchronous, conditions-capable resolver available in this `--require`
+// CJS preload. It honors `node_modules`, package `exports`, relative + absolute paths,
+// and bare/scoped specifiers — but under the REQUIRE condition. For a DUAL package whose
+// `exports` differ by `import`/`require`, this returns the `require` build where Node's
+// default ESM resolve would return the `import` build (the recovery path only fires under
+// the async-loader stub, and the in-the-wild trigger — @tailwindcss/node resolving its
+// own internal modules — is not a dual package, so the divergence is latent; tightening
+// to import-condition resolution needs a sync import-side resolver this CJS scope lacks).
+// Builtins MUST be mapped back to `node:`: `require.resolve("fs")` returns the bare name
+// `"fs"`, which must not be turned into a bogus `file://<cwd>/fs` URL.
 function resolveViaParentRequire(specifier, parentURL) {
   try {
     const base = parentURL && String(parentURL).startsWith("file:")
       ? String(parentURL)
       : pathToFileURL(join(process.cwd(), "noop.js")).href;
-    const req = module_.createRequire(base);
-    const resolved = req.resolve(specifier);
+    const resolved = module_.createRequire(base).resolve(specifier);
+    if (module_.isBuiltin(resolved)) {
+      return { url: resolved.startsWith("node:") ? resolved : `node:${resolved}`, shortCircuit: true };
+    }
     const url = resolved.startsWith("node:") || resolved.startsWith("data:")
       ? resolved
       : pathToFileURL(resolved).href;
