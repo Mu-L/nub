@@ -17,8 +17,21 @@
 // IMPORTANT: this guard is only meaningful on a Node-BROKEN version (v22.15-22.16,
 // v23.6-23.11, v24.1-24.11.x, v25.0-25.1). On Node-fixed versions (v24.12+, v25.2+, v26)
 // it is vacuously green. The matrix MUST run it on at least one broken-tier leg.
-import { register } from "node:module";
+import nodeModule, { register } from "node:module";
 import { writeSync } from "node:fs";
+
+// SELF-GUARD (Scenario B must not pass vacuously when nub's augmentation is silently
+// ABSENT). The resolveSync collision can only occur on nub's FAST tier — the tier that
+// installs SYNC hooks via `module.registerHooks`. nub wraps `registerHooks` with an internal
+// `__nubWrapped` sentinel (runtime/preload-common.cjs). So on any Node that HAS registerHooks
+// (>=22.15, the fast-tier floor), a MISSING sentinel means nub's preload never loaded — the
+// leg would otherwise "pass" the collision for the wrong reason (no sync hook = no crash, but
+// also = nothing under test). Fail loudly instead. (On the compat tier registerHooks does not
+// exist and the sync-hook collision is structurally impossible — nothing to guard.)
+if (typeof nodeModule.registerHooks === "function" && nodeModule.registerHooks.__nubWrapped !== true) {
+  writeSync(2, "COLLISION_FAIL: nub fast-tier augmentation is NOT active (registerHooks not wrapped) — preload did not load; the collision is not under test on this leg\n");
+  process.exit(3);
+}
 
 register("./loader.mjs", import.meta.url);
 

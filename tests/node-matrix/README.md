@@ -76,6 +76,13 @@ regression of the fix.
 
 ## Reproduce locally
 
+nub finds its `runtime/` (preload + addon) by walking up from the binary, so the binary must
+have `runtime/` as a sibling. The repo-root `target/debug/nub` does (the repo `runtime/` is a
+sibling) — but a binary built to an **out-of-tree** `CARGO_TARGET_DIR` (e.g. a worktree's
+`/tmp/<slug>-target/fast/nub`) does NOT: running the matrix against it directly yields **zero
+augmentation**, and the collision self-guard then hard-fails "augmentation NOT active". Bundle
+the binary with `runtime/` as siblings first — exactly what the CI `build` job stages.
+
 ```sh
 # Build the dev binary once (from the repo root):
 cargo build -p nub-cli -p nub-native
