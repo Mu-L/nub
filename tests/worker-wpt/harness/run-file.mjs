@@ -96,9 +96,13 @@ function makeRealmDriver({ harnessCode, harnessFile, includes, bodyCode, bodyFil
   // single function body so the worker can receive it as a string and run it.
   return function driveHarness() {
     return new Promise((resolveOuter) => {
-      // Grace window for async tests to settle before we emit whatever finished.
-      // The parent (run-wpt.mjs) sets a hard kill above this; keep them in sync.
-      const GRACE_MS = Number((typeof process !== "undefined" && process.env && process.env.WPT_GRACE_MS) || 2000);
+      // Grace window before the watchdog declares a non-completion (a real hang).
+      // INVARIANT: GRACE_MS must exceed the slice's LONGEST legitimate test timer
+      // (currently ~250ms) with headroom, AND stay below the parent's per-file kill
+      // (PER_FILE_TIMEOUT_MS, 20s). 5s gives ~20x headroom over the corpus while
+      // leaving the parent room — a too-tight grace would flake a slow-CI test RED
+      // (safe, never a false green), but the margin avoids that.
+      const GRACE_MS = Number((typeof process !== "undefined" && process.env && process.env.WPT_GRACE_MS) || 5000);
       globalThis.self = globalThis;
       globalThis.GLOBAL = {
         isWindow: () => isWindow,
