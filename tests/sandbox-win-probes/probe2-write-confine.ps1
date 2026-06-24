@@ -1,7 +1,7 @@
-# Probe 2 — Unprivileged FS write-confine
+# Probe 2 -- Unprivileged FS write-confine
 #
 # A child confined via AppContainer SID can write ONLY inside an allowed dir and is
-# BLOCKED writing elsewhere — no elevation, no second account.
+# BLOCKED writing elsewhere -- no elevation, no second account.
 #
 # NEGATIVE CONTROLS:
 #   NC-A: parent writes BOTH allowed + outside dirs (both writable absent sandbox).
@@ -67,7 +67,7 @@ try {
         if(-not $isAdmin){ Write-Host "PASS: unprivileged write-confine CONFIRMED"; $probe2='PASS' }
         else { Write-Host "confine held but ELEVATED -> cannot claim unprivileged"; $probe2='INCONCLUSIVE(elevated)' }
     }
-    elseif($codeOutside -eq 0){ Write-Host "*** FAIL: WROTE OUTSIDE — write-confine DID NOT HOLD ***"; $probe2='FAIL' }
+    elseif($codeOutside -eq 0){ Write-Host "*** FAIL: WROTE OUTSIDE -- write-confine DID NOT HOLD ***"; $probe2='FAIL' }
     else { Write-Host "INCONCLUSIVE: outside-write exit=$codeOutside (neither 0 nor 5)"; $probe2='INCONCLUSIVE' }
 }
 finally {

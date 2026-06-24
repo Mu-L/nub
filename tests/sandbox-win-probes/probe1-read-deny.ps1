@@ -1,8 +1,8 @@
-# Probe 1 — Unprivileged FS read-deny (THE KEY UNPROVEN CLAIM)
+# Probe 1 -- Unprivileged FS read-deny (THE KEY UNPROVEN CLAIM)
 #
 # From a NORMAL (non-elevated) token, create an AppContainer token, place a per-file
 # Access-Denied ACE keyed to that AppContainer SID on a seeded secret, launch a child
-# under it, and confirm the child CANNOT read the secret the PARENT CAN read — with NO
+# under it, and confirm the child CANNOT read the secret the PARENT CAN read -- with NO
 # elevation, no second account. No shipping tool does this on native Windows today.
 #
 # NEGATIVE CONTROLS (so a PASS cannot be vacuous):
@@ -71,7 +71,7 @@ try {
         if (-not $isAdmin) { Write-Host "PASS: unprivileged FS read-deny CONFIRMED (allowed readable, secret blocked, not elevated)"; $probe1='PASS' }
         else { Write-Host "read-deny held but process is ELEVATED -> cannot claim 'unprivileged'"; $probe1='INCONCLUSIVE(elevated)' }
     } elseif ($codeSecret -eq 0) {
-        Write-Host "*** FAIL: SECRET LEAKED — read-deny DID NOT HOLD ***"; $probe1='FAIL'
+        Write-Host "*** FAIL: SECRET LEAKED -- read-deny DID NOT HOLD ***"; $probe1='FAIL'
     } else {
         Write-Host "INCONCLUSIVE: secret-read exit=$codeSecret (neither 0 nor 5)"; $probe1='INCONCLUSIVE'
     }

@@ -2,7 +2,7 @@
 # - AC: AppContainer process launcher (CreateProcess + PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES)
 # - Build-ProbeChild: compile probe-child.exe under a controlled root, grant AppContainer SIDs RX
 # - New-ControlledDir / Grant-AcRx: dir-chain whose every ancestor we own (AppContainer SIDs are
-#   NOT in Users, so %TEMP% ancestors don't grant them traverse — use C:\probework instead).
+#   NOT in Users, so %TEMP% ancestors don't grant them traverse -- use C:\probework instead).
 
 $ErrorActionPreference = 'Stop'
 
@@ -10,10 +10,21 @@ $ErrorActionPreference = 'Stop'
 #   S-1-15-2-1 = ALL APPLICATION PACKAGES, S-1-15-2-2 = ALL RESTRICTED APPLICATION PACKAGES.
 $script:ProbeRoot = 'C:\probework'
 
-function Initialize-ProbeRoot {
+# The controlled root C:\probework must exist and grant AppContainer groups RX BEFORE the
+# probes run, because the probes run UNDER A NON-ELEVATED TOKEN that cannot create dirs at
+# C:\ nor re-ACL the root. Ensure-ProbeRoot (below) is called by the ELEVATED de-elevation
+# wrapper. Initialize-ProbeRoot here is tolerant: it uses the root if present and only
+# attempts creation/icacls best-effort (succeeds when called elevated; harmless no-op when
+# the non-elevated probe finds the root already prepared).
+function Ensure-ProbeRoot {
     if (-not (Test-Path $script:ProbeRoot)) { New-Item -ItemType Directory -Path $script:ProbeRoot -Force | Out-Null }
-    # icacls is the most reliable way to add the AC group ACEs with inheritance on the root.
-    & icacls $script:ProbeRoot /grant '*S-1-15-2-1:(OI)(CI)(RX)' '*S-1-15-2-2:(OI)(CI)(RX)' | Out-Null
+    # AC groups RX (inherited) + the interactive user Modify (so the non-elevated probe can
+    # create/seed/ACL its per-run subdirs).
+    & icacls $script:ProbeRoot /grant '*S-1-15-2-1:(OI)(CI)(RX)' '*S-1-15-2-2:(OI)(CI)(RX)' "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)(M)" | Out-Null
+}
+function Initialize-ProbeRoot {
+    if (Test-Path $script:ProbeRoot) { return }   # already prepared by the elevated wrapper
+    try { Ensure-ProbeRoot } catch { throw "C:\probework is not prepared and could not be created from this (non-elevated) token: $($_.Exception.Message)" }
 }
 
 function New-ControlledDir([string]$tag) {

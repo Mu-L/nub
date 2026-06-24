@@ -1,4 +1,4 @@
-# Probe 3 — AppContainer coarse egress + Job containment + env-scrub (all unprivileged)
+# Probe 3 -- AppContainer coarse egress + Job containment + env-scrub (all unprivileged)
 #
 # 3A EGRESS: an AppContainer WITHOUT the internetClient capability (S-1-15-3-1) cannot
 #    make an outbound TCP connect (WSAEACCES); WITH it, it can.
@@ -9,7 +9,7 @@
 #    NC: grandchild alive BEFORE close; gone AFTER.
 # 3C ENV scrub: a child spawned with a cleared env block does NOT see a seeded *_TOKEN.
 #    NC: a child inheriting the parent env DOES see it.
-#    (Scoped honestly: this proves parent-side env withholding at the spawn boundary —
+#    (Scoped honestly: this proves parent-side env withholding at the spawn boundary --
 #     NOT an AppContainer property. A determined child could read env via other means.)
 # All unprivileged. PASS = every sub-probe main+NC holds AND not elevated.
 
@@ -44,10 +44,10 @@ try {
     Write-Host "--- 3A.main: WITHOUT internetClient (expect exit 5 = WSAEACCES block) ---"
     $codeWithout=[AC]::LaunchWithCaps($sidPtr, @(), $cmd, $work3)
     Write-Host "no-internet raw exit: $codeWithout"
-    if($codeWith -ne 0){ Write-Host "3A INCONCLUSIVE: NC failed — even WITH internetClient connect did not succeed (exit=$codeWith); runner network unreachable?"; $results['3A']='INCONCLUSIVE' }
+    if($codeWith -ne 0){ Write-Host "3A INCONCLUSIVE: NC failed -- even WITH internetClient connect did not succeed (exit=$codeWith); runner network unreachable?"; $results['3A']='INCONCLUSIVE' }
     elseif($codeWithout -eq 5){ Write-Host "3A PASS: egress BLOCKED (WSAEACCES) w/o capability, allowed with it"; $results['3A']='PASS' }
     elseif($codeWithout -eq 0){ Write-Host "3A FAIL: egress NOT blocked without capability (LEAK)"; $results['3A']='FAIL' }
-    elseif($codeWithout -eq 6){ Write-Host "3A INCONCLUSIVE: without-internet TIMED OUT (exit 6) rather than WSAEACCES — block manifests as silent drop, not access-denied"; $results['3A']='INCONCLUSIVE' }
+    elseif($codeWithout -eq 6){ Write-Host "3A INCONCLUSIVE: without-internet TIMED OUT (exit 6) rather than WSAEACCES -- block manifests as silent drop, not access-denied"; $results['3A']='INCONCLUSIVE' }
     else { Write-Host "3A INCONCLUSIVE: without-internet exit=$codeWithout (expected 5)"; $results['3A']='INCONCLUSIVE' }
 }
 finally { [void][AC]::DeleteAppContainerProfile($acName) }
@@ -141,7 +141,7 @@ try {
     $scrubCode=$p.ExitCode
     Write-Host "scrubbed child getenv exit: $scrubCode (expect 4 = absent)"
     if(($ncCode -eq 0) -and ($scrubCode -eq 4)){ Write-Host "3C PASS: token hidden from scrubbed child, visible to inherit-child (NC)"; $results['3C']='PASS' }
-    elseif($ncCode -ne 0){ Write-Host "3C INCONCLUSIVE: NC failed — token not seen even by inherit-child (exit=$ncCode)"; $results['3C']='INCONCLUSIVE' }
+    elseif($ncCode -ne 0){ Write-Host "3C INCONCLUSIVE: NC failed -- token not seen even by inherit-child (exit=$ncCode)"; $results['3C']='INCONCLUSIVE' }
     else { Write-Host "3C FAIL: scrubbed child still saw token (exit=$scrubCode)"; $results['3C']='FAIL' }
 }
 catch { Write-Host "3C ERROR: $($_.Exception.Message)"; $results['3C']='INCONCLUSIVE' }
