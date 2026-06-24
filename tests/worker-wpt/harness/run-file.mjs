@@ -63,10 +63,20 @@ function resolveScript(spec, testDir) {
   return spec.startsWith("/") ? join(WPT_ROOT, spec.slice(1)) : resolve(testDir, spec);
 }
 
-// Emit the framed result line and exit. Status: 0 ok / 1 file-error.
-function emit(results, fileError) {
+// Emit the framed result line and exit. `fileError` is a hard driver-level failure
+// (couldn't load/run at all); `harnessStatus` is a non-OK whole-file harness outcome
+// (abort/timeout/watchdog) that no subtest reflects. Either makes the parent fail.
+function emit(results, fileError, harnessStatus) {
   process.stdout.write(
-    "\n__WPT_RESULT__" + JSON.stringify({ rel: TEST_REL, scope: SCOPE, fileError: fileError ?? null, results }) + "\n",
+    "\n__WPT_RESULT__" +
+      JSON.stringify({
+        rel: TEST_REL,
+        scope: SCOPE,
+        fileError: fileError ?? null,
+        harnessStatus: harnessStatus ?? null,
+        results,
+      }) +
+      "\n",
     // A test may leave a Worker/MessagePort holding the event loop open (or testharness
     // may still think a test is pending). Once the result is written, exit hard so the
     // subprocess doesn't linger to the parent's kill timeout.
@@ -98,34 +108,39 @@ function makeRealmDriver({ harnessCode, harnessFile, includes, bodyCode, bodyFil
       const collected = [];
       let settled = false;
       let watchdog = null;
-      const done = () => {
+      // Resolve with BOTH the per-subtest results AND a harness-level outcome. The
+      // parent (run-wpt.mjs) treats a non-OK harnessStatus as an unexpected failure —
+      // a whole-file abort (async uncaught exception, `done()` with no tests defined,
+      // harness timeout) is recorded ONLY in the harness status, never as a subtest,
+      // so reading just the subtests would report such a file as a false green.
+      const done = (harnessStatus) => {
         if (settled) return;
         settled = true;
         if (watchdog) clearTimeout(watchdog);
-        resolveOuter(collected);
+        resolveOuter({ results: collected, harnessStatus });
       };
 
       // ShellTestEnvironment (what testharness picks when there is no `document`
       // and no DedicatedWorkerGlobalScope — our case under nub) imposes NO default
       // per-test timeout, so a test that never reaches `done()` would hang the
-      // harness's completion callback forever. WPT tests that legitimately use a
-      // short `setTimeout(t.step_func_done(), N)` finish well within a grace
-      // window; if completion hasn't fired by then we emit the subtests that DID
-      // finish (captured per-test via add_result_callback). This mirrors Node's
-      // wpt-runner, where the parent process kills on a max timeout — except here
-      // we self-emit the finished results instead of losing them all.
-      watchdog = setTimeout(done, GRACE_MS);
+      // harness's completion callback forever. A WATCHDOG trip is therefore NOT a
+      // pass: it means the harness never completed (a real hang, or an async test
+      // that never called done()), so we report it as a harness-level failure
+      // (status WATCHDOG) — emitting the partial subtests as a silent green would
+      // mask the hang. Legitimate short `setTimeout(t.step_func_done(), N)` tests
+      // complete well inside the grace window, so this only bites genuine hangs.
+      watchdog = setTimeout(
+        () => done({ status: "WATCHDOG", message: `harness did not complete within ${GRACE_MS}ms` }),
+        GRACE_MS
+      );
 
       try {
         vm.runInThisContext(harnessCode, { filename: harnessFile });
       } catch (e) {
         collected.push({ name: "(load testharness.js)", status: 1, message: String(e && e.stack || e) });
-        return done();
+        return done({ status: "ERROR", message: "testharness.js load failed" });
       }
 
-      // The harness's setup: don't let an unterminated async test hang the realm
-      // forever. testharness honors `explicit_timeout`; we drive our own outer
-      // timer in the parent process instead, but also register completion here.
       try {
         globalThis.setup({ explicit_timeout: false, allow_uncaught_exception: false });
       } catch { /* setup is optional / may already have run */ }
@@ -133,7 +148,13 @@ function makeRealmDriver({ harnessCode, harnessFile, includes, bodyCode, bodyFil
       globalThis.add_result_callback((t) => {
         collected.push({ name: t.name, status: t.status, message: t.message ?? null });
       });
-      globalThis.add_completion_callback(() => done());
+      // The completion callback receives (tests, harness_status, asserts). A harness
+      // `status.status` of 0 is OK; 1=ERROR, 2=TIMEOUT — both are whole-file failures
+      // that no subtest reflects. Forward the harness status so the parent can fail.
+      globalThis.add_completion_callback((_tests, harness) => {
+        const s = harness && typeof harness.status === "number" ? harness.status : 0;
+        done(s === 0 ? null : { status: s === 2 ? "TIMEOUT" : "ERROR", message: (harness && harness.message) || `harness status ${s}` });
+      });
 
       // Load META script includes first (e.g. the structured-clone battery), then
       // the test body — all in this realm so they see nub's globals + the harness.
@@ -144,7 +165,7 @@ function makeRealmDriver({ harnessCode, harnessFile, includes, bodyCode, bodyFil
         vm.runInThisContext(bodyCode, { filename: bodyFile });
       } catch (e) {
         collected.push({ name: "(top-level)", status: 1, message: String(e && e.stack || e) });
-        return done();
+        return done({ status: "ERROR", message: "synchronous error in includes/body" });
       }
       // Synchronous-only files never trigger a pending async test, so the harness
       // completion callback fires on a microtask; async files complete when their
@@ -158,7 +179,7 @@ async function main() {
   try {
     src = readFileSync(join(WPT_ROOT, TEST_REL), "utf8");
   } catch (e) {
-    return emit([], "missing test file: " + e.message);
+    return emit([], "missing test file: " + e.message, null);
   }
   const { scripts } = parseMeta(src);
   const testDir = dirname(join(WPT_ROOT, TEST_REL));
@@ -170,7 +191,7 @@ async function main() {
     try {
       includes.push({ file: p, code: readFileSync(p, "utf8") });
     } catch (e) {
-      return emit([], `include ${spec}: ${e.message}`);
+      return emit([], `include ${spec}: ${e.message}`, null);
     }
   }
 
@@ -186,8 +207,8 @@ async function main() {
       bodyFile: join(WPT_ROOT, TEST_REL),
       isWindow: true,
     });
-    const results = await drive();
-    return emit(results, null);
+    const { results, harnessStatus } = await drive();
+    return emit(results, null, harnessStatus);
   }
 
   // Worker-scope path: run the harness + body INSIDE a real nub Worker so the
@@ -197,7 +218,7 @@ async function main() {
   // worker-scope conformance (the prototype ran everything main-scope).
   const { Worker } = globalThis;
   if (typeof Worker !== "function") {
-    return emit([], "Worker global unavailable (polyfill not installed)");
+    return emit([], "Worker global unavailable (polyfill not installed)", null);
   }
 
   const payload = {
@@ -221,8 +242,8 @@ const makeRealmDriver = (cfg) => {
 self.onmessage = async (ev) => {
   const cfg = { ...ev.data, isWindow: false };
   try {
-    const results = await makeRealmDriver(cfg)();
-    self.postMessage({ ok: true, results });
+    const { results, harnessStatus } = await makeRealmDriver(cfg)();
+    self.postMessage({ ok: true, results, harnessStatus });
   } catch (e) {
     self.postMessage({ ok: false, message: String(e && e.stack || e) });
   }
@@ -232,30 +253,33 @@ self.onmessage = async (ev) => {
     "data:text/javascript;base64," + Buffer.from(workerSource, "utf8").toString("base64")
   );
 
-  const results = await new Promise((res) => {
+  const out = await new Promise((res) => {
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; res(v); } };
     let w;
     try {
       w = new Worker(dataUrl, { type: "module" });
     } catch (e) {
-      return finish({ fileError: "worker spawn: " + e.message, results: [] });
+      return finish({ fileError: "worker spawn: " + e.message, results: [], harnessStatus: null });
     }
     w.onmessage = (ev) => {
-      if (ev.data && ev.data.ok) finish({ fileError: null, results: ev.data.results });
-      else finish({ fileError: "worker error: " + (ev.data && ev.data.message), results: [] });
+      if (ev.data && ev.data.ok) {
+        finish({ fileError: null, results: ev.data.results, harnessStatus: ev.data.harnessStatus ?? null });
+      } else {
+        finish({ fileError: "worker error: " + (ev.data && ev.data.message), results: [], harnessStatus: null });
+      }
       try { w.terminate(); } catch { /* already gone */ }
     };
     w.onerror = (ev) => {
-      finish({ fileError: "worker onerror: " + (ev.message || ev), results: [] });
+      finish({ fileError: "worker onerror: " + (ev.message || ev), results: [], harnessStatus: null });
       try { w.terminate(); } catch { /* already gone */ }
     };
     w.postMessage(payload);
   });
 
-  return emit(results.results, results.fileError);
+  return emit(out.results, out.fileError, out.harnessStatus);
 }
 
 main().catch((e) => {
-  emit([], "driver crash: " + String(e && e.stack || e));
+  emit([], "driver crash: " + String(e && e.stack || e), null);
 });

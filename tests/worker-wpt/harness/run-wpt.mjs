@@ -148,6 +148,11 @@ const PASS = 0;
       continue;
     }
     const expectedFails = new Set((entry.fail && entry.fail.expected) || []);
+    // Track which expected-fail names actually matched a subtest, so a stale/typo'd
+    // entry (a name that matches nothing — e.g. an upstream rename) is surfaced
+    // rather than silently rotting and quietly holding a divergent subtest to
+    // must-pass. Reconciled per file after all its scopes run.
+    const matchedExpected = new Set();
 
     for (const scope of scopesFor(rel, entry)) {
       const r = await runOne(rel, scope);
@@ -156,6 +161,15 @@ const PASS = 0;
         fileErrors++;
         unexpectedFail++;
         report.push(`  ERROR ${label}  ${r.fileError}`);
+        continue;
+      }
+      // A non-OK harness status is a WHOLE-FILE failure (async uncaught exception,
+      // `done()` with no tests, harness timeout, or our watchdog trip) that NO
+      // subtest reflects — counting only subtests would report it as a false green.
+      if (r.harnessStatus) {
+        unexpectedFail++;
+        report.push(`  FAIL  ${label}  harness ${r.harnessStatus.status}: ${r.harnessStatus.message || ""}`);
+        if (process.env.WPT_STREAM) console.error(`  FAIL  ${label}  harness ${r.harnessStatus.status}`);
         continue;
       }
       // A file that produced ZERO subtests but is NOT a skip is suspect: its
@@ -172,6 +186,7 @@ const PASS = 0;
       const unexpPasses = [];
       for (const sub of r.results) {
         const isExpectedFail = expectedFails.has(sub.name);
+        if (isExpectedFail) matchedExpected.add(sub.name);
         if (sub.status === PASS) {
           if (isExpectedFail) {
             unexpPasses.push(sub.name);
@@ -204,6 +219,17 @@ const PASS = 0;
       // Stream progress so a slow/hung file is visible live (and a CI log shows
       // forward progress rather than going dark until the very end).
       if (process.env.WPT_STREAM) for (const l of lines) console.error(l);
+    }
+
+    // Expected-fail-list rot guard: any name declared in `expected[]` that never
+    // matched a real subtest is stale (a typo, or an upstream rename) — fail the run
+    // so the status file stays honest. Without this, a stale entry silently holds a
+    // since-renamed divergent subtest to must-pass with no warning.
+    const stale = [...expectedFails].filter((n) => !matchedExpected.has(n));
+    if (stale.length) {
+      unexpectedFail += stale.length;
+      report.push(`  FAIL  ${rel}  stale expected-fail names (matched no subtest): ${stale.join(" | ")}`);
+      if (process.env.WPT_STREAM) console.error(`  FAIL  ${rel}  ${stale.length} stale expected-fail names`);
     }
   }
 
