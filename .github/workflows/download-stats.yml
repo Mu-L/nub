@@ -41,7 +41,9 @@ jobs:
           ts="${{ steps.ts.outputs.value }}"
           node - "$ts" <<'EOF'
           const fs = require("fs");
-          const ts = process.argv[1];
+          // `node - "$ts"` puts the `-` stdin marker at argv[1]; the timestamp is argv[2].
+          const ts = process.argv[2];
+          if (!ts) throw new Error("snapshot timestamp argument missing");
           const gh = JSON.parse(fs.readFileSync("/tmp/gh-releases.json", "utf8"));
           const npm = JSON.parse(fs.readFileSync("/tmp/npm-counts.json", "utf8"));
           const snapshot = {

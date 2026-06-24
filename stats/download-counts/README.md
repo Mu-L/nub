@@ -5,6 +5,7 @@ Daily snapshots of cumulative download counts, written by the [download-stats wo
 ## Files
 
 - `YYYYMMDDTHHMMSSZ.json` — one snapshot per day, committed by the cron job.
+- `backfill-YYYYMMDD.json` — one-time recovery file (see [Backfill](#backfill) below).
 - `report.mjs` — diff/trend script; run locally with `node stats/download-counts/report.mjs`.
 - `README.md` — this file.
 
@@ -47,6 +48,17 @@ node stats/download-counts/report.mjs --last 7 # last 7 days
 **GitHub's count is a total-binary-pulls number, not a curl/PowerShell-install count.** Every download of each release asset is counted: curl installs, `nub upgrade` self-updates, CI runners pulling the binary, manual browser downloads, and bots. Use it as a trend and a platform-mix indicator. If you want a count scoped specifically to script-based installs, that requires Phase 1 (a logging redirect or an install-script ping — see `wiki/research/download-analytics.md`).
 
 The npm figure is also an approximation: it's a last-30-days rolling window from the npm downloads API, not a true daily delta.
+
+## Backfill
+
+The daily workflow failed every run from its inception (~2026-06-19) through 2026-06-24 — the write step read the `node -` stdin marker as its timestamp argument instead of the actual timestamp, so it wrote `-.json` while the commit step `git add`ed the real filename and exited 128. No going-forward snapshots were produced in that window.
+
+`backfill-YYYYMMDD.json` recovers what is recoverable:
+
+- **npm: fully recovered.** npm's downloads API keeps complete daily history, so the file carries the full per-day series from the v0.1.0 launch (2026-06-17) forward, fetched from `https://api.npmjs.org/downloads/range/2026-06-17:<today>/@nubjs/nub`.
+- **GitHub releases: cumulative only.** GitHub exposes only the current cumulative `download_count` per asset — there is **no historical download endpoint**, so the per-day deltas missed during the outage are **unrecoverable**. The backfill captures today's cumulative per-asset totals as a baseline; going-forward snapshots diff from there.
+
+The backfill schema differs from a daily snapshot: `{ kind: "backfill", npm_daily: <range response>, github_releases_cumulative: <releases> }`. `report.mjs` ignores it (it only reads `YYYYMMDDTHHMMSSZ.json` snapshots).
 
 ## Adding a new snapshot manually
 
