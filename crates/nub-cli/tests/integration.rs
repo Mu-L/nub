@@ -2298,8 +2298,12 @@ fn worker_blob_wrapping_preserves_file_instanceof_blob() {
     // false — an additivity violation vs vanilla Node (File IS-A Blob).
     let (stdout, stderr, code) = run_nub("worker", "blob-file-instanceof.ts");
     assert_eq!(code, 0, "blob/File fixture should run: {stderr}\n{stdout}");
+    // `File` is a Node global only from v20; on the 18.x floor it is absent (as in
+    // vanilla Node), so the fixture reports a skip there. When File exists it MUST
+    // remain a Blob after nub's Blob wrap.
     assert!(
-        stdout.contains("file-instanceof-blob:true"),
+        stdout.contains("file-instanceof-blob:true")
+            || stdout.contains("file-instanceof-blob:skip-no-File-global"),
         "File must remain an instanceof Blob after the Blob wrap (matches plain Node): {stdout}"
     );
     assert!(

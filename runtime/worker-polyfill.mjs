@@ -145,7 +145,6 @@ export function installWorkerPolyfill() {
       //   - blob: URL              → resolve the Blob via node:buffer, spawn its
       //                              source with eval:true (Node can't open blob:)
       let spawnTarget;
-      let evalMode = false;
 
       const asUrlString =
         url instanceof URL ? url.href : typeof url === "string" ? url : null;
@@ -158,16 +157,22 @@ export function installWorkerPolyfill() {
         // URL as a worker entry, and the Blob's bytes are only readable
         // ASYNCHRONOUSLY (Blob.text/arrayBuffer) while this constructor is sync.
         // We close that gap by snapshotting the source SYNCHRONOUSLY at
-        // `URL.createObjectURL(blob)` time (see installBlobUrlSupport below) into
-        // a module-scope registry keyed by URL, then spawn it with eval:true.
+        // `URL.createObjectURL(blob)` time (see installBlobUrlSupport) into a
+        // module-scope registry keyed by URL, then spawn the source as a `data:`
+        // URL. We use data: (NOT eval:true) deliberately: the `--import` preload
+        // that installs nub's worker-side scope (self/postMessage) does NOT run in
+        // an eval:true worker on the compat-tier FLOOR (Node 18.19 — verified), so
+        // an eval-based blob worker has no `self` there; a data: URL worker is a
+        // real module load and DOES receive the preload on every supported tier.
         const source = blobUrlSources.get(asUrlString);
         if (source === undefined) {
           throw new TypeError(
             `Worker constructor: blob URL '${asUrlString}' is not a known object URL`
           );
         }
-        spawnTarget = source;
-        evalMode = true;
+        spawnTarget = new URL(
+          "data:text/javascript;base64," + Buffer.from(source, "utf8").toString("base64")
+        );
       } else if (asUrlString.startsWith("data:")) {
         spawnTarget = new URL(asUrlString);
       } else if (asUrlString.startsWith("file://")) {
@@ -209,20 +214,28 @@ export function installWorkerPolyfill() {
 
       const nodeOptions = {
         ...options,
-        eval: evalMode,
+        eval: false,
         execArgv,
       };
-      // Signal the worker type via the internal NUB_WORKER_TYPE env without
-      // disturbing the user's env semantics. `worker_threads.SHARE_ENV` is a
-      // Symbol (live-shared parent env) — spreading it would destroy the share —
-      // so in that case we leave env untouched and let the worker default
-      // importScripts to the classic form (the only edge where the module-worker
-      // throwing-importScripts nicety is skipped).
+      // Thread the worker type AND name to the worker via internal env vars
+      // (NUB_WORKER_TYPE / NUB_WORKER_NAME — internal plumbing, exempt from the
+      // brand boundary). NUB_WORKER_NAME is REQUIRED for self.name across the
+      // whole compat tier: worker_threads.threadName (the only native worker-side
+      // reader of the {name} option) lands in v24.6.0 / v22.20.0, so it is absent
+      // below that and the env is the sole portable carrier. We avoid disturbing
+      // the user's env semantics: `worker_threads.SHARE_ENV` is a Symbol
+      // (live-shared parent env) — spreading it would destroy the share — so in
+      // that case we leave env untouched (self.name then falls back to native
+      // threadName/"" and importScripts defaults to the classic form).
       const userEnv = options.env;
       if (typeof userEnv === "symbol") {
         // SHARE_ENV: leave nodeOptions.env as the user gave it; can't inject.
       } else {
-        nodeOptions.env = { ...(userEnv ?? process.env), NUB_WORKER_TYPE: workerType };
+        nodeOptions.env = {
+          ...(userEnv ?? process.env),
+          NUB_WORKER_TYPE: workerType,
+          NUB_WORKER_NAME: this.#name,
+        };
       }
       if (this.#name) nodeOptions.name = this.#name;
 
@@ -337,12 +350,20 @@ if (!isMainThread && parentPort) {
   defineGlobal("self", scope);
 
   // `self.name` — the worker's name from the constructor's {name} option (WHATWG
-  // DedicatedWorkerGlobalScope.name). Node backs the {name} ctor option with a
-  // per-thread `worker_threads.threadName` (v18.16, safe at nub's 18.19 floor),
-  // readable inside the worker — so we surface that directly, no extra plumbing.
+  // DedicatedWorkerGlobalScope.name). Node only exposes a worker-side reader for
+  // the {name} option as `worker_threads.threadName` from v24.6.0 / v22.20.0 — it
+  // is ABSENT across nub's whole compat tier (18.19–22.14) and on 22.15–22.19, so
+  // it cannot be the floor mechanism. We therefore THREAD the name in ourselves
+  // via the internal NUB_WORKER_NAME env (internal plumbing var — exempt from the
+  // brand boundary), set by the main-side constructor, and prefer the native
+  // threadName where it exists (newer Node). The env survives across the floor and
+  // is the only portable carrier; the SHARE_ENV edge (where the ctor can't inject
+  // env) falls back to native threadName / "".
   {
     const wt = __getBuiltin("node:worker_threads");
-    const name = wt && typeof wt.threadName === "string" ? wt.threadName : "";
+    const name =
+      (wt && typeof wt.threadName === "string" && wt.threadName) ||
+      (typeof process.env.NUB_WORKER_NAME === "string" ? process.env.NUB_WORKER_NAME : "");
     Object.defineProperty(scope, "name", {
       value: name,
       enumerable: false,
