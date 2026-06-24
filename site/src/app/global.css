@@ -315,10 +315,13 @@ pre span[style*='#6a737d'] {
   color: var(--nub-code-muted) !important;
 }
 
-/* ```console fences get a terminal look via the `nub:console` shiki transformer
-   (`src/lib/shiki-console.ts`): command lines carry `data-cmd`, output lines
-   carry `data-output`, and the `$ ` prompt is split into a `.console-prompt`
-   span. The transformer is presentation-free; all the colors live here.
+/* Shell fences (console/bash/sh/shell/…) get a terminal look via the
+   `nub:console` shiki transformer (`src/lib/shiki-console.ts`), but ONLY when
+   the block contains at least one `$ ` prompt line — a plain command list or an
+   all-output block is left unstyled. When active: command lines carry
+   `data-cmd`, output lines carry `data-output`, and the `$ ` prompt is split
+   into a `.console-prompt` span. The transformer is presentation-free; all the
+   colors live here.
 
    Shiki writes inline `color:` styles on every token span and fumadocs' theme
    rule (`.dark .shiki code span { color: var(--shiki-dark) }`, specificity
