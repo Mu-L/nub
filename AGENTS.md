@@ -83,7 +83,7 @@ A busy `main` with several open PRs and in-progress worktrees is expected and fi
 
 ### Worktree dev loop — fast incremental builds + the real build/test incantations
 
-Full runbook + crate map: the `nub-dev` skill (`.claude/skills/nub-dev/SKILL.md`). The essentials, so a worktree iterates fast (measured 2026-06-20):
+Full runbook + crate map: the `dev-loop` skill (`.claude/skills/dev-loop/SKILL.md`). The essentials, so a worktree iterates fast (measured 2026-06-20):
 
 - **Set up the worktree, give it its OWN target dir** (per the proven workflow above): `git worktree add … -b <slug> origin/main`, then `export CARGO_TARGET_DIR=/tmp/<slug>-target`. vendor/aube is plain in-tree files now — no submodule init step. The per-worktree target dir is what keeps a sibling's build from contaminating yours — keep it.
 - **Iterate with the `fast` profile, NEVER `release`.** `cargo build -p nub-cli --profile fast` builds the dev CLI to `target/fast/nub`. Cold ≈ 3 min; every subsequent rebuild in the same target dir ≈ 5s via cargo's native incremental. The `release` profile's `lto=thin` + `codegen-units=1` makes a cold build ≈ 15 min and re-LTOs the whole binary on every change — do not use it to iterate. For the full dev binary + N-API addon on PATH, `make install-dev` (symlinks `nub-dev`/`nubx-dev` → `target/fast/nub`); for the addon alone, `make addon-fast`. There is no `nub build` command.

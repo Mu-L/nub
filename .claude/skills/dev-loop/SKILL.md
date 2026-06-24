@@ -1,5 +1,5 @@
 ---
-name: nub-dev
+name: dev-loop
 description: >-
   Build and test nub during development. Invoke (via the Skill tool) whenever
   you need to compile the dev `nub` binary, set up a worktree for fast

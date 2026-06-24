@@ -10,7 +10,7 @@ description: >-
   files now, no submodule init), the stable per-worktree CARGO_TARGET_DIR fast
   loop, and applying
   `.worktreeinclude` — plus the eagerly-pull-the-shared-tree discipline and the
-  safe cleanup path. Pairs with the `nub-dev` build skill.
+  safe cleanup path. Pairs with the `dev-loop` build skill.
 ---
 
 # Worktrees for parallel nub work
@@ -47,7 +47,7 @@ export CARGO_TARGET_DIR=/tmp/nub-wt-<slug>-target   # keep this stable for the w
 cargo build -p nub-cli --profile fast               # ~3 min cold, ~5s incremental
 ```
 
-The build loop, profiles, and crate map live in the `nub-dev` skill (`.claude/skills/nub-dev/SKILL.md`). The one rule that makes iteration fast: keep ONE stable target dir per worktree for the whole session — cargo's incremental fingerprints are keyed to the absolute target path, so cleaning, moving, or re-seeding it forces a full cold rebuild. The script never seeds a target dir for exactly this reason; it just prints the dir to export.
+The build loop, profiles, and crate map live in the `dev-loop` skill (`.claude/skills/dev-loop/SKILL.md`). The one rule that makes iteration fast: keep ONE stable target dir per worktree for the whole session — cargo's incremental fingerprints are keyed to the absolute target path, so cleaning, moving, or re-seeding it forces a full cold rebuild. The script never seeds a target dir for exactly this reason; it just prints the dir to export.
 
 ## `.worktreeinclude` — bringing gitignored things in
 
