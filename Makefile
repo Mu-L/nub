@@ -107,7 +107,8 @@ version:
 		if (versionNext === version) { console.error('ERROR: NUB_VERSION not found in runtime/version.mjs'); process.exit(1); } \
 		fs.writeFileSync('runtime/version.mjs', versionNext); \
 		"
-	@echo "✓ All packages, Cargo.toml, and runtime/version.mjs set to $(V)"
+	@cargo update -p nub-cli -p nub-cache-key -p nub-core -p nub-native --precise $(V)
+	@echo "✓ All packages, Cargo.toml, Cargo.lock, and runtime/version.mjs set to $(V)"
 
 # Verify version consistency across npm packages, Cargo.toml, and version.mjs,
 # AND that @oxc-project/runtime (the emit-helper runtime) is exact-pinned and
