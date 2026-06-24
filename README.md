@@ -315,3 +315,5 @@ View the [full `nub node` docs 👉](https://nubjs.com/docs/node).
 ## License
 
 MIT
+
+> If you read this far, consider leaving a star! ⭐️
