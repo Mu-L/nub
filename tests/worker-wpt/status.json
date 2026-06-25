@@ -91,7 +91,7 @@
               "Transferring a non-transferable platform object fails",
               "Serializing a non-serializable platform object fails"
             ],
-            "note": "NODE native-serializer error behavior on lines BELOW 22: Node's native MessageChannel postMessage does NOT reject these transfer/serialize error cases on Node 18/20 — re-transferring an already-detached ArrayBuffer, transferring a non-transferable Blob, and serializing a non-serializable Response all silently succeed instead of throwing DataCloneError. Verified on vanilla Node (no nub) on 18.19 and 20 (no throw) vs Node 22.15+/24 (throws DataCloneError). nub does not intermediate a native MessageChannel's serializer, so this is the underlying Node behavior, not a nub divergence — expected-fail on the 18/20 legs only."
+            "note": "NODE native-serializer error behavior on lines BELOW 22: Node's native MessageChannel postMessage does NOT reject these transfer/serialize error cases on Node 18/20 — re-transferring an already-detached ArrayBuffer, transferring a non-transferable Blob, and serializing a non-serializable Response all silently succeed instead of throwing DataCloneError. Verified on vanilla Node (no nub) on 18.19 and 20 (no throw) vs Node 22.15+/24 (throws DataCloneError). nub does not intermediate a native MessageChannel's serializer, so this is the underlying Node behavior, not a nub divergence — expected-fail on the 18/20 legs only. The throw boundary is verified at the matrix legs (no-throw on 18.19/20, throws on 22.15+); if a sub-22.15 leg (22.0-22.14) is ever added, re-verify the exact minor where the native rejection landed."
           },
           {
             "maxMajor": 19,

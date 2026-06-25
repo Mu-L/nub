@@ -89,12 +89,18 @@ function installSyncPolyfills(preloaded) {
   // exists only as `node:buffer`'s `File` export. Backfill the global from there
   // so worker/messaging code that constructs `new File(...)` works down to the
   // floor (polyfill-all-the-way-down). Identity is preserved (same constructor as
-  // `node:buffer`), so `instanceof` and undici's webidl brand checks hold. Reading
-  // `buffer.File` on Node 18 emits a one-time `ExperimentalWarning`; suppress just
-  // that line so the floor backfill is silent (the API is stable in practice and
-  // is the standard global on Node 20+). Blob is already global on 18.x, but the
-  // same backfill guards it for completeness. Non-enumerable to match Node's own
-  // global descriptors (the additive contract: invisible to global enumeration).
+  // `node:buffer`), so `instanceof` and undici's webidl brand checks hold. Blob is
+  // already global on 18.x, but the same backfill guards it for completeness.
+  // Non-enumerable to match Node's own global descriptors (the additive contract:
+  // invisible to global enumeration).
+  //
+  // Node 18 emits a one-time `ExperimentalWarning: buffer.File …` on the FIRST
+  // `new File(...)` (the constructor, NOT the property read). Without nub the floor
+  // simply has no `File` global, so backfilling it would newly surface that warning
+  // when user code first constructs a File. To keep the floor backfill silent we
+  // force one throwaway construction INSIDE a suppression window: that consumes
+  // Node's once-per-feature guard (the warning is dropped here) so the user's later
+  // `new File(...)` is silent.
   if (typeof globalThis.File === "undefined" || typeof globalThis.Blob === "undefined") {
     const origEmitWarning = process.emitWarning;
     process.emitWarning = function (warning, ...rest) {
@@ -106,14 +112,19 @@ function installSyncPolyfills(preloaded) {
     };
     try {
       const buffer = require("node:buffer");
+      const sampleArgs = { File: [[], ""], Blob: [[]] };
       for (const name of ["File", "Blob"]) {
-        if (typeof globalThis[name] === "undefined" && typeof buffer[name] === "function") {
+        const Ctor = buffer[name];
+        if (typeof globalThis[name] === "undefined" && typeof Ctor === "function") {
           Object.defineProperty(globalThis, name, {
-            value: buffer[name],
+            value: Ctor,
             enumerable: false,
             writable: true,
             configurable: true,
           });
+          // Trip (and suppress) the experimental-feature warning now, so user code
+          // never sees it.
+          try { new Ctor(...sampleArgs[name]); } catch { /* construction shape varies; the warning fires regardless */ }
         }
       }
     } finally {
