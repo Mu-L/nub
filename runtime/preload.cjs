@@ -217,9 +217,11 @@ function installLazyEsmPolyfills() {
   // cheap no-op, wired for symmetry with the compat tier. See navigator-shim.mjs.
   try {
     __require("./navigator-shim.mjs").installNavigatorShim();
-  } catch {
+  } catch (err) {
     // require(esm) disabled (--no-experimental-require-module): navigator is native at
-    // the fast floor, so skipping the no-op shim is harmless.
+    // the fast floor, so skipping the no-op shim is harmless. Any OTHER error is a real
+    // fault in the module — surface it rather than swallow it.
+    if (!err || err.code !== "ERR_REQUIRE_ESM") throw err;
   }
 
   if (inWorkerThread) {

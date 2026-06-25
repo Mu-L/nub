@@ -94,9 +94,13 @@ function makeNavigator() {
       return (_plat ??= navigatorPlatform(process.platform, process.arch));
     }
   }
-  // Match Node: the property getters live on the prototype and are enumerable, so a
-  // `for (const k in navigator)` walks them, while `Object.keys(navigator)` (own
-  // enumerable) is empty — exactly Node's instance shape.
+  // Match Node's instance shape: the property getters live on the prototype and are
+  // ENUMERABLE (Node sets them with kEnumerableProperty), so `for (const k in
+  // navigator)` walks them while `Object.keys(navigator)` (own enumerable) is empty.
+  // Class-body getters default to enumerable:false, so flip them in place.
+  for (const k of ["hardwareConcurrency", "language", "languages", "userAgent", "platform"]) {
+    Object.defineProperty(Navigator.prototype, k, { enumerable: true });
+  }
   return { Navigator, instance: new Navigator() };
 }
 

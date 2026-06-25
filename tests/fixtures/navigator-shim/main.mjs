@@ -14,6 +14,11 @@ push("language is a string", typeof nav.language === "string" && nav.language.le
 push("languages is an array of strings", Array.isArray(nav.languages) && nav.languages.every((l) => typeof l === "string"));
 push("platform is a string", typeof nav.platform === "string" && nav.platform.length > 0);
 push("navigator.locks is present", typeof nav.locks === "object" && nav.locks !== null);
+// Match Node: the prototype getters are enumerable, so for-in walks them (this catches
+// a regression to class-default non-enumerable getters on the shim path).
+const forIn = [];
+for (const k in nav) forIn.push(k);
+push("for-in walks the enumerable getters", forIn.includes("hardwareConcurrency") && forIn.includes("userAgent"));
 
 const ok = checks.every((c) => c[1]);
 for (const c of checks) if (!c[1]) console.log("navshim:FAIL:" + c[0]);

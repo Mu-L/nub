@@ -217,13 +217,18 @@ if (typeof globalThis.navigator === "object" && typeof globalThis.navigator.lock
     }
 
     async query() {
+      // clientId is per-realm and opaque: `node-<pid>-0` (single-process; this polyfill
+      // does not coordinate across worker threads, so the threadId slot is always 0 —
+      // and we avoid importing node:worker_threads to keep this module builtin-free for a
+      // cheap bootstrap). The cross-context distinct-id WPT cases are browser-specific.
+      const clientId = `node-${process.pid}-0`;
       const heldOut = [];
       for (const [name, rec] of held) {
-        for (let i = 0; i < rec.holders.size; i++) heldOut.push({ name, mode: rec.mode, clientId: "" });
+        for (let i = 0; i < rec.holders.size; i++) heldOut.push({ name, mode: rec.mode, clientId });
       }
       const pending = [];
       for (const [name, q] of queue) {
-        for (const w of q) if (!w.settled) pending.push({ name, mode: w.mode, clientId: "" });
+        for (const w of q) if (!w.settled) pending.push({ name, mode: w.mode, clientId });
       }
       return { held: heldOut, pending };
     }
