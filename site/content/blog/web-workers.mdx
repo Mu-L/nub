@@ -29,9 +29,9 @@ So the ecosystem worked around it. The web-`Worker` shape became the thing you w
 
 ## Why Node declined
 
-The Node team's position is reasonable, and worth representing fairly. The worker's *child* side — the `DedicatedWorkerGlobalScope` the browser exposes, with `importScripts`, `WorkerNavigator`, `WorkerLocation`, the document/origin model — is a completely different environment from a Node thread. A `Worker` global that looked browser-shaped on the parent side but ran a Node environment on the child side would set an expectation the runtime cannot fully meet. And the maintainers have been explicit that an incomplete userland polyfill is, if anything, an argument *against* pulling the feature into core: a half-match in the standard library is worse than a clear "use `node:worker_threads`."
+The Node team's position is reasonable. The worker's *child* side — the `DedicatedWorkerGlobalScope` the browser exposes, with `importScripts`, `WorkerNavigator`, `WorkerLocation`, the document/origin model — is a completely different environment from a Node thread. A `Worker` global that looked browser-shaped on the parent but ran a Node environment in the child would set an expectation the runtime cannot fully meet. The maintainers have been explicit that an incomplete userland polyfill is, if anything, an argument *against* pulling the feature into core.
 
-That is a sound call for Node's standard library. It is a different question for a tool whose entire job is to bridge the gap between the web platform and the Node you run. Nub is not core, makes no claim to be a browser, and documents exactly where the wrapper and the browser diverge. The gap Node declined to close in core is precisely the one nub exists to close.
+That is a sound call for a standard library, where a half-match is worse than a clear "use `node:worker_threads`." It is a different question for a tool whose job is to bridge the web platform and the Node you run. Nub is not core, makes no claim to be a browser, and documents exactly where the wrapper and a browser `Worker` diverge.
 
 ## How it is built
 
@@ -41,7 +41,7 @@ It is **feature-detected**: the polyfill checks `typeof globalThis.Worker` and i
 
 ## Using it
 
-A row of the things you can actually do. Every example below runs on stock Node through nub today.
+Every example below runs on stock Node through nub today.
 
 **A TypeScript worker, no build step.** The worker entry is transpiled like any other nub entry — point at the `.ts` file and go.
 
@@ -51,7 +51,7 @@ worker.onmessage = (ev) => console.log("got", ev.data);
 worker.postMessage("ping");
 ```
 
-**Module or classic.** `{ type: "module" }` is the default shape; `{ type: "classic" }` gives the worker a synchronous `importScripts()`.
+**Module or classic.** The default shape is `{ type: "module" }`; pass `{ type: "classic" }` and the worker gets a synchronous `importScripts()`.
 
 ```ts
 const mod = new Worker(new URL("./mod.ts", import.meta.url), { type: "module" });
