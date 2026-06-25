@@ -84,6 +84,63 @@ function installSyncPolyfills(preloaded) {
     });
   }
 
+  // ── File (global on Node 20+, missing on the 18.x compat floor) ─────
+  // Node exposes the WHATWG `File` as a global from Node 20; on 18.13–18.x it
+  // exists only as `node:buffer`'s `File` export. Backfill the global from there
+  // so worker/messaging code that constructs `new File(...)` works down to the
+  // floor (polyfill-all-the-way-down). Identity is preserved (same constructor as
+  // `node:buffer`), so `instanceof` and undici's webidl brand checks hold. Reading
+  // `buffer.File` on Node 18 emits a one-time `ExperimentalWarning`; suppress just
+  // that line so the floor backfill is silent (the API is stable in practice and
+  // is the standard global on Node 20+). Blob is already global on 18.x, but the
+  // same backfill guards it for completeness. Non-enumerable to match Node's own
+  // global descriptors (the additive contract: invisible to global enumeration).
+  if (typeof globalThis.File === "undefined" || typeof globalThis.Blob === "undefined") {
+    const origEmitWarning = process.emitWarning;
+    process.emitWarning = function (warning, ...rest) {
+      const opt = rest[0];
+      const type = opt && typeof opt === "object" ? opt.type : opt;
+      const msg = typeof warning === "string" ? warning : (warning && warning.message) || "";
+      if (type === "ExperimentalWarning" && /buffer\.(File|Blob)/.test(msg)) return;
+      return origEmitWarning.call(this, warning, ...rest);
+    };
+    try {
+      const buffer = require("node:buffer");
+      for (const name of ["File", "Blob"]) {
+        if (typeof globalThis[name] === "undefined" && typeof buffer[name] === "function") {
+          Object.defineProperty(globalThis, name, {
+            value: buffer[name],
+            enumerable: false,
+            writable: true,
+            configurable: true,
+          });
+        }
+      }
+    } finally {
+      process.emitWarning = origEmitWarning;
+    }
+  }
+
+  // ── MessageEvent.ports → frozen array (WHATWG read-only requirement) ─
+  // The spec mandates `MessageEvent.ports` be a read-only (frozen) array; Node's
+  // native MessageEvent returns a mutable array. Wrap the configurable prototype
+  // getter so every read yields a frozen array, for both a native MessageChannel's
+  // delivery and nub's worker-side MessageEvents. Idempotent (the wrapper is marked
+  // so a re-run in the same realm doesn't double-wrap).
+  if (typeof globalThis.MessageEvent === "function") {
+    const proto = globalThis.MessageEvent.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "ports");
+    if (desc && typeof desc.get === "function" && desc.configurable && !desc.get.__nubFreezesPorts) {
+      const origGet = desc.get;
+      const get = function () {
+        const ports = origGet.call(this);
+        return Array.isArray(ports) ? Object.freeze(ports) : ports;
+      };
+      get.__nubFreezesPorts = true;
+      Object.defineProperty(proto, "ports", { ...desc, get });
+    }
+  }
+
   // ── URLPattern (native on Node 24+, missing on 22.x) ───────────────
   if (typeof globalThis.URLPattern === "undefined") {
     const mod = preloaded.urlpattern;
