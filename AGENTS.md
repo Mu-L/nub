@@ -49,10 +49,10 @@ These are the load-bearing, always-true architectural premises of nub. They are 
 #    source (NOT target/ .repos/ node_modules) and shares the .git object store — no re-clone, no
 #    re-fetch. The shared main tree is UNTOUCHED and stays on main. vendor/aube is now plain
 #    in-tree files (NOT a submodule) — they come along with the checkout, no init step needed.
-git worktree add /tmp/nub-wt-<slug> -b <branch-slug> origin/main
+git worktree add ~/.cache/nub/worktrees/<slug> -b <branch-slug> origin/main
 
 # 2. Give the worktree its OWN target dir so a sibling's build can't contaminate it.
-cd /tmp/nub-wt-<slug> && export CARGO_TARGET_DIR=/tmp/nub-wt-<slug>-target
+cd ~/.cache/nub/worktrees/<slug> && export CARGO_TARGET_DIR=~/.cache/nub/worktrees/<slug>-target
 cargo check -p nub-cli                       # or the scoped test for what changed
 
 # 4. Commit your work, push the branch, open the PR — then REPORT the URL. Do NOT merge your own PR.
@@ -61,7 +61,7 @@ git push -u origin <branch-slug>
 gh pr create --title "<title>" --body "<body>"   # report the returned URL to the orchestrator
 
 # 5. After the orchestrator merges, clean up (orchestrator or agent):
-git worktree remove /tmp/nub-wt-<slug> --force && rm -rf /tmp/nub-wt-<slug>-target
+git worktree remove ~/.cache/nub/worktrees/<slug> --force && rm -rf ~/.cache/nub/worktrees/<slug>-target
 
 # 6. Eagerly pull the SHARED tree so it tracks origin (see the eagerly-pull rule below).
 git -C <shared-tree> pull --ff-only
@@ -85,7 +85,7 @@ A busy `main` with several open PRs and in-progress worktrees is expected and fi
 
 Full runbook + crate map: the `dev-loop` skill (`.claude/skills/dev-loop/SKILL.md`). The essentials, so a worktree iterates fast (measured 2026-06-20):
 
-- **Set up the worktree, give it its OWN target dir** (per the proven workflow above): `git worktree add … -b <slug> origin/main`, then `export CARGO_TARGET_DIR=/tmp/<slug>-target`. vendor/aube is plain in-tree files now — no submodule init step. The per-worktree target dir is what keeps a sibling's build from contaminating yours — keep it.
+- **Set up the worktree, give it its OWN target dir** (per the proven workflow above): `git worktree add … -b <slug> origin/main`, then `export CARGO_TARGET_DIR=~/.cache/nub/worktrees/<slug>-target`. vendor/aube is plain in-tree files now — no submodule init step. The per-worktree target dir is what keeps a sibling's build from contaminating yours — keep it.
 - **Iterate with the `fast` profile, NEVER `release`.** `cargo build -p nub-cli --profile fast` builds the dev CLI to `target/fast/nub`. Cold ≈ 3 min; every subsequent rebuild in the same target dir ≈ 5s via cargo's native incremental. The `release` profile's `lto=thin` + `codegen-units=1` makes a cold build ≈ 15 min and re-LTOs the whole binary on every change — do not use it to iterate. For the full dev binary + N-API addon on PATH, `make install-dev` (symlinks `nub-dev`/`nubx-dev` → `target/fast/nub`); for the addon alone, `make addon-fast`. There is no `nub build` command.
 - **Pay the cold build ONCE per worktree, then keep the target dir stable.** Do NOT clean, move, re-clone, or seed the target dir between iterations — cargo's incremental fingerprints are keyed to the absolute target path, so any of those forces a full ~3-min rebuild. The fast path is one stable target dir per worktree for the whole session.
 - **A shared cross-worktree compile cache does NOT help here.** sccache was measured against this Rust workspace and delivered a 0% Rust cache-hit rate across worktrees (rustc embeds per-target-dir paths in its cache keys; `--remap-path-prefix` does not fix it) — no speedup over a cold build. Do not reach for it; the `fast` profile + a stable per-worktree target dir is the whole answer.
