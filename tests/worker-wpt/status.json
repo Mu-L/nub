@@ -148,7 +148,7 @@
               "Pattern: [{\"protocol\":\"http\",\"hostname\":\"example.com#ignoredhash\"}] Inputs: [\"http://example.com/\"]",
               "Pattern: [{\"pathname\":\"/:𠀀\"}] Inputs: [{\"pathname\":\"/foo\"}]"
             ],
-            "note": "URLPATTERN-POLYFILL DIVERGENCES on Node 22 (nub uses urlpattern-polyfill@10.1.0 where native URLPattern is absent; Node 18/20 use the polyfill and pass all tests, Node 24+ uses native and passes all). On the Node 22 tier the V8 regex engine's Unicode set notation and URL-parsing behavior diverge from the polyfill's assumptions: (1) port normalization — polyfill strips trailing spaces/non-numeric suffixes that native rejects at construction time; (2) hostname validation — polyfill accepts hostnames with control chars/special chars that native rejects; (3) Unicode set notation `[[a-z]--a]` / `[\\d&&[0-1]]` — Node 22 V8 parses these as Unicode-set classes while the polyfill generates them for non-set engines; (4) Unicode-escapes in named groups (astral-plane chars in group names). These are polyfill/engine gaps on the single narrow Node 22 band."
+            "note": "URLPATTERN-POLYFILL DIVERGENCES on Node 22 (the sole polyfill tier). On all other CI legs (18, 20, 24+), URLPattern is native and all 370 subtests pass. On Node 22.15 the polyfill (urlpattern-polyfill@10.1.0) is used because native URLPattern is absent, and its regex-generation diverges from what Node 22's V8 engine expects: (1) port normalization — polyfill strips trailing spaces/non-numeric suffixes that native rejects at construction time; (2) hostname validation — polyfill accepts hostnames with control chars/special chars that native rejects; (3) Unicode set notation `[[a-z]--a]` / `[\\d&&[0-1]]` — Node 22 V8 parses these as Unicode-set classes while the polyfill generates them for non-set engines; (4) Unicode-escapes in named groups (astral-plane chars in group names)."
           },
           {
             "minMajor": 24,
@@ -160,7 +160,7 @@
             "note": "NODE 24 native URLPattern bug: named capture groups inside non-capturing groups produce incorrect match results in Node 24's V8 implementation. Verified absent on both Node 22 (polyfill) and Node 26 (fixed native). Tracked upstream."
           }
         ],
-        "note": "URLPattern battery (370 subtests). Tests nub's urlpattern-polyfill (on Node 22, where native is absent) and native URLPattern (Node 24+). The two versioned bands document known divergences on specific Node tiers; all other subtests pass across the full CI matrix (18.19, 20, 22.15, 24)."
+        "note": "URLPattern battery (370 subtests). Node 22 is the sole polyfill tier (urlpattern-polyfill@10.1.0); all other CI legs use native URLPattern. Two versioned bands document known divergences: 22 on Node 22 (polyfill/engine gaps) and 2 on Node 24 (native bug, fixed in Node 26)."
       }
     },
 
@@ -175,7 +175,7 @@
             "note": "NODE 24 native URLPattern constructor bug: `new URLPattern(undefined)` throws instead of accepting undefined as 'no pattern' (matches on Node 22 polyfill and Node 26 native). Fixed in Node 26."
           }
         ],
-        "note": "URLPattern constructor tests (2 subtests). One test fails on Node 24's native implementation only; passes on the polyfill (Node 18/20/22) and Node 26+."
+        "note": "URLPattern constructor tests (2 subtests). One test fails on Node 24's native implementation only; passes on Node 22 (polyfill) and all other legs."
       }
     },
 
@@ -264,11 +264,27 @@
     },
 
     "web-locks/signal.https.any.js": {
-      "skip": "POLYFILL GAPS on Node 22 cause harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not validate that options.signal is an AbortSignal instance, and does not handle synchronous pre-abort correctly — tests expecting immediate rejection instead hang indefinitely, triggering the 5s WATCHDOG and failing the whole file. On Node 18/20 and 24+ (native locks), all 13 subtests pass. Tracked for a follow-up polyfill improvement PR."
+      "skip": {
+        "versioned": [
+          {
+            "minMajor": 22,
+            "maxMajor": 22,
+            "reason": "POLYFILL GAPS on Node 22 cause harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not validate that options.signal is an AbortSignal instance, and does not handle synchronous pre-abort correctly — tests expecting immediate rejection instead hang indefinitely, triggering the 5s WATCHDOG and failing the whole file. All 13 subtests pass on other CI legs. Tracked for a follow-up polyfill improvement PR."
+          }
+        ]
+      }
     },
 
     "web-locks/steal.https.any.js": {
-      "skip": "POLYFILL GAP on Node 22 causes harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not implement the steal option — a steal request blocks forever rather than preempting the held lock, so the harness WATCHDOG fires and fails the whole file. On Node 18/20 and 24+ (native locks), all 5 subtests pass. Tracked for a follow-up polyfill improvement PR."
+      "skip": {
+        "versioned": [
+          {
+            "minMajor": 22,
+            "maxMajor": 22,
+            "reason": "POLYFILL GAP on Node 22 causes harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not implement the steal option — a steal request blocks forever rather than preempting the held lock, so the harness WATCHDOG fires and fails the whole file. All 5 subtests pass on other CI legs. Tracked for a follow-up polyfill improvement PR."
+          }
+        ]
+      }
     },
 
     "html/webappapis/scripting/reporterror.any.js": {

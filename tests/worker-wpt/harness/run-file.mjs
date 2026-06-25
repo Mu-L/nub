@@ -224,9 +224,9 @@ async function main() {
       const _pathname = "/" + TEST_REL.replace(/\\/g, "/").replace(/^\/+/, "");
       globalThis.location = {
         pathname: _pathname,
-        href: "https://wpt.example" + _pathname,
-        origin: "https://wpt.example",
-        protocol: "https:",
+        href: "http://wpt.example" + _pathname,
+        origin: "http://wpt.example",
+        protocol: "http:",
         host: "wpt.example",
         hostname: "wpt.example",
         port: "",
