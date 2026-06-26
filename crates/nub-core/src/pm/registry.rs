@@ -10,7 +10,7 @@
 //! `dist.shasum` (sha1) is the fail-closed fallback for ancient publishes that
 //! predate `integrity`.
 
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -448,14 +448,37 @@ fn parse_integrity(dist: &Value) -> Option<Integrity> {
 pub(crate) fn bin_subpath(meta: &Value) -> Option<PathBuf> {
     let bin = meta.get("bin")?;
     if let Some(path) = bin.as_str() {
-        return Some(PathBuf::from(path));
+        return safe_bin_subpath(path);
     }
     let map = bin.as_object()?;
     let name = meta.get("name").and_then(Value::as_str);
     let chosen = name
         .and_then(|n| map.get(n))
         .or_else(|| (map.len() == 1).then(|| map.values().next()).flatten())?;
-    chosen.as_str().map(PathBuf::from)
+    safe_bin_subpath(chosen.as_str()?)
+}
+
+/// Defense-in-depth gate on a registry-declared bin path before it becomes an
+/// EXECUTED target. The packument's `bin` is attacker-controlled under a
+/// compromised/MITM'd registry, and the runnable path is built as
+/// `<store>/<version>/package/<bin_subpath>` then run; because `Path::join`
+/// discards the base on an absolute component, an absolute entry (`/bin/sh`) or
+/// one with `..` traversal would point the executed target OUTSIDE the package
+/// dir, gated only by `is_file()`. Reject (drop to `None` — a malformed/malicious
+/// bin surfaces as the consumers' existing "no resolvable bin" error) rather than
+/// silently rewriting the path. The `Component` scan is stricter than
+/// `Path::is_absolute` and platform-correct: it also catches a Windows
+/// drive-relative (`C:foo` → `Prefix`) or root-relative (`\foo` → `RootDir`)
+/// entry that `is_absolute()` misses, and rejects any `..` segment.
+fn safe_bin_subpath(raw: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(raw);
+    let escapes = path.components().any(|c| {
+        matches!(
+            c,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    });
+    (!escapes && !path.as_os_str().is_empty()).then_some(path)
 }
 
 /// The bin path of a NAMED entry in a `bin` map (`npx`, `pnpx`, `yarnpkg`) —
@@ -467,10 +490,12 @@ pub(crate) fn bin_subpath(meta: &Value) -> Option<PathBuf> {
 pub(crate) fn named_bin_subpath(meta: &Value, entry: &str) -> Option<PathBuf> {
     let bin = meta.get("bin")?;
     if let Some(path) = bin.as_str() {
-        return (meta.get("name").and_then(Value::as_str) == Some(entry))
-            .then(|| PathBuf::from(path));
+        if meta.get("name").and_then(Value::as_str) != Some(entry) {
+            return None;
+        }
+        return safe_bin_subpath(path);
     }
-    bin.as_object()?.get(entry)?.as_str().map(PathBuf::from)
+    safe_bin_subpath(bin.as_object()?.get(entry)?.as_str()?)
 }
 
 /// Networked wrapper over a bare base URL (no auth): fetch the packument from
@@ -735,6 +760,73 @@ mod tests {
             named_bin_subpath(&meta, "yarnpkg"),
             None,
             "a string-form bin must not satisfy a sibling entry name"
+        );
+    }
+
+    #[test]
+    fn bin_subpath_rejects_a_path_that_escapes_the_package_dir() {
+        // The executed target is built as `<store>/<version>/package/<bin_subpath>`;
+        // an absolute or `..`-laden registry `bin` would escape that dir. Both the
+        // string and map forms, for both resolvers, must drop to None — never an
+        // out-of-package PathBuf the caller would `is_file()`-gate and run.
+        for bad in [
+            "/bin/sh",
+            "../../../bin/sh",
+            "bin/../../escape",
+            "/abs/cli.js",
+        ] {
+            assert_eq!(
+                bin_subpath(&serde_json::json!({ "name": "pnpm", "bin": bad })),
+                None,
+                "string-form bin {bad:?} escapes the package dir and must be rejected"
+            );
+            assert_eq!(
+                bin_subpath(&serde_json::json!({ "name": "pnpm", "bin": { "pnpm": bad } })),
+                None,
+                "map-form bin {bad:?} escapes the package dir and must be rejected"
+            );
+            assert_eq!(
+                named_bin_subpath(
+                    &serde_json::json!({ "name": "pnpm", "bin": { "pnpx": bad } }),
+                    "pnpx"
+                ),
+                None,
+                "named bin {bad:?} escapes the package dir and must be rejected"
+            );
+        }
+
+        // A normal relative bin (with or without a subdir) still resolves.
+        assert_eq!(
+            bin_subpath(&serde_json::json!({ "name": "pnpm", "bin": "bin/pnpm.cjs" })),
+            Some(PathBuf::from("bin/pnpm.cjs"))
+        );
+        assert_eq!(
+            bin_subpath(&serde_json::json!({ "name": "cli", "bin": "cli.js" })),
+            Some(PathBuf::from("cli.js"))
+        );
+    }
+
+    #[test]
+    fn resolve_dist_errors_gracefully_on_an_escaping_bin() {
+        // The full resolver (the source feeding all three execution-target joins in
+        // provision.rs) must surface a clean error — not a panic, not an
+        // out-of-package PathBuf — when a version's bin escapes the package dir.
+        let meta = serde_json::json!({
+            "name": "pnpm",
+            "versions": {
+                "9.0.0": {
+                    "name": "pnpm",
+                    "bin": "/bin/sh",
+                    "dist": {
+                        "tarball": "https://example.test/pnpm-9.0.0.tgz",
+                        "integrity": "sha512-deadbeef"
+                    }
+                }
+            }
+        });
+        assert!(
+            resolve_dist(&meta, "9.0.0").is_err(),
+            "an escaping bin must fail resolution, never yield a runnable out-of-package target"
         );
     }
 
