@@ -228,6 +228,36 @@ fn pre_verb_output_flags_reach_install_not_node() {
     }
 }
 
+/// Precedence (non-network): a per-verb `--reporter` overrides a PRE-verb
+/// `--silent`. `--silent` folds into the same `--reporter=silent` process
+/// default as a pre-verb `--reporter`, so the "per-verb always wins" invariant
+/// holds for every pre-verb spelling — a pre-verb global is only a fallback.
+#[test]
+fn per_verb_reporter_overrides_pre_verb_silent() {
+    let manifest = r#"{"name":"q","version":"1.0.0"}"#;
+
+    // Pre-verb --silent alone silences (empty stderr).
+    let quiet = pm_tmpdir("prec-quiet");
+    std::fs::write(quiet.join("package.json"), manifest).unwrap();
+    let (_, s1, c1) = run_install(&quiet, &["--silent", "install"]);
+    assert_eq!(c1, 0, "pre-verb --silent install failed: {s1}");
+    assert!(
+        s1.is_empty(),
+        "pre-verb --silent should silence, got: {s1:?}"
+    );
+
+    // A per-verb --reporter=default un-silences it: per-verb wins over the
+    // pre-verb default.
+    let loud = pm_tmpdir("prec-loud");
+    std::fs::write(loud.join("package.json"), manifest).unwrap();
+    let (_, s2, c2) = run_install(&loud, &["--silent", "install", "--reporter=default"]);
+    assert_eq!(c2, 0, "install failed: {s2}");
+    assert!(
+        !s2.trim().is_empty(),
+        "per-verb --reporter=default must override pre-verb --silent: got empty stderr"
+    );
+}
+
 /// A `pnpm-workspace.yaml` with no lockfile is a genuine pnpm signal, NOT a
 /// truly-fresh project: nub stays pnpm-shaped — writes `pnpm-lock.yaml` and
 /// does NOT stamp the manifest.

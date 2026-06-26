@@ -39,9 +39,12 @@ use super::log;
 // `nub run`'s preamble — same seam, extended to the PM reporter/loglevel.
 //
 // `0` is "unset" for each enum; the encodings are private to this module.
+// Pre-verb `--silent`/`-s` folds into `PROC_REPORTER = Silent` (it's the
+// documented `--reporter=silent` alias) so all three pre-verb spellings merge
+// through the SAME `.or` path and a per-verb `--reporter` can override any of
+// them uniformly — there is no separate silent cell.
 static PROC_REPORTER: AtomicU8 = AtomicU8::new(0);
 static PROC_LOGLEVEL: AtomicU8 = AtomicU8::new(0);
-static PROC_SILENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn reporter_to_u8(r: Reporter) -> u8 {
     match r {
@@ -78,29 +81,31 @@ fn u8_to_loglevel(v: u8) -> Option<LogLevel> {
     }
 }
 
-/// Record `nub --silent <verb>` as a process default. Called by `cli::dispatch`
-/// when the global `--silent`/`-s` precedes a subcommand.
+/// Record `nub --silent <verb>` as a process default — the `--reporter=silent`
+/// alias, so it merges through the same `.or` path as a pre-verb `--reporter`.
+/// Called by `cli::dispatch` when the global `--silent`/`-s` precedes a verb.
 pub fn set_global_silent() {
-    PROC_SILENT.store(true, Ordering::Relaxed);
+    PROC_REPORTER.store(reporter_to_u8(Reporter::Silent), Ordering::Relaxed);
 }
 
 /// Parse + record a pre-verb `--reporter <value>` as a process default. Returns
 /// the invalid value (for a clean usage error) when the spelling isn't one of
 /// `default`/`append-only`/`silent`. Reuses clap's `ValueEnum` parse so the
-/// accepted set can't drift from the per-verb flag.
+/// accepted set can't drift from the per-verb flag — `false` = case-sensitive,
+/// matching the per-verb clap surface (which has no `ignore_case`).
 pub fn set_global_reporter_str(value: &str) -> Result<(), String> {
     use clap::ValueEnum as _;
-    let r = Reporter::from_str(value, true).map_err(|_| value.to_string())?;
+    let r = Reporter::from_str(value, false).map_err(|_| value.to_string())?;
     PROC_REPORTER.store(reporter_to_u8(r), Ordering::Relaxed);
     Ok(())
 }
 
 /// Parse + record a pre-verb `--loglevel <value>` as a process default. Returns
 /// the invalid value when the spelling isn't one of
-/// `silent`/`error`/`warn`/`info`/`debug`.
+/// `silent`/`error`/`warn`/`info`/`debug`. Case-sensitive, matching per-verb.
 pub fn set_global_loglevel_str(value: &str) -> Result<(), String> {
     use clap::ValueEnum as _;
-    let l = LogLevel::from_str(value, true).map_err(|_| value.to_string())?;
+    let l = LogLevel::from_str(value, false).map_err(|_| value.to_string())?;
     PROC_LOGLEVEL.store(loglevel_to_u8(l), Ordering::Relaxed);
     Ok(())
 }
@@ -110,9 +115,6 @@ fn proc_reporter() -> Option<Reporter> {
 }
 fn proc_loglevel() -> Option<LogLevel> {
     u8_to_loglevel(PROC_LOGLEVEL.load(Ordering::Relaxed))
-}
-fn proc_silent() -> bool {
-    PROC_SILENT.load(Ordering::Relaxed)
 }
 
 /// `--reporter` values nub accepts, mirroring pnpm's. `ndjson` is deliberately
@@ -180,7 +182,6 @@ impl OutputFlags {
     /// their own (non-engine) summary — e.g. `import` — can suppress it.
     pub fn is_silent(&self) -> bool {
         self.silent
-            || proc_silent()
             || self.eff_reporter() == Some(Reporter::Silent)
             || self.eff_loglevel() == Some(LogLevel::Silent)
     }
