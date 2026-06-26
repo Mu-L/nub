@@ -544,6 +544,12 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    /// Serializes the tests that mutate the shared `TEST_ENFORCE` static — libtest
+    /// runs tests in parallel, so without this lock one test's `store` could land
+    /// inside another's enforce/canary assertion window and flake it. Poison is
+    /// recovered (a panicking test must not cascade-fail its serialized sibling).
+    static ENFORCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Build a tiny zstd-19 tar blob matching the real embedded layout, so the
     /// unpack/rename/idempotence/race/GC logic can be exercised without the
     /// feature's build.rs output. Mirrors `unpack_blob`'s decode side.
@@ -719,6 +725,7 @@ mod tests {
 
     #[test]
     fn persistent_mismatch_is_canary_by_default_and_refuses_under_enforce() {
+        let _guard = ENFORCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A dir whose entrypoints will NEVER match the baked hashes. `already_fresh`
         // skips the heal so we hit the terminal decision directly: canary proceeds
         // (never brick on a verify bug), enforce refuses (the flipped-on behavior).
@@ -749,6 +756,7 @@ mod tests {
 
     #[test]
     fn canary_never_returns_a_nonexistent_dir() {
+        let _guard = ENFORCE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The canary contract is "always hand back a live dir or None". A failed
         // self-heal can leave `target` absent; the terminal canary branch must then
         // degrade to None rather than a ghost path the child `node` would brick on.
