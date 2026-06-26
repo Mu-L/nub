@@ -74,7 +74,7 @@ This is the release valve that makes the single-owning-L1 shape strictly better 
 - **Worktree + PR flow** (the `worktree` skill): substantive work lands via a PR from an isolated worktree off `origin/main`, own `CARGO_TARGET_DIR`. NEVER branch/reset/stash the shared main tree. Content/UI/docs-only changes are the exception that commit direct to main.
 - **Pre-push local-verification loop** (AGENTS.md): incremental build → the EXACT CI cheap gates (`cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --check`, scoped tests) → an e2e tmp-fixture run of the actual feature → promote a durable check into the suite. Green locally, push ONCE.
 - **Model tiering:** the owning L1 and its judgment/engineering/review L2s are Opus (or Fable for the hardest synthesis); mechanical L2s can be cheaper. Every L2 prompt is SELF-CONTAINED (a fresh context carries nothing over).
-- **Thread hygiene (fray):** the implementation-thread IS a fray thread — the L1 owns its `.fray/<slug>.md` (Goal · Status · Decisions · Open questions · Steps · Next step), edits it in place, and moves answered questions into Decisions. The hold-before-merge state is `needs-decision` (waiting on the human) or `active` (work in flight).
+- **Thread hygiene (fray):** the implementation-thread IS a fray thread — the L1 owns its `.fray/<slug>.md` (Goal · Status · Decisions · Open questions · Steps · Next step), edits it in place, and moves answered questions into Decisions. The hold-before-merge state is `blocked` (waiting on the human) or `active` (work in flight).
 
 ## Relationship to research-thread
 
