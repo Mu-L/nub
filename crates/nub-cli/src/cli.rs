@@ -961,6 +961,13 @@ fn install_to_add_args(rest: &[String]) -> Option<Vec<String>> {
             "--dir",
             "--registry",
             "--node-linker",
+            // Output-control flags: their space-separated value would otherwise
+            // be read as a package positional and trigger a wrong route to `add`.
+            // (`--loglevel silent` is the canonical misroute case.) The install
+            // clap variant accepts them via the flattened `OutputFlags`; listing
+            // them here prevents the space-separated value from looking like a pkg.
+            "--loglevel",
+            "--reporter",
         ];
         let mut i = 0;
         while i < body.len() {
@@ -7360,6 +7367,38 @@ mod tests {
             install_to_add_args(&args(&["install", "-F", "pkg-a", "-r"])),
             None,
             "nub install with workspace selectors but no package stays a native install"
+        );
+
+        // Output-control flags with a space-separated value must NOT be mistaken
+        // for a package positional (the root bug: `--loglevel silent` with a
+        // space caused `silent` to be read as a package → misrouted to `add`).
+        assert_eq!(
+            install_to_add_args(&args(&["install", "--loglevel", "silent"])),
+            None,
+            "nub install --loglevel silent stays on the native install path"
+        );
+        assert_eq!(
+            install_to_add_args(&args(&["install", "--reporter", "silent"])),
+            None,
+            "nub install --reporter silent stays on the native install path"
+        );
+        assert_eq!(
+            install_to_add_args(&args(&["i", "--loglevel", "info"])),
+            None,
+            "nub i --loglevel info stays on the native install path (non-silent level)"
+        );
+        // Equals form was never affected (no space → no positional confusion).
+        assert_eq!(
+            install_to_add_args(&args(&["install", "--loglevel=silent"])),
+            None,
+            "nub install --loglevel=silent stays on the native install path (equals form)"
+        );
+        // Output-control flags combined with a real package still route to add,
+        // with the flag consumed as a flag (value NOT forwarded as a package).
+        assert_eq!(
+            install_to_add_args(&args(&["install", "--loglevel", "silent", "react"])),
+            Some(args(&["add", "--loglevel", "silent", "react"])),
+            "--loglevel silent with a package routes to add, value is not mis-forwarded"
         );
     }
 
