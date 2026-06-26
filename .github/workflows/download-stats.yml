@@ -56,12 +56,39 @@ jobs:
           console.log(`Wrote ${outPath}`);
           EOF
 
-      - name: Commit snapshot
+      - name: Commit snapshot to the data branch
+        # The snapshot is committed to a dedicated `download-stats-data` branch, never
+        # to main. main's "Main" ruleset blocks direct pushes from the Actions bot, and
+        # keeping the daily bot commits off main is the intended posture. The branch is
+        # created from main on first run if it does not yet exist.
+        #
+        # NOTE: stats/download-counts/report.mjs reads snapshots from the working tree on
+        # the branch it runs on. After this change new snapshots live on
+        # `download-stats-data`, so to report over fresh data, check out that branch (or
+        # point report.mjs at it). The on-main archive stops updating by design.
+        env:
+          DATA_BRANCH: download-stats-data
         run: |
           ts="${{ steps.ts.outputs.value }}"
+          snap="stats/download-counts/${ts}.json"
+          # Preserve the just-written snapshot across the branch switch below.
+          cp "$snap" /tmp/snapshot.json
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "stats/download-counts/${ts}.json"
+
+          # Base on the existing data branch if present, else fork a fresh one from the
+          # current (main) checkout.
+          git fetch origin "$DATA_BRANCH" || true
+          if git show-ref --verify --quiet "refs/remotes/origin/$DATA_BRANCH"; then
+            git checkout -B "$DATA_BRANCH" "origin/$DATA_BRANCH"
+          else
+            git checkout -B "$DATA_BRANCH"
+          fi
+
+          mkdir -p stats/download-counts
+          cp /tmp/snapshot.json "$snap"
+          git add "$snap"
           git diff --cached --quiet && echo "No new data, nothing to commit." && exit 0
           git commit -m "stats: download snapshot ${ts}"
-          git push
+          git push origin "$DATA_BRANCH"
