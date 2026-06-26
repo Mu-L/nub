@@ -179,6 +179,28 @@ jobs:
       - name: Brand lint (no AUBE_* env reads)
         run: tests/brand-lint/check-env-reads.sh
 
+  # The single-binary `embed-runtime` feature is OFF in every default build, so the
+  # feature-off `test` job never RUNS the runtime_cache extraction/race/GC unit
+  # tests, and build.rs's tar+zstd blob arm + the tar/zstd/sha2 build-dep wiring go
+  # unexercised on PRs (they would first break at a release tag). Build + test the
+  # feature-on path here so an embed/extract regression fails a PR. One platform
+  # suffices for the logic; the tracked runtime/*.mjs satisfy build.rs's staging
+  # probe with no extra assembly.
+  embed-runtime:
+    name: embed-runtime (single-binary)
+    needs: matrix-plan
+    if: needs.matrix-plan.outputs.run_rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          shared-key: ci-embed-runtime
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test -p nub-core --features embed-runtime
+      - run: cargo build -p nub-cli --features embed-runtime
+
   test:
     name: Test (${{ matrix.os }}, node ${{ matrix.node }})
     needs: matrix-plan
@@ -498,7 +520,7 @@ jobs:
   ci-gate:
     name: CI gate
     if: always()
-    needs: [matrix-plan, check, clippy, test, pnp, fmt, types-fixtures, docs-links]
+    needs: [matrix-plan, check, clippy, embed-runtime, test, pnp, fmt, types-fixtures, docs-links]
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed or was cancelled

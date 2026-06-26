@@ -65,9 +65,13 @@ fn extract_once() -> Option<PathBuf> {
     // Fast path: a candidate already holds the extracted dir — one stat, no write.
     // (Both `~/.cache/nub` and the `$TMPDIR` fallback are checked so a machine that
     // extracted to the fallback on a read-only `$HOME` still hits the cache.)
+    // `preload.mjs` is the completeness sentinel: the dir only ever appears via the
+    // atomic rename of a fully-unpacked tree, so probing the file (still one stat)
+    // rather than just the dir also rejects an externally-induced empty leftover dir
+    // for free — it falls through to a re-extract instead of being trusted.
     for base in &candidates {
         let target = base.join(CACHE_KEY);
-        if target.is_dir() {
+        if target.join("preload.mjs").is_file() {
             return Some(target);
         }
     }
@@ -318,6 +322,10 @@ mod tests {
         fs::remove_file(&file).unwrap();
     }
 
+    // Unix-only: the eviction assertion needs `filetime_set` to backdate the stale
+    // dir, and that helper is a no-op off unix (see its `#[cfg(not(unix))]` arm), so
+    // on other platforms the stale dir would keep its fresh mtime and survive.
+    #[cfg(unix)]
     #[test]
     fn gc_evicts_stale_keeps_current_and_tmp() {
         let base = std::env::temp_dir().join(format!("nub-rtc-gc-{}", rand_suffix()));

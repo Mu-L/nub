@@ -4798,11 +4798,11 @@ fn windows_selfowned_unsupported(is_windows: bool) -> Option<String> {
 /// `sha256_hex`, and sidecar parsing — are individually exercised; the glue here
 /// is kept deliberately linear and small so its correctness is reviewable by eye.
 fn perform_selfowned_upgrade(install_dir: &Path, version_spec: &str) -> Result<()> {
-    // Windows fail-fast: the self-owned swap renames `bin/`+`runtime/` out from
-    // under the running `nub.exe`. A running executable cannot be renamed or
-    // deleted while in use on Windows (ERROR_SHARING_VIOLATION), so the swap can
-    // fail mid-flight and leave a half-replaced — potentially unbootable —
-    // install. We do not yet implement the rename-self-to-`.old` dance that would
+    // Windows fail-fast: the self-owned swap renames `bin/` out from under the
+    // running `nub.exe`. A running executable cannot be renamed or deleted while
+    // in use on Windows (ERROR_SHARING_VIOLATION), so the swap can fail mid-flight
+    // and leave a half-replaced — potentially unbootable — install. We do not yet
+    // implement the rename-self-to-`.old` dance that would
     // make this safe, so refuse BEFORE touching the filesystem. See
     // upgrade.md#windows. This guards the real swap only; the npm/homebrew
     // channels (which shell out to a package manager) are unaffected.
@@ -4844,8 +4844,8 @@ fn perform_selfowned_upgrade(install_dir: &Path, version_spec: &str) -> Result<(
         );
     }
 
-    // Extract into a fresh `staged/` subdir (contains bin/ + runtime/), matching
-    // install.sh's `tar -xzf … -C $install_dir`.
+    // Extract into a fresh `staged/` subdir (the single-binary archive contains
+    // bin/ only), matching install.sh's `tar -xzf … -C $install_dir`.
     let staged_root = staging.path().join("staged");
     std::fs::create_dir_all(&staged_root)?;
     let tar_status = std::process::Command::new("tar")
@@ -4859,22 +4859,18 @@ fn perform_selfowned_upgrade(install_dir: &Path, version_spec: &str) -> Result<(
         bail!("nub upgrade: failed to extract archive {url}");
     }
     let new_bin = staged_root.join("bin");
-    let new_runtime = staged_root.join("runtime");
     if !new_bin.join("nub").is_file() {
         bail!("nub upgrade: downloaded archive did not contain bin/nub");
     }
 
-    // Swap: move old bin/runtime aside, rename new into place, then GC the old.
-    // If the second rename fails we restore the first so the install is intact.
+    // Swap bin/ into place (move the old aside, rename the new in, GC the old).
+    // The single-binary release ships ONLY bin/ — the runtime is embedded in the
+    // binary and JIT-extracted to ~/.cache/nub on first run — so there is no
+    // runtime/ to swap. A stale runtime/ left by a pre-single-binary install is
+    // dead weight the new binary ignores; remove it best-effort for hygiene
+    // (mirrors install.sh / install.ps1's fresh-extract cleanup).
     swap_dir(install_dir, "bin", &new_bin)?;
-    if let Err(e) = swap_dir(install_dir, "runtime", &new_runtime) {
-        // bin already swapped; runtime failed. The new bin pairs with the new
-        // runtime layout, so leave bin swapped (versions match) and surface the
-        // error — a partial-but-consistent bin/ with a stale runtime/ would be
-        // worse. In practice both renames are same-filesystem and don't fail
-        // independently; this branch is the documented tail risk.
-        bail!("nub upgrade: swapped bin/ but failed to swap runtime/: {e}");
-    }
+    let _ = std::fs::remove_dir_all(install_dir.join("runtime"));
 
     // The release tarball ships `bin/nub` (and `bin/nubx`) at mode 0644 — the
     // upload-artifact → download-artifact round-trip in CI strips the executable
@@ -7690,15 +7686,14 @@ mod tests {
         const FAKE_VERSION: &str = "9.9.9"; // not a real release — proves the channel, not the net
         let fixture = tempfile::tempdir().expect("fixture root");
 
-        // 1. Build the artifact the fake channel serves: a tar.gz containing the
-        //    install.sh layout (bin/nub + runtime/), with sentinel bytes so we can
-        //    prove the SWAPPED-IN binary is the downloaded one, not the old one.
+        // 1. Build the artifact the fake channel serves: a tar.gz of the
+        //    single-binary layout (bin/ ONLY — the runtime is embedded in the
+        //    binary, not a sidecar), with sentinel bytes so we can prove the
+        //    SWAPPED-IN binary is the downloaded one, not the old one.
         const NEW_NUB_BYTES: &[u8] = b"#!/bin/sh\necho fake-upgraded-nub 9.9.9\n";
         let build = fixture.path().join("build");
         std::fs::create_dir_all(build.join("bin")).unwrap();
-        std::fs::create_dir_all(build.join("runtime")).unwrap();
         std::fs::write(build.join("bin").join("nub"), NEW_NUB_BYTES).unwrap();
-        std::fs::write(build.join("runtime").join("VERSION"), FAKE_VERSION).unwrap();
 
         // Lay the asset down at GitHub's release-asset path shape so the seam's
         // `<base>/v<version>/nub-<target>.tar.gz` resolves: download_base/v9.9.9/.
@@ -7714,7 +7709,7 @@ mod tests {
             .arg(&archive)
             .arg("-C")
             .arg(&build)
-            .args(["bin", "runtime"])
+            .args(["bin"])
             .status()
             .expect("tar the fixture archive");
         assert!(tar_ok.success(), "fixture archive must tar cleanly");
@@ -7734,7 +7729,9 @@ mod tests {
         std::fs::write(&latest_json, format!(r#"{{"tag_name":"v{FAKE_VERSION}"}}"#)).unwrap();
 
         // 3. A self-owned install with a DIFFERENT old binary in place, so the swap
-        //    has something to replace and we can prove the bytes changed.
+        //    has something to replace and we can prove the bytes changed. The stale
+        //    runtime/ sidecar (a pre-single-binary install) must be cleaned up by
+        //    the upgrade — asserted below.
         let install = fixture.path().join(".nub");
         let old_bin = install.join("bin");
         std::fs::create_dir_all(&old_bin).unwrap();
@@ -7769,7 +7766,6 @@ mod tests {
         let bad_install = fixture.path().join(".nub-bad");
         std::fs::create_dir_all(bad_install.join("bin")).unwrap();
         std::fs::write(bad_install.join("bin").join("nub"), b"OLD\n").unwrap();
-        std::fs::create_dir_all(bad_install.join("runtime")).unwrap();
         std::fs::write(
             asset_dir.join(format!("nub-{target}.tar.gz.sha256")),
             format!("{}  nub-{target}.tar.gz\n", "0".repeat(64)),
@@ -7802,10 +7798,9 @@ mod tests {
             Path::new("nub"),
             "self-owned upgrade must recreate the nubx → nub alias"
         );
-        assert_eq!(
-            std::fs::read(install.join("runtime").join("VERSION")).unwrap(),
-            FAKE_VERSION.as_bytes(),
-            "runtime/ must be swapped to the new release's payload"
+        assert!(
+            !install.join("runtime").exists(),
+            "single-binary upgrade must remove a stale pre-single-binary runtime/ sidecar"
         );
 
         // (c) The npm-channel install invocation is OS-correct for the resolved
