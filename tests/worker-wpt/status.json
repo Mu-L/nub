@@ -122,8 +122,7 @@
         "expected": [],
         "versioned": [
           {
-            "minMajor": 22,
-            "maxMajor": 22,
+            "maxMajor": 23,
             "expected": [
               "Pattern: [{\"pathname\":\":a󠄀b\"}] Inputs: []",
               "Pattern: [{\"pathname\":\"test/:a𐑐b\"}] Inputs: [{\"pathname\":\"test/foo\"}]",
@@ -148,36 +147,14 @@
               "Pattern: [{\"protocol\":\"http\",\"hostname\":\"example.com#ignoredhash\"}] Inputs: [\"http://example.com/\"]",
               "Pattern: [{\"pathname\":\"/:𠀀\"}] Inputs: [{\"pathname\":\"/foo\"}]"
             ],
-            "note": "URLPATTERN-POLYFILL DIVERGENCES on Node 22 (the sole polyfill tier). On all other CI legs (18, 20, 24+), URLPattern is native and all 370 subtests pass. On Node 22.15 the polyfill (urlpattern-polyfill@10.1.0) is used because native URLPattern is absent, and its regex-generation diverges from what Node 22's V8 engine expects: (1) port normalization — polyfill strips trailing spaces/non-numeric suffixes that native rejects at construction time; (2) hostname validation — polyfill accepts hostnames with control chars/special chars that native rejects; (3) Unicode set notation `[[a-z]--a]` / `[\\d&&[0-1]]` — Node 22 V8 parses these as Unicode-set classes while the polyfill generates them for non-set engines; (4) Unicode-escapes in named groups (astral-plane chars in group names)."
-          },
-          {
-            "minMajor": 24,
-            "maxMajor": 24,
-            "expected": [
-              "Pattern: [{\"pathname\":\"/:foo((?<x>a))\"}] Inputs: [{\"pathname\":\"/a\"}]",
-              "Pattern: [{\"pathname\":\"/foo/(bar(?<x>baz))\"}] Inputs: [{\"pathname\":\"/foo/barbaz\"}]"
-            ],
-            "note": "NODE 24 native URLPattern bug: named capture groups inside non-capturing groups produce incorrect match results in Node 24's V8 implementation. Verified absent on both Node 22 (polyfill) and Node 26 (fixed native). Tracked upstream."
+            "note": "URLPATTERN-POLYFILL DIVERGENCES on the polyfill tiers (Node 18/20/22). Native URLPattern landed in Node 24; below it nub loads urlpattern-polyfill@10.1.0, whose regex generation diverges from native URLPattern on these inputs: (1) port normalization — the polyfill strips trailing spaces / non-numeric suffixes that native rejects at construction; (2) hostname validation — the polyfill accepts hostnames with control/special chars that native rejects; (3) Unicode set notation `[[a-z]--a]` / `[\\d&&[0-1]]`; (4) Unicode escapes in named-group names (astral-plane chars). Verified failing on real Node 18.19, 20, and 22.15 (identical set on all three) and passing on native Node 24+."
           }
         ],
-        "note": "URLPattern battery (370 subtests). Node 22 is the sole polyfill tier (urlpattern-polyfill@10.1.0); all other CI legs use native URLPattern. Two versioned bands document known divergences: 22 on Node 22 (polyfill/engine gaps) and 2 on Node 24 (native bug, fixed in Node 26)."
+        "note": "URLPattern battery. URLPattern is native on Node 24+ and every subtest passes there; on the polyfill tiers (Node 18/20/22) nub uses urlpattern-polyfill@10.1.0 and the 22 subtests in the versioned band diverge. The earlier Node-24 named-capture band was removed: that native bug was fixed in Node 24.17, which is the version the floating `24` CI leg installs."
       }
     },
 
-    "urlpattern/urlpattern-constructor.any.js": {
-      "fail": {
-        "expected": [],
-        "versioned": [
-          {
-            "minMajor": 24,
-            "maxMajor": 24,
-            "expected": ["Test constructor with undefined"],
-            "note": "NODE 24 native URLPattern constructor bug: `new URLPattern(undefined)` throws instead of accepting undefined as 'no pattern' (matches on Node 22 polyfill and Node 26 native). Fixed in Node 26."
-          }
-        ],
-        "note": "URLPattern constructor tests (2 subtests). One test fails on Node 24's native implementation only; passes on Node 22 (polyfill) and all other legs."
-      }
-    },
+    "urlpattern/urlpattern-constructor.any.js": {},
 
     "urlpattern/urlpattern-hasregexpgroups.any.js": {},
 
@@ -189,46 +166,14 @@
       "skip": "TENTATIVE API: URLPattern.prototype.generate is absent in both native and the polyfill; 11/20 subtests pass by expecting generate to be absent or undefined. Tentative APIs are excluded from the conformance gate until the spec stabilizes."
     },
 
-    "web-locks/acquire.https.any.js": {
-      "fail": {
-        "expected": [],
-        "versioned": [
-          {
-            "minMajor": 22,
-            "maxMajor": 22,
-            "expected": [
-              "mode must be \"shared\" or \"exclusive\"",
-              "The 'steal' and 'ifAvailable' options are mutually exclusive",
-              "The 'steal' option must be used with exclusive locks",
-              "The 'signal' and 'steal' options are mutually exclusive",
-              "The 'signal' and 'ifAvailable' options are mutually exclusive"
-            ],
-            "note": "POLYFILL VALIDATION GAPS on Node 22: nub's hand-rolled navigator.locks polyfill (navigator-locks.mjs, used on Node 22 where native is absent) does not validate mode values, the steal/ifAvailable/signal mutual-exclusivity constraints, or restrict steal to exclusive mode. Native Node (18/20 via their own locks, 24+ natively) rejects these invalid inputs. Passes across all other CI matrix legs."
-          }
-        ],
-        "note": "Web Locks acquire/option validation (11 subtests). 5 subtests test parameter validation that nub's Node-22 polyfill doesn't enforce; all pass on Node 18/20 and 24+."
-      }
-    },
+    "web-locks/acquire.https.any.js": {},
 
     "web-locks/held.https.any.js": {},
     "web-locks/ifAvailable.https.any.js": {},
     "web-locks/lock-attributes.https.any.js": {},
     "web-locks/mode-exclusive.https.any.js": {},
 
-    "web-locks/mode-mixed.https.any.js": {
-      "fail": {
-        "expected": [],
-        "versioned": [
-          {
-            "minMajor": 22,
-            "maxMajor": 22,
-            "expected": ["An exclusive lock between shared locks"],
-            "note": "POLYFILL BATCH-GRANT BUG on Node 22: when an exclusive lock is released, nub's polyfill should batch-grant all consecutive queued shared locks. The test checks held.length === 5 after the exclusive releases, but the polyfill grants them serially, leaving a different count at the query() instant. Native Node (18/20 and 24+) handles batch-grant correctly."
-          }
-        ],
-        "note": "Mixed-mode lock ordering (3 subtests). One subtest tests batch-granting of shared locks after an exclusive releases — a behavior gap in nub's Node-22 polyfill."
-      }
-    },
+    "web-locks/mode-mixed.https.any.js": {},
 
     "web-locks/mode-shared.https.any.js": {},
 
@@ -248,44 +193,11 @@
       }
     },
 
-    "web-locks/resource-names.https.any.js": {
-      "fail": {
-        "expected": [],
-        "versioned": [
-          {
-            "minMajor": 22,
-            "maxMajor": 22,
-            "expected": ["Names cannot start with \"-\""],
-            "note": "POLYFILL VALIDATION GAP on Node 22: nub's polyfill does not reject resource names starting with '-'. Native Node (18/20 and 24+) rejects these per spec."
-          }
-        ],
-        "note": "Web Locks resource name validation (8 subtests). One subtest tests that names starting with '-' are rejected — enforced by native but not by nub's Node-22 polyfill."
-      }
-    },
+    "web-locks/resource-names.https.any.js": {},
 
-    "web-locks/signal.https.any.js": {
-      "skip": {
-        "versioned": [
-          {
-            "minMajor": 22,
-            "maxMajor": 22,
-            "reason": "POLYFILL GAPS on Node 22 cause harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not validate that options.signal is an AbortSignal instance, and does not handle synchronous pre-abort correctly — tests expecting immediate rejection instead hang indefinitely, triggering the 5s WATCHDOG and failing the whole file. All 13 subtests pass on other CI legs. Tracked for a follow-up polyfill improvement PR."
-          }
-        ]
-      }
-    },
+    "web-locks/signal.https.any.js": {},
 
-    "web-locks/steal.https.any.js": {
-      "skip": {
-        "versioned": [
-          {
-            "minMajor": 22,
-            "maxMajor": 22,
-            "reason": "POLYFILL GAP on Node 22 causes harness WATCHDOG: nub's hand-rolled polyfill (Node 22) does not implement the steal option — a steal request blocks forever rather than preempting the held lock, so the harness WATCHDOG fires and fails the whole file. All 5 subtests pass on other CI legs. Tracked for a follow-up polyfill improvement PR."
-          }
-        ]
-      }
-    },
+    "web-locks/steal.https.any.js": {},
 
     "html/webappapis/scripting/reporterror.any.js": {
       "skip": "nub's reportError dispatches asynchronously (queueMicrotask(() => { throw err })) while the spec requires synchronous ErrorEvent dispatch at the global; the async throw also crashes the process before the __WPT_RESULT__ marker can be emitted. A spec-compliant implementation requires ErrorEvent and dispatchEvent on the global (not in any Node version). Tracked for a future runtime improvement."
