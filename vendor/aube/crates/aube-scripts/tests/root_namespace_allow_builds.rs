@@ -34,6 +34,7 @@ static ROOT_TOOL: Embedder = Embedder {
     gvs_incompatible_warning: true,
     primer_ttl: None,
     cpu_budget: None,
+    tty_progress: false,
 };
 
 fn build_decision(manifest: &PackageJson, name: &str, version: &str) -> AllowDecision {

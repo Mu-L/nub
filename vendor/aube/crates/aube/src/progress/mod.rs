@@ -2,9 +2,14 @@
 //!
 //! Two modes live behind one API so call sites in `install::run` stay the same:
 //!
-//! * **TTY** — an animated clx bar, kept as an internal fallback for callers
-//!   that explicitly opt into an in-place display. It redraws by moving the
-//!   cursor and clearing the previous frame.
+//! * **TTY** — a single in-place animated line: header, unified bar, and the
+//!   live `cur/total · bytes · rate · ETA` label, redrawn on one row via
+//!   cursor movement. Deliberately *single-line*: there are no per-package
+//!   child rows, so the rendered region never grows or shrinks and there is no
+//!   multi-line collapse to flash. When the install completes the line is
+//!   cleared exactly once and the post-install dependency summary takes its
+//!   place — a clean handoff with no leftover bar frame and no trailing blanks,
+//!   matching pnpm / bun / cargo / uv.
 //! * **Append-only** — lines safe for terminals, GitHub Actions, and plain
 //!   pipes: a single repeating pnpm-style `Progress:` line emitted on a ~2s
 //!   heartbeat, showing `resolved` / `reused` / `downloaded` plus the byte
@@ -13,14 +18,14 @@
 //!   exactly *why* it's slow (network-bound vs linker-bound). No phase noise,
 //!   no child rows, no redraws.
 //!
-//! `try_new` picks the append-only mode by default. The clx TTY renderer
-//! clears the previous frame on every redraw; that makes installs look like
-//! the screen is blinking right before the post-install package summary lands.
-//! Set `AUBE_TTY_PROGRESS=1` to use the in-place renderer while it remains
-//! useful for local debugging.
-//! It returns `None` only when clx has been forced into text mode
-//! (`--silent`, `-v`, `--reporter=append-only|ndjson`) — those modes own
-//! their own output and we stay out of the way.
+//! `try_new` picks the renderer from the active embedder profile and the
+//! environment: the in-place TTY renderer when stderr is an interactive,
+//! non-CI terminal **and** the embedder opts in (`Embedder::tty_progress`, or
+//! the `AUBE_TTY_PROGRESS` env override) — otherwise append-only. CI / piped /
+//! non-TTY output is always append-only so a redirected log never carries
+//! cursor-control escapes. It returns `None` only when clx has been forced into
+//! text mode (`--silent`, `-v`, `--reporter=append-only|ndjson`) — those modes
+//! own their own output and we stay out of the way.
 
 mod ci;
 mod render;
@@ -38,29 +43,53 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-/// Cap on the number of simultaneously-visible per-package fetch rows
-/// in TTY mode. Bursts above this are collapsed into a single overflow
-/// row labeled "N more packages…" so the animated display stays
-/// bounded on installs that fan out hundreds of tarball fetches at
-/// once.
-const TTY_MAX_VISIBLE_FETCH_ROWS: usize = 5;
-
-/// Fixed denominator clx's `{{progress_bar}}` is held at in TTY mode.
-/// We don't drive clx's progress_current/progress_total with raw
-/// package counts because the unified-bar formula needs sub-package
-/// precision (resolving fills 20% of the bar, which on a 1230-package
-/// install is < 1 package per cell). Encoding the unified-progress
-/// fraction as `progress_current / TTY_BAR_SCALE` gives clx 10 000
-/// steps to interpolate over — more than enough for the flex-rendered
-/// bar to look smooth at any terminal width. The cur/total label is
-/// owned separately via the `count` prop so the scaled denominator
-/// never leaks into the user-facing text.
+/// Denominator the clx `progress_current`/`progress_total` pair is held at in
+/// TTY mode. The animated bar itself is rendered by `tty_bar_field` (via
+/// `render::bar_only`) directly from the unified-progress fraction, so this
+/// pair no longer drives a `{{progress_bar}}` template — it exists only to feed
+/// clx's OSC terminal progress indicator (the iTerm2 / VS Code taskbar
+/// percentage), which reads `overall_progress()`. Encoding the
+/// unified-progress fraction as `progress_current / TTY_BAR_SCALE` gives that
+/// indicator 10 000 smooth steps; the user-facing bar and counters are owned
+/// by the `bar`/`count` props.
 const TTY_BAR_SCALE: usize = 10_000;
 
-fn overflow_fetch_label(count: usize) -> String {
-    let word = pluralizer::pluralize("package", count as isize, false);
-    format!("{count} more {word}…")
-}
+/// The phase verbs the install can emit, in their display spelling. The TTY
+/// renderer right-pads the active verb to the widest of these so the bar's `[`
+/// column is byte-identical across every phase. This is the single source of
+/// truth for the pad width — keep it in sync with `set_phase`'s verb→number
+/// map. (Verbs are ASCII, so byte length == display width.)
+const TTY_PHASE_VERBS: &[&str] = &["resolving", "fetching", "linking"];
+
+/// Display width every phase verb is right-padded to (the longest
+/// [`TTY_PHASE_VERBS`]). Computed at compile time so adding a verb to the list
+/// re-derives the pad automatically.
+const TTY_PHASE_W: usize = {
+    let mut max = 0;
+    let mut i = 0;
+    while i < TTY_PHASE_VERBS.len() {
+        let l = TTY_PHASE_VERBS[i].len();
+        if l > max {
+            max = l;
+        }
+        i += 1;
+    }
+    max
+};
+
+/// Fixed cell count of the animated bar (the `█`/`░` run inside the brackets).
+/// A CONSTANT width is what keeps the `]`, the counters, and the trailing
+/// segment from shifting between frames; the bar never reflows to the terminal
+/// width (a long line simply wraps in place on a narrow terminal). 20 matches
+/// the reference width and leaves room for the counters + trailer at ~80 cols.
+const TTY_BAR_CELLS: usize = 20;
+
+/// Digit-field width for the cur/total counters. The numerator is right-aligned
+/// and the total left-aligned to this width, so `   7/331 ` and ` 577/623 `
+/// occupy an identical column for installs up to 9999 packages; a 5-digit total
+/// (10k+ deps, rare) is the only case that nudges the trailing field, and it
+/// degrades gracefully (the field just grows by one column).
+const TTY_COUNT_DIGITS: usize = 4;
 
 /// Trim `reused` so `reused + downloaded <= total`. No-op when the
 /// counters already fit. Called from `set_total` after a downward
@@ -197,21 +226,8 @@ enum Mode {
         /// install-elapsed denominator. `usize::MAX` sentinel = "not
         /// captured yet"; render falls back to `ETA …`.
         completed_at_fetch_start: Arc<AtomicUsize>,
-        /// Bounded visible-fetch-row bookkeeping. `visible` is the count
-        /// of live per-package child rows (capped at
-        /// `TTY_MAX_VISIBLE_FETCH_ROWS`); `overflow` is the count of
-        /// in-flight fetches folded into the single overflow row. The
-        /// overflow row itself is lazily added on first overspill and
-        /// retained for the rest of the install.
-        fetch_state: Arc<Mutex<FetchState>>,
     },
     Ci(Arc<CiState>),
-}
-
-struct FetchState {
-    visible: usize,
-    overflow: usize,
-    overflow_row: Option<Arc<ProgressJob>>,
 }
 
 impl Clone for InstallProgress {
@@ -238,12 +254,15 @@ impl InstallProgress {
         if clx::progress::output() == ProgressOutput::Text {
             return None;
         }
-        // The animated TTY renderer redraws via cursor movement plus
-        // clear-to-end-of-screen. That is fine for a standalone progress bar,
-        // but it looks like a screen wipe when followed by the post-install
-        // dependency summary. Default to append-only progress everywhere and
-        // leave the in-place renderer behind an explicit debugging opt-in.
-        if std::io::stderr().is_terminal() && !is_ci::cached() && env_truthy("AUBE_TTY_PROGRESS") {
+        // In-place animated bar only on an interactive, non-CI terminal, and
+        // only when the active embedder opts in (or the `AUBE_TTY_PROGRESS`
+        // override is set). Everything else — CI, a pipe, a redirected log —
+        // takes the append-only renderer so no cursor-control escape ever
+        // lands in a non-TTY stream. The renderer itself is single-line with a
+        // clean progress→summary handoff, so the in-place path is a first-class
+        // UX (nub enables it by default) rather than a debug-only fallback.
+        let tty_opt_in = aube_util::embedder().tty_progress || env_truthy("AUBE_TTY_PROGRESS");
+        if std::io::stderr().is_terminal() && !is_ci::cached() && tty_opt_in {
             Some(Self::new_tty())
         } else {
             Some(Self::new_ci())
@@ -258,33 +277,52 @@ impl InstallProgress {
         // `product_banner`); an embedder drops it so the engine brand
         // never leaks into the host's install output.
         let header = product_banner("");
-        // Layout: header, animated bar, count segment, optional bytes
-        // segment (running download, with `/ ~estimated` when
-        // available), phase-gated rate, ETA. Mirrors the CI-mode
-        // label segment-for-segment so both modes show the same
-        // information. `{{count}}` is a custom prop populated by
-        // `refresh_tty_bar` (using the shared
-        // [`render::count_segment`] helper) so the cur/total shape
-        // matches CI exactly — phase-conditional, suppressed-slash
-        // during resolving-without-an-estimate, and so on. The clx
-        // built-in `{{cur}}/{{total}}` is bypassed because
-        // `progress_total` is held at `TTY_BAR_SCALE` to encode the
-        // unified-progress fraction in the bar, which would otherwise
-        // leak into the label as the scaled denominator.
+        // Layout — a single line of FIXED-WIDTH columns so nothing shifts
+        // horizontally between phases or frames:
+        //   <header> <phase-field>  <bar-field>  <count-field><bytes><rate><eta>
+        // `{{phase}}`, `{{bar}}`, and `{{count}}` are custom props rendered by
+        // `tty_phase_field` / `tty_bar_field` / `tty_count_field`, each a
+        // constant display width (the verb is padded to the longest verb, the
+        // bar is a constant cell count, the counters pad to a fixed digit
+        // field). The trailing `{{bytes}}{{rate}}{{eta}}` is the only variable
+        // part and it sits last, so its content can change without moving any
+        // column before it. No `flex` filter: the line renders verbatim and the
+        // terminal wraps it in place on a narrow width. clx's
+        // `progress_current`/`progress_total` are still set (below) to feed the
+        // OSC terminal-progress indicator, but no `{{progress_bar}}` template
+        // consumes them — the visible bar is `tty_bar_field`.
+        let phase0 = tty_phase_field("");
+        let bar0 = tty_bar_field(
+            ci::Snap {
+                phase: 0,
+                resolved: 0,
+                target_total: 0,
+                reused: 0,
+                downloaded: 0,
+                bytes: 0,
+                estimated: 0,
+                fetch_elapsed_ms: 0,
+                completed_at_fetch_start: None,
+            },
+            0,
+        );
         let root = ProgressJobBuilder::new()
-            .body(
-                "{{aube}}{{phase}}  {{progress_bar(flex=true)}} {{count}}{{bytes}}{{rate}}{{eta}}",
-            )
+            .body("{{aube}}{{phase}}  {{bar}}  {{count}}{{bytes}}{{rate}}{{eta}}")
             .body_text(Some("{{aube}}{{phase}} {{count}}{{bytes}}{{rate}}{{eta}}"))
             .prop("aube", &header)
-            .prop("phase", "")
+            .prop("phase", &phase0)
+            .prop("bar", &bar0)
             .prop("count", "")
             .prop("bytes", "")
             .prop("rate", "")
             .prop("eta", "")
             .progress_current(0)
             .progress_total(TTY_BAR_SCALE)
-            .on_done(ProgressJobDoneBehavior::Collapse)
+            // Hide on done: at teardown `finish()` (and the `Drop` safety net)
+            // flip the root to `Done`, which then renders empty. That is what
+            // makes the clear race-free — see `finish()` for why a plain
+            // `stop_clear()` alone could leave a stray frame.
+            .on_done(ProgressJobDoneBehavior::Hide)
             .start();
         Self {
             mode: Mode::Tty {
@@ -299,11 +337,6 @@ impl InstallProgress {
                 estimated_bytes: Arc::new(AtomicU64::new(0)),
                 fetch_start: Arc::new(OnceLock::new()),
                 completed_at_fetch_start: Arc::new(AtomicUsize::new(usize::MAX)),
-                fetch_state: Arc::new(Mutex::new(FetchState {
-                    visible: 0,
-                    overflow: 0,
-                    overflow_row: None,
-                })),
             },
             unpacked_sizes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -483,19 +516,9 @@ impl InstallProgress {
                 completed_at_fetch_start,
                 ..
             } => {
-                if phase.is_empty() {
-                    root.prop("phase", "");
-                } else {
-                    // Single cyan accent across phases so the phase
-                    // word reads as a status label, not a severity
-                    // signal. Yellow used to flag `resolving` which
-                    // reads like a warning in a terminal palette.
-                    let colored_phase = match phase {
-                        "resolving" | "linking" => style::ecyan(phase).to_string(),
-                        _ => style::edim(phase).to_string(),
-                    };
-                    root.prop("phase", &format!(" {} {}", style::edim("—"), colored_phase));
-                }
+                // Fixed-width phase field (verb right-padded to the longest
+                // possible verb), so the bar's `[` never shifts between phases.
+                root.prop("phase", &tty_phase_field(phase));
                 let n = match phase {
                     "resolving" => 1,
                     "fetching" => 2,
@@ -779,74 +802,35 @@ impl InstallProgress {
         );
     }
 
-    /// Add a transient child row for an in-flight tarball fetch. Drop the
-    /// returned `FetchRow` when the fetch completes to remove the row and
-    /// bump the `downloaded` bucket.
-    ///
-    /// In CI mode this creates no child row — the returned value just
-    /// increments the `downloaded` counter on drop so the heartbeat advances.
+    /// Register an in-flight tarball fetch. Drop the returned `FetchRow` when
+    /// the fetch completes to bump the `downloaded` bucket (which advances the
+    /// bar's fetching slice). `name`/`version` are accepted for call-site
+    /// symmetry but not displayed: the TTY renderer is single-line and shows no
+    /// per-package rows, so the fetch only moves the unified bar. CI mode
+    /// likewise just increments the `downloaded` counter on drop so the
+    /// heartbeat advances.
     pub fn start_fetch(&self, name: &str, version: &str) -> FetchRow {
+        let _ = (name, version);
         match &self.mode {
             Mode::Tty {
                 root,
-                fetch_state,
                 total,
                 target_total,
                 reused,
                 downloaded,
                 phase_num,
                 ..
-            } => {
-                let make_row = |child: Arc<ProgressJob>, visible: bool| FetchRow {
-                    inner: FetchRowInner::Tty {
-                        child,
-                        root: Arc::downgrade(root),
-                        fetch_state: Arc::downgrade(fetch_state),
-                        total: Arc::downgrade(total),
-                        target_total: Arc::downgrade(target_total),
-                        reused: Arc::downgrade(reused),
-                        downloaded: Arc::downgrade(downloaded),
-                        phase_num: Arc::downgrade(phase_num),
-                        visible,
-                    },
-                    completed: false,
-                };
-                let mut st = fetch_state.lock().unwrap();
-                if st.visible < TTY_MAX_VISIBLE_FETCH_ROWS {
-                    st.visible += 1;
-                    drop(st);
-                    let child = ProgressJobBuilder::new()
-                        .body("  {{spinner()}} {{label | flex}}")
-                        .body_text(None::<String>)
-                        .prop("label", &format!("{name}@{version}"))
-                        .status(ProgressStatus::Running)
-                        .on_done(ProgressJobDoneBehavior::Hide)
-                        .build();
-                    let child = root.add(child);
-                    return make_row(child, true);
-                }
-                // Over the visible-row cap: fold this fetch into the
-                // single "N more packages…" overflow row. Lazily
-                // create the row on first overspill; it persists for
-                // the rest of the install (no promotion back to
-                // visible — avoids row churn on flappy fetch queues).
-                st.overflow += 1;
-                if st.overflow_row.is_none() {
-                    let row = ProgressJobBuilder::new()
-                        .body("  {{spinner()}} {{label | flex}}")
-                        .body_text(None::<String>)
-                        .prop("label", &overflow_fetch_label(st.overflow))
-                        .status(ProgressStatus::Running)
-                        .on_done(ProgressJobDoneBehavior::Hide)
-                        .build();
-                    st.overflow_row = Some(root.add(row));
-                } else if let Some(row) = &st.overflow_row {
-                    row.prop("label", &overflow_fetch_label(st.overflow));
-                }
-                let child = st.overflow_row.as_ref().unwrap().clone();
-                drop(st);
-                make_row(child, false)
-            }
+            } => FetchRow {
+                inner: FetchRowInner::Tty {
+                    root: Arc::downgrade(root),
+                    total: Arc::downgrade(total),
+                    target_total: Arc::downgrade(target_total),
+                    reused: Arc::downgrade(reused),
+                    downloaded: Arc::downgrade(downloaded),
+                    phase_num: Arc::downgrade(phase_num),
+                },
+                completed: false,
+            },
             Mode::Ci(s) => FetchRow {
                 inner: FetchRowInner::Ci(Arc::downgrade(s)),
                 completed: false,
@@ -854,10 +838,12 @@ impl InstallProgress {
         }
     }
 
-    /// Finalize the progress display. TTY mode leaves the collapsed final
-    /// root row behind so the terminal does not visibly blink/clear right
-    /// before the install summary. CI mode blocks until the heartbeat thread has actually
-    /// stopped so no stray tick can appear after this returns, and
+    /// Finalize the progress display. TTY mode clears the single in-place
+    /// progress line exactly once and stops the render loop, so the
+    /// post-install dependency summary (or an early-return status line) takes
+    /// its place with a clean handoff — no leftover bar frame, no flash, and no
+    /// trailing blank line. CI mode blocks until the heartbeat thread has
+    /// actually stopped so no stray tick can appear after this returns, and
     /// optionally writes the final framed `[ ✓ … ]` status line.
     /// Idempotent.
     ///
@@ -865,39 +851,36 @@ impl InstallProgress {
     /// print its own end-of-install line (so the main install path
     /// doesn't double up with [`print_install_summary`]). Set to `true`
     /// for early-return paths (`--lockfile-only`, drift check) that
-    /// want the framed summary to remain the end of CI log output.
+    /// want the framed summary to remain the end of CI log output. Ignored in
+    /// TTY mode, which prints its summary separately via
+    /// [`print_install_summary`] after this clears the bar.
     pub fn finish(&self, print_ci_summary: bool) {
         match &self.mode {
-            Mode::Tty {
-                root,
-                finished,
-                total,
-                target_total,
-                reused,
-                downloaded,
-                phase_num,
-                ..
-            } => {
-                // Promote to the "done" phase and repaint at 100%
-                // before retiring the display. The mid-work 95% cap
-                // is about not lying while linking is in flight; at
-                // `finish()` the install is fully complete and the
-                // last frame the user sees should match that. Clear
-                // the phase word so the header reads cleanly without
-                // a stale "— linking" trailing the full bar.
-                phase_num.store(4, Ordering::Relaxed);
-                root.prop("phase", "");
-                refresh_tty_bar_from_atomics(
-                    root,
-                    total,
-                    target_total,
-                    reused,
-                    downloaded,
-                    phase_num,
-                );
-                root.set_status(ProgressStatus::Done);
+            Mode::Tty { root, finished, .. } => {
+                // Clear the bar instead of leaving a final frame: the success
+                // line that follows (`✓ installed N packages`) is the
+                // completion cue, so a lingering 100% bar above it would just
+                // be a redundant second `nub …` line bracketing the dependency
+                // summary. Because the renderer is a single line, the clear is
+                // a one-row erase — no multi-line region collapse, no flash.
+                //
+                // Flip the root to `Done` (it is `on_done = Hide`, so it now
+                // renders empty) BEFORE stopping the loop. This is what makes
+                // the teardown race-free: `set_status(Done)` runs a synchronous
+                // `refresh_once()` under clx's `REFRESH_LOCK`, which serializes
+                // against the background render thread, so any in-flight frame
+                // is followed by an empty render that erases it. A bare
+                // `stop_clear()` takes only `TERM_LOCK` (not `REFRESH_LOCK`), so
+                // a render-thread frame could land *after* the clear and leave
+                // a stray bar; rendering the root empty closes that window —
+                // even a late frame paints nothing. `finished` tells `Drop` the
+                // teardown already happened so it doesn't repeat it, and
+                // `stop_clear` is itself idempotent (once `STOPPING` latches and
+                // `LINES` is 0 a repeat erases nothing), covering a double
+                // `finish()`.
                 finished.store(true, Ordering::Relaxed);
-                clx::progress::stop();
+                root.set_status(ProgressStatus::Done);
+                clx::progress::stop_clear();
             }
             Mode::Ci(s) => s.stop(print_ci_summary),
         }
@@ -979,14 +962,75 @@ impl InstallProgress {
     }
 }
 
+/// The fixed-width phase field — ` — <verb>` with the verb right-padded to
+/// [`TTY_PHASE_W`], or an all-blank field of the SAME width when no phase is
+/// active. Its constant display width (`TTY_PHASE_W + 3`) is what pins the
+/// bar's `[` to one column regardless of which verb is showing. The verb takes
+/// a single cyan/dim accent so it reads as a status label, not a severity
+/// signal (yellow once flagged `resolving`, which reads like a warning).
+fn tty_phase_field(phase: &str) -> String {
+    if phase.is_empty() {
+        return " ".repeat(TTY_PHASE_W + 3);
+    }
+    let colored = match phase {
+        "resolving" | "linking" => style::ecyan(phase).to_string(),
+        _ => style::edim(phase).to_string(),
+    };
+    // Pad on the PLAIN verb width (ANSI codes carry zero display width), so the
+    // trailing spaces land outside the color span and the field's visible width
+    // is exactly `TTY_PHASE_W + 3`.
+    let pad = TTY_PHASE_W.saturating_sub(phase.len());
+    format!(" {} {}{}", style::edim("—"), colored, " ".repeat(pad))
+}
+
+/// The fixed-width animated bar field: `[<cells>]`, exactly [`TTY_BAR_CELLS`]
+/// cyan/dim cells inside dim brackets. Constant display width
+/// (`TTY_BAR_CELLS + 2`) so the counters and trailer after it never move.
+fn tty_bar_field(snap: ci::Snap, completed: usize) -> String {
+    format!(
+        "{}{}{}",
+        style::edim("["),
+        render::bar_only(snap, TTY_BAR_CELLS, completed),
+        style::edim("]"),
+    )
+}
+
+/// The fixed-width counter field, e.g. ` 577/623  pkgs` / `   7      pkgs`. The
+/// numerator is right-aligned and the total left-aligned to [`TTY_COUNT_DIGITS`]
+/// with ` pkgs` after, so the field — and therefore the trailing
+/// byte/rate/ETA segment — holds a constant column for installs up to 9999
+/// packages. When resolving has no estimate yet the `/total` slot is blank-
+/// filled (not dropped) so the numerator and ` pkgs` stay put. Phase 0 (before
+/// resolving) renders empty — nothing trails it, so there is no column to hold.
+/// TTY-specific (not the shared `render::count_segment`, which the append-only
+/// CI renderer uses and does not need fixed columns).
+fn tty_count_field(snap: ci::Snap, completed: usize) -> String {
+    let (cur, total) = match snap.phase {
+        0 => return String::new(),
+        1 if snap.target_total > snap.resolved => (snap.resolved, Some(snap.target_total)),
+        1 => (snap.resolved, None),
+        _ => (completed, Some(snap.resolved)),
+    };
+    let cur_s = style::ebold(format!("{cur:>w$}", w = TTY_COUNT_DIGITS)).to_string();
+    let mid = match total {
+        Some(t) => format!(
+            "{}{}",
+            style::edim("/"),
+            style::ebold(format!("{t:<w$}", w = TTY_COUNT_DIGITS)),
+        ),
+        None => " ".repeat(TTY_COUNT_DIGITS + 1),
+    };
+    format!("{cur_s}{mid} {}", style::edim("pkgs"))
+}
+
 /// TTY-only bar refresh primitive. Strongly-typed `&AtomicUsize` /
 /// `&ProgressJob` references so both the `InstallProgress`
 /// method (which holds Arcs) and `FetchRow::drop` (which holds
 /// Weaks and upgrades them) can share the math without duplicating
 /// the snapshot/scale/prop-set sequence. Reads the same field set
-/// as `Mode::Tty` and feeds it through `render::unified_progress` /
-/// `render::count_segment`, so a tweak to either lands in both
-/// renderers.
+/// as `Mode::Tty` and feeds it through the fixed-width
+/// [`tty_bar_field`] / [`tty_count_field`] builders, so a tweak to the
+/// column layout lands everywhere the bar refreshes.
 fn refresh_tty_bar_from_atomics(
     root: &Arc<ProgressJob>,
     total: &AtomicUsize,
@@ -1020,9 +1064,13 @@ fn refresh_tty_bar_from_atomics(
     // catch-up reorders against `set_total`.
     let completed = (r + d).min(resolved);
     let progress = render::unified_progress(snap, completed);
+    // Feed clx's OSC terminal-progress indicator (not a visible template bar).
     let scaled = ((progress * TTY_BAR_SCALE as f64).round() as usize).min(TTY_BAR_SCALE);
     root.progress_current(scaled);
-    root.prop("count", &render::count_segment(snap, completed));
+    // The visible bar + counters are fixed-width fields we render ourselves, so
+    // every column is byte-stable across phases and frames.
+    root.prop("bar", &tty_bar_field(snap, completed));
+    root.prop("count", &tty_count_field(snap, completed));
 }
 
 impl Drop for InstallProgress {
@@ -1056,8 +1104,9 @@ impl Drop for InstallProgress {
     }
 }
 
-/// A single in-flight fetch row. Dropping completes it (hide + bump the
-/// download counter in TTY mode; download-counter-only in CI mode).
+/// A single in-flight fetch. Dropping completes it by bumping the download
+/// counter (which advances the bar's fetching slice in TTY mode and the
+/// heartbeat in CI mode). No per-package row is shown in either mode.
 pub struct FetchRow {
     inner: FetchRowInner,
     completed: bool,
@@ -1065,30 +1114,20 @@ pub struct FetchRow {
 
 enum FetchRowInner {
     Tty {
-        child: Arc<ProgressJob>,
-        /// Weak ref so orphaned rows (e.g. spawned fetch tasks still in flight
-        /// after an error short-circuits the install) don't hold the root job
-        /// alive and block `InstallProgress::Drop` from clearing the display.
+        /// Weak refs to every TTY counter the unified-bar refresh reads.
+        /// Bundled here so `FetchRow::drop` can recompute the bar fill + count
+        /// label after bumping `downloaded`, without a back-pointer to
+        /// `InstallProgress` (which is not itself reference-counted). Mirrors
+        /// the field set `refresh_tty_bar` reads off `Mode::Tty`. Weak so an
+        /// orphaned row (a fetch task still in flight after an error
+        /// short-circuits the install) can't pin the root job alive and block
+        /// `InstallProgress::Drop` from clearing the display.
         root: Weak<ProgressJob>,
-        /// Weak ref to the shared fetch bookkeeping so drop can
-        /// decrement visible/overflow counters and refresh the
-        /// overflow row label without pinning it alive.
-        fetch_state: Weak<Mutex<FetchState>>,
-        /// Weak refs to every TTY counter the unified-bar refresh
-        /// reads. Bundled here so `FetchRow::drop` can recompute the
-        /// bar fill + count label after bumping `downloaded`, without
-        /// requiring a back-pointer to `InstallProgress` (which is
-        /// not itself reference-counted). Mirrors the field set
-        /// `refresh_tty_bar` reads off `Mode::Tty`.
         total: Weak<AtomicUsize>,
         target_total: Weak<AtomicUsize>,
         reused: Weak<AtomicUsize>,
         downloaded: Weak<AtomicUsize>,
         phase_num: Weak<AtomicUsize>,
-        /// Whether this row occupies one of the `TTY_MAX_VISIBLE_FETCH_ROWS`
-        /// visible slots. Overflow rows share a single child job; they
-        /// only bump the overflow counter and the label on drop.
-        visible: bool,
     },
     /// Matches the TTY variant's weak-ref discipline: orphaned CI fetch
     /// rows shouldn't prevent `CiState` from being dropped after the
@@ -1104,26 +1143,21 @@ impl FetchRow {
         self.completed = true;
         match &self.inner {
             FetchRowInner::Tty {
-                child,
                 root,
-                fetch_state,
                 total,
                 target_total,
                 reused,
                 downloaded,
                 phase_num,
-                visible,
             } => {
-                // Bump the downloaded counter, then refresh the
-                // unified bar (clx `progress_current` + `count` prop)
-                // by upgrading the weak refs to each TTY atomic.
-                // `refresh_eta` is *not* called here — the ETA prop
-                // is recomputed on every `inc_downloaded_bytes`
-                // event, which fires once per tarball before this
-                // drop. The off-by-one (ETA computed against pre-bump
-                // `downloaded`) self-corrects on the next fetch's
-                // bytes; for the very last fetch, `set_phase("linking")`
-                // immediately clears the prop.
+                // Bump the downloaded counter, then refresh the unified bar
+                // (clx `progress_current` + `count` prop) by upgrading the weak
+                // refs to each TTY atomic. `refresh_eta` is *not* called here —
+                // the ETA prop is recomputed on every `inc_downloaded_bytes`
+                // event, which fires once per tarball before this drop. The
+                // off-by-one (ETA computed against pre-bump `downloaded`)
+                // self-corrects on the next fetch's bytes; for the very last
+                // fetch, `set_phase("linking")` immediately clears the prop.
                 if let Some(d) = downloaded.upgrade() {
                     d.fetch_add(1, Ordering::Relaxed);
                 }
@@ -1150,27 +1184,6 @@ impl FetchRow {
                         &downloaded,
                         &phase_num,
                     );
-                }
-                if *visible {
-                    child.set_status(ProgressStatus::Done);
-                    if let Some(st) = fetch_state.upgrade() {
-                        let mut st = st.lock().unwrap();
-                        if st.visible > 0 {
-                            st.visible -= 1;
-                        }
-                    }
-                } else if let Some(st) = fetch_state.upgrade() {
-                    let mut st = st.lock().unwrap();
-                    if st.overflow > 0 {
-                        st.overflow -= 1;
-                    }
-                    if st.overflow == 0 {
-                        if let Some(row) = st.overflow_row.take() {
-                            row.set_status(ProgressStatus::Done);
-                        }
-                    } else if let Some(row) = &st.overflow_row {
-                        row.prop("label", &overflow_fetch_label(st.overflow));
-                    }
                 }
             }
             FetchRowInner::Ci(weak) => {
@@ -1312,10 +1325,112 @@ impl Drop for PausingWriterGuard {
 mod tests {
     use super::*;
 
+    /// Display width of a styled string: strip SGR escapes, then count chars
+    /// (every glyph the bar uses — ASCII, `—`, `█`, `░`, `·`, `/` — is one
+    /// display column).
+    fn vis_width(s: &str) -> usize {
+        let mut out = 0usize;
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next();
+                for esc in chars.by_ref() {
+                    if esc.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out += 1;
+        }
+        out
+    }
+
+    fn snap_at(phase: usize, resolved: usize, target_total: usize, completed: usize) -> ci::Snap {
+        ci::Snap {
+            phase,
+            resolved,
+            target_total,
+            reused: completed,
+            downloaded: 0,
+            bytes: 0,
+            estimated: 0,
+            fetch_elapsed_ms: 0,
+            completed_at_fetch_start: None,
+        }
+    }
+
+    /// The whole point of the fixed-column layout: the bar's `[` must sit at a
+    /// byte-identical column in every phase. That column is `header +
+    /// phase-field`, and the header is constant per run, so it reduces to: the
+    /// phase field has the same display width for every verb (and when empty).
     #[test]
-    fn overflow_fetch_label_pluralizes_count() {
-        assert_eq!(overflow_fetch_label(1), "1 more package…");
-        assert_eq!(overflow_fetch_label(2), "2 more packages…");
+    fn phase_field_is_constant_width_across_verbs() {
+        let widths: Vec<usize> = TTY_PHASE_VERBS
+            .iter()
+            .copied()
+            .chain(["", "downloading-future-verb-not-in-set"]) // empty + an over-long verb
+            .map(|v| vis_width(&tty_phase_field(v)))
+            .collect();
+        // Every KNOWN verb + the empty field share one width = TTY_PHASE_W + 3
+        // (" — " plus the verb pad). The longest known verb sets the pad.
+        let expected = TTY_PHASE_W + 3;
+        for (v, w) in TTY_PHASE_VERBS.iter().chain(&[""]).zip(widths.iter()) {
+            assert_eq!(*w, expected, "phase field width drifted for {v:?}");
+        }
+    }
+
+    /// The bar field is a constant `TTY_BAR_CELLS + 2` columns at any fill, so
+    /// the counters/trailer after it never move.
+    #[test]
+    fn bar_field_is_constant_width_at_any_fill() {
+        let expected = TTY_BAR_CELLS + 2; // brackets
+        for (phase, resolved, completed) in [
+            (1, 0, 0),
+            (1, 500, 0),
+            (2, 800, 1),
+            (2, 800, 800),
+            (3, 800, 800),
+        ] {
+            let w = vis_width(&tty_bar_field(
+                snap_at(phase, resolved, resolved.max(1), completed),
+                completed,
+            ));
+            assert_eq!(
+                w, expected,
+                "bar width drifted at phase {phase} completed {completed}"
+            );
+        }
+    }
+
+    /// The counter field holds one column across phases and digit counts (up to
+    /// 9999), with the numerator right-aligned — `7/331` and `577/623` line up.
+    #[test]
+    fn count_field_is_constant_width_up_to_four_digits() {
+        let expected = 2 * TTY_COUNT_DIGITS + 6; // cur(D) + "/" + total(D) + " pkgs"
+        let cases = [
+            snap_at(1, 7, 331, 0),     // resolving with estimate: 7/331
+            snap_at(1, 84, 84, 0),     // resolving, no estimate yet (target == resolved): bare 84
+            snap_at(2, 623, 623, 7),   // fetching: 7/623
+            snap_at(2, 623, 623, 577), // fetching: 577/623
+            snap_at(3, 577, 577, 577), // linking: 577/577
+            snap_at(4, 9999, 9999, 1), // huge but still 4-digit
+        ];
+        for s in cases {
+            let completed = s.reused;
+            let w = vis_width(&tty_count_field(s, completed));
+            assert_eq!(
+                w, expected,
+                "count width drifted at phase {} cur {} total {}",
+                s.phase, completed, s.resolved
+            );
+        }
+        // Phase 0 renders nothing (no trailing field to hold).
+        assert_eq!(tty_count_field(snap_at(0, 0, 0, 0), 0), "");
+        // Numerator is right-aligned: a 1-digit count is space-padded so its
+        // right edge lines up with a 3-digit count.
+        let one = tty_count_field(snap_at(2, 331, 331, 7), 7);
+        assert!(vis_width(&one) == expected, "right-align padding lost");
     }
 
     #[test]

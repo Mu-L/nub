@@ -47,6 +47,7 @@ static NO_CHURN_TOOL: Embedder = Embedder {
     gvs_incompatible_warning: true,
     primer_ttl: None,
     cpu_budget: None,
+    tty_progress: false,
 };
 
 fn pkg(name: &str, version: &str, integrity: &str) -> LockedPackage {

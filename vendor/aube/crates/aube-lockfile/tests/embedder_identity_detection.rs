@@ -43,6 +43,7 @@ static MYTOOL: Embedder = Embedder {
     gvs_incompatible_warning: true,
     primer_ttl: None,
     cpu_budget: None,
+    tty_progress: false,
 };
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
