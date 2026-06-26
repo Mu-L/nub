@@ -1501,8 +1501,8 @@ fn node_compat_flag_disables_augmentation() {
 /// native), so `sessionStorage` is a working global with no opt-in. localStorage
 /// stays the user's explicit opt-in: nub NEVER synthesizes a `--localstorage-file`,
 /// so without one the store never materializes. With no file, nub NEUTRALIZES the
-/// `localStorage` global so it reads `undefined` (matching Node 25+'s clean shape)
-/// instead of Node's throwing getter on the band — so `typeof localStorage ===
+/// `localStorage` global by DELETING it (absent, matching vanilla Node 24) instead
+/// of leaving Node's throwing getter on the band — so `typeof localStorage ===
 /// "undefined"` feature-detection is safe and nothing throws (the maintainer, 2026-06-15).
 /// A user who passes their own `--localstorage-file=<path>` gets a working,
 /// persistent store, and nub never stands one up on its own.
@@ -1520,10 +1520,11 @@ fn sessionstorage_works_by_default_localstorage_needs_user_file() {
     let user_store = dir.join("mine.sqlite");
 
     // sessionStorage needs only the flag (no file) — works on the whole 22.4+ range.
-    // Also assert localStorage is the NEUTRALIZED `undefined` shape (no throw): on the
-    // band nub replaces Node's throwing getter so `typeof localStorage` is "undefined"
-    // and feature-detection works. `typeof` is read FIRST — on the raw band even
-    // `typeof localStorage` throws, so this line proves the neutralize ran.
+    // Also assert localStorage neutralizes to `typeof === "undefined"` (no throw): on
+    // the band nub deletes Node's throwing getter, so `typeof localStorage` is
+    // "undefined". `typeof` is read FIRST — on the raw band even `typeof localStorage`
+    // throws, so this line proves the neutralize ran. (The absent-vs-present shape is
+    // pinned separately by `neutralized_localstorage_is_absent_not_present_undefined`.)
     std::fs::write(
         dir.join("probe.js"),
         "console.log('LS:' + typeof localStorage); sessionStorage.setItem('k', 'v'); console.log('SS:' + sessionStorage.getItem('k'));",

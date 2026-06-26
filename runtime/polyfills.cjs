@@ -44,7 +44,7 @@ function installSyncPolyfills(preloaded) {
   // === false`), not present-but-undefined. Absent is the additive choice: a bare
   // `localStorage` read throws ReferenceError exactly as on vanilla Node 24, and
   // `typeof localStorage === "undefined"` stays true with no throw. The earlier
-  // present-undefined define matched Node 26's shape, but that broke isomorphic
+  // present-undefined define matched Node 25+'s native shape, but that broke isomorphic
   // libraries that gate on `'localStorage' in window/globalThis` (e.g. vitest's
   // happy-dom `getWindowKeys`): a present property made them SKIP installing their
   // own store, so user code then read nub's `undefined` and crashed (#166). This
@@ -57,9 +57,11 @@ function installSyncPolyfills(preloaded) {
   // an internal `__NUB_*` plumbing var that's explicitly fine to leak to children.
   // Neutralization is idempotent — a descendant re-running this preload deletes an
   // already-absent or re-installed `localStorage` again, which is harmless. The
-  // property is configurable (the define that replaced it before already proved
-  // that), so `delete` cannot throw; the try/catch guards only a hypothetical
-  // non-configurable runtime, where we leave Node's behavior.
+  // property is a configurable own accessor (the define that replaced it before
+  // already proved that), so `delete` removes it cleanly. This file is sloppy-mode
+  // CJS, where `delete` never throws (a non-configurable property would just make
+  // it return false and leave Node's getter in place); the try/catch is belt-and-
+  // suspenders for any future strict/ESM move.
   if (process.env.__NUB_NEUTRALIZE_LOCALSTORAGE) {
     try {
       delete globalThis.localStorage;
