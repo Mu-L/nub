@@ -8,9 +8,10 @@
    GitHub API; falls back gracefully so a fetch failure can't break the build).
 
    The "you haven't starred this yet" cue is deliberately subtle + on-brand:
-   the star sits in muted foreground at rest and warms toward the site's ember
-   accent on hover, with the border picking up a faint ember tint — a tasteful
-   nudge, not a garish call-to-action. */
+   the star is the SOLE ember accent — it sits in muted foreground at rest and
+   warms to the site's ember on hover. Everything else (pill border, GitHub-mark
+   ring) shifts only with the neutral accent background, so the hover reads as
+   one tasteful nudge, not three competing oranges. */
 
 /* GitHub mark (official Invertocat, mono path) — same path used elsewhere on
    the site for brand consistency. */
@@ -83,11 +84,11 @@ export async function GitHubStarPill({ repo }: { repo: string }) {
           ? `Star ${repo} on GitHub — ${formatStars(stars)} stars`
           : `Star ${repo} on GitHub`
       }
-      className="group inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/60 py-1 pe-2.5 ps-1 text-sm font-medium text-fd-muted-foreground shadow-sm transition-colors hover:border-ember/40 hover:bg-fd-accent hover:text-fd-foreground"
+      className="group inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/60 py-1 pe-2.5 ps-1 text-sm font-medium text-fd-muted-foreground shadow-sm transition-colors hover:bg-fd-accent hover:text-fd-foreground"
     >
       {/* Circular GitHub mark — its own ring keeps the "logo on the left of a
           pill" read crisp against the surrounding border. */}
-      <span className="flex size-6 items-center justify-center rounded-full bg-fd-muted text-fd-foreground ring-1 ring-fd-border transition-colors group-hover:ring-ember/30">
+      <span className="flex size-6 items-center justify-center rounded-full bg-fd-muted text-fd-foreground ring-1 ring-fd-border">
         <GitHubMark className="size-3.5" />
       </span>
       {/* Star + count read as one tight unit (the site is otherwise serif, so
