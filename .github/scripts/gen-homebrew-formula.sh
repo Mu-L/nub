@@ -80,10 +80,12 @@ class Nub < Formula
   def install
     # nub is a single self-contained binary: it embeds its runtime (preload +
     # vendored polyfills + native addon) and JIT-extracts it to ~/.cache/nub on
-    # first run, so there is no sidecar to keep beside the binary. The archive ships
-    # bin/nub + bin/nubx (both real copies; nub picks its verb from the argv[0]
-    # basename), so install them straight onto PATH — no libexec, no symlink dance.
-    bin.install "bin/nub", "bin/nubx"
+    # first run, so there is no sidecar to keep beside the binary. The archive's
+    # only top-level entry is bin/ (nub + nubx, both real copies; nub picks its
+    # verb from the argv[0] basename), so Homebrew strips that lone directory and
+    # stages its contents at the cwd root — the binaries are nub/nubx here, NOT
+    # bin/nub. Install them straight onto PATH — no libexec, no symlink dance.
+    bin.install "nub", "nubx"
   end
 
   test do
