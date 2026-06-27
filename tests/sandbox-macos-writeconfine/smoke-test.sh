@@ -48,15 +48,19 @@ fi
 ln -sf "$B/secret" "$B/pkg/link"
 if sandbox-exec -p "$PROF" /bin/sh -c "echo PWNED >'$B/pkg/link/data.txt'" 2>/dev/null; then
   fail "symlink-escape should be blocked"
+elif [[ "$(cat "$B/secret/data.txt")" == ORIGINAL ]]; then
+  pass "symlink-escape blocked (secret intact)"
 else
-  [[ "$(cat "$B/secret/data.txt")" == ORIGINAL ]] && pass "symlink-escape blocked (secret intact)" || fail "symlink-escape mutated secret"
+  fail "symlink-escape mutated secret"
 fi
 
 # 4. .. traversal → blocked
 if sandbox-exec -p "$PROF" /bin/sh -c "echo PWNED >'$B/pkg/../secret/dd.txt'" 2>/dev/null; then
   fail ".. traversal should be blocked"
+elif [[ -e "$B/secret/dd.txt" ]]; then
+  fail ".. traversal created file"
 else
-  [[ -e "$B/secret/dd.txt" ]] && fail ".. traversal created file" || pass ".. traversal blocked"
+  pass ".. traversal blocked"
 fi
 
 # 5. in-jail hardlink creation to an out-of-root inode → blocked at creation

@@ -72,8 +72,12 @@ if [[ "$MODE" == "control" ]]; then
   CODE=$?
 else
   GENARGS=(--pkg "$PKG" --project "$PROJECT" --mode "$MODE" --darwin-temp)
-  for w in "${WRITES[@]}"; do GENARGS+=(--write "$w"); done
-  for t in "${TMPS[@]}"; do GENARGS+=(--tmp "$t"); done
+  # Guard the empty-array expansion: macOS ships bash 3.2, where `"${EMPTY[@]}"`
+  # under `set -u` aborts with "unbound variable" — which would crash the documented
+  # strict-mode path (no --write). TMPS is always non-empty (SANDBOX_TMP), but guard
+  # both for robustness.
+  if [[ ${#WRITES[@]} -gt 0 ]]; then for w in "${WRITES[@]}"; do GENARGS+=(--write "$w"); done; fi
+  if [[ ${#TMPS[@]} -gt 0 ]]; then for t in "${TMPS[@]}"; do GENARGS+=(--tmp "$t"); done; fi
   PROFILE="$(node "$GEN" "${GENARGS[@]}")" || { echo "profile-gen failed" >&2; exit 3; }
   ( cd "$PKG" && exec sandbox-exec -p "$PROFILE" -- "${CMD[@]}" ) >"$LOG" 2>&1
   CODE=$?

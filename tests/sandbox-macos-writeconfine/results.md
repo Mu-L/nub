@@ -179,6 +179,37 @@ wasn't forced); git-hook installers other than pre-commit failed on a hand-built
 (broken pnpm symlinks from a `cp -R`), not a sandbox finding — zero-dep pre-commit cleanly proved
 the `.git/hooks` collision.
 
+## §Production-gaps — what this harness reveals about the reference backend
+
+The harness is the validated reference for `crates/nub-sandbox/src/backend/macos.rs` +
+`script_sandbox.rs` (branch `build-jail-engine`). Three divergences an implementer must close
+(surfaced by the impact-analysis review):
+
+1. **Canonicalization of NOT-YET-CREATED write-allow paths (fail-closed bug).** Production
+   `macos.rs::push_write_rule` uses `if let Ok(canon) = p.canonicalize()` — but
+   `std::fs::canonicalize` returns `Err` for any path that does not yet exist. So a write-allow
+   path that (a) doesn't exist at profile-build time AND (b) crosses a firmlink emits ONLY the
+   inert symlink-form rule → the write is silently DENIED (§Canon). At risk: `sandbox_home`
+   (`/tmp/nub-sandbox/...`, under the `/tmp` firmlink) and the `extra_write` caches
+   (`~/.cache/node-gyp`, `~/.npm/_prebuilds`, …) which don't exist on a clean machine. **Fix:**
+   replicate this harness's `canonicalizeForAllow` — realpath the nearest EXISTING ancestor and
+   re-append the non-existent tail — instead of `Path::canonicalize`.
+2. **The DARWIN confstr write grant is absent.** Production's write set is
+   `package_dir + sandbox_home + extra_write` + `/dev`; none covers the per-user
+   `/private/var/folders/<uid>/{T,C}` the Apple toolchain writes `xcrun_db` to via confstr
+   (§Darwin). A from-source compile under the production jail emits the EPERM xcrun noise. **Fix:**
+   grant the confstr pair (query `getconf`/`confstr`, canonicalize) — the `--darwin-temp` grant
+   here.
+3. **The tmp-anchor repoint must happen at the embedder seam.** The node-gyp fix (§node-gyp) is
+   `TMPDIR`/`TMP`/`TEMP` = the granted private scratch. Production `script_sandbox_env()`
+   allowlists those KEYS but injects no VALUES, and `macos.rs` deliberately DROPS the `/tmp`
+   re-allow — so unless the nub embedder sets `TMPDIR/TMP/TEMP/HOME = sandbox_home` before
+   `apply()`, node-gyp's `os.tmpdir()` `mkdtemp` is denied and every from-source build breaks.
+   **Verify** the embedder does this; it is the load-bearing pairing for the dropped `/tmp` grant.
+
+(Lower-severity: production grants `/dev` as a subpath where the tight literal device set
+suffices — looser-not-defect, since writing a real device node needs root.)
+
 ## Conclusion
 
 The write-confine mechanism is sound and bypass-resistant on macOS: symlink-escape, `..`, and

@@ -42,6 +42,25 @@ console.log("# canonicalization");
   );
 }
 
+console.log("# canonicalization — root-adjacent non-existent paths (BUG-1 regression)");
+{
+  // a non-existent component DIRECTLY under / must NOT drop a char or yield `//`
+  // (a `//`-subpath is read by Seatbelt as `/` = a filesystem-wide FAIL-OPEN).
+  const c1 = canonicalizeForAllow("/nonexistent-cache-xyz/sub");
+  ok(c1 === "/nonexistent-cache-xyz/sub", `root-adjacent path intact (${c1})`);
+  ok(!c1.includes("//"), "no leading/double slash");
+  const c2 = canonicalizeForAllow("/Q"); // single-char top-level — the fail-open trigger
+  ok(c2 === "/Q", `single-char top-level path intact (${c2})`);
+  // the build() guard must REFUSE a grant that resolves to the filesystem root
+  let threw = false;
+  try {
+    build({ pkg: "/", write: [], tmp: [], mode: "strict", devSubpath: false });
+  } catch {
+    threw = true;
+  }
+  ok(threw, "build() refuses a `/`-root write grant (no fail-open)");
+}
+
 console.log("# write-deny floor + device set");
 {
   const prof = build({ pkg: realPkg, write: [], tmp: [], mode: "strict", devSubpath: false });

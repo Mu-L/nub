@@ -42,7 +42,7 @@
 // Output: the SBPL profile text on stdout.
 
 import { realpathSync, existsSync } from "node:fs";
-import { resolve, dirname, sep } from "node:path";
+import { resolve, dirname, basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 // The minimal char-device write set a Node/native build actually touches.
@@ -86,17 +86,22 @@ function parseArgs(argv) {
 // ancestor and re-append the non-existing tail — so the emitted subpath is still
 // anchored at the real on-disk prefix.
 function canonicalizeForAllow(p) {
-  let abs = resolve(p);
+  const abs = resolve(p);
   if (existsSync(abs)) return realpathSync(abs);
-  // walk up to nearest existing ancestor
-  let tail = [];
+  // Walk up to the nearest existing ancestor, collecting the non-existent tail
+  // by basename. Use basename + join (NOT a manual slice/concat): for a component
+  // directly under root, `dirname` is "/" and a manual `slice(len+1)` would drop
+  // the first char and a manual `prefix + sep + tail` would yield a leading `//`
+  // (which Seatbelt reads as `/` = a filesystem-wide grant — a FAIL-OPEN). basename
+  // + join are root-correct.
+  const tail = [];
   let cur = abs;
   while (cur !== dirname(cur) && !existsSync(cur)) {
-    tail.unshift(cur.slice(dirname(cur).length + 1));
+    tail.unshift(basename(cur));
     cur = dirname(cur);
   }
   const realPrefix = existsSync(cur) ? realpathSync(cur) : cur;
-  return tail.length ? realPrefix + sep + tail.join(sep) : realPrefix;
+  return tail.length ? join(realPrefix, ...tail) : realPrefix;
 }
 
 function sbplEscape(s) {
@@ -139,6 +144,10 @@ function build(opts) {
   const add = (p) => {
     if (!p) return;
     const c = canonicalizeForAllow(p);
+    // Hard guard: a write-allow root that resolves to `/` (or empty) would grant
+    // write across the WHOLE filesystem — a fail-open. Refuse rather than emit it.
+    // (Reachable only via a nonsensical `--pkg /`; fail-closed by construction.)
+    if (c === "/" || c === "") throw new Error(`refusing filesystem-root write grant from "${p}"`);
     if (!roots.includes(c)) roots.push(c);
   };
 
