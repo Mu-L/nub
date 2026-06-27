@@ -64,20 +64,22 @@ jobs:
           winget validate --manifest $manifest
           Write-Host "validate exit code: $LASTEXITCODE"
 
-          # Installing FROM A LOCAL MANIFEST is an admin-gated winget feature, OFF by
-          # default ("This feature needs to be enabled by administrators ... winget
-          # settings --enable LocalManifestFiles"). GitHub-hosted Windows runners run
-          # elevated, so enabling it here is what lets the --manifest install proceed.
-          Write-Host "=== enable LocalManifestFiles ==="
+          # Two admin-gated winget settings must be enabled for an unattended install
+          # FROM A LOCAL MANIFEST of an ARCHIVE (zip) package — both default OFF and
+          # both surface as "This feature needs to be enabled by administrators ...".
+          # GitHub-hosted Windows runners are elevated, so enabling them here works.
+          #   LocalManifestFiles            — permits `winget install --manifest`.
+          #   LocalArchiveMalwareScanOverride — permits --ignore-local-archive-malware-scan,
+          #     which skips the archive malware scan that otherwise blocks unattended.
+          Write-Host "=== enable admin settings ==="
           winget settings --enable LocalManifestFiles
+          winget settings --enable LocalArchiveMalwareScanOverride
 
           # The authoritative gate — the same download + hash-verify + sandbox-style
           # install the winget-pkgs bot performs. A bad URL, a wrong SHA256, or a
-          # broken nested-installer path fails HERE.
-          #   --ignore-local-archive-malware-scan: a local-manifest ARCHIVE (zip)
-          #     install otherwise blocks on winget's local-archive malware scan in an
-          #     unattended session. (Irrelevant to the published package, which is
-          #     installed from the source, not a local manifest.)
+          # broken nested-installer path fails HERE. (The malware-scan override is
+          # irrelevant to the published package, which installs from the source, not
+          # a local manifest.)
           Write-Host "=== winget install --manifest ==="
           winget install --manifest $manifest `
             --accept-package-agreements --accept-source-agreements `
