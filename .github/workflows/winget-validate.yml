@@ -64,13 +64,24 @@ jobs:
           winget validate --manifest $manifest
           Write-Host "validate exit code: $LASTEXITCODE"
 
+          # Installing FROM A LOCAL MANIFEST is an admin-gated winget feature, OFF by
+          # default ("This feature needs to be enabled by administrators ... winget
+          # settings --enable LocalManifestFiles"). GitHub-hosted Windows runners run
+          # elevated, so enabling it here is what lets the --manifest install proceed.
+          Write-Host "=== enable LocalManifestFiles ==="
+          winget settings --enable LocalManifestFiles
+
           # The authoritative gate — the same download + hash-verify + sandbox-style
           # install the winget-pkgs bot performs. A bad URL, a wrong SHA256, or a
           # broken nested-installer path fails HERE.
+          #   --ignore-local-archive-malware-scan: a local-manifest ARCHIVE (zip)
+          #     install otherwise blocks on winget's local-archive malware scan in an
+          #     unattended session. (Irrelevant to the published package, which is
+          #     installed from the source, not a local manifest.)
           Write-Host "=== winget install --manifest ==="
           winget install --manifest $manifest `
             --accept-package-agreements --accept-source-agreements `
-            --disable-interactivity
+            --disable-interactivity --ignore-local-archive-malware-scan
           if ($LASTEXITCODE -ne 0) {
             Write-Error "winget install --manifest failed with exit code $LASTEXITCODE"
             exit 1
