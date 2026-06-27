@@ -122,9 +122,12 @@ catch { Write-Host "3B ERROR: $($_.Exception.Message)"; $results['3B']='INCONCLU
 Section '3C: env-scrub at spawn'
 try {
     $env:NUB_PROBE_SECRET_TOKEN='sk-leak-me-3c'
-    # NC: child inheriting parent env SEES the token (native child getenv -> exit 0 present)
-    $ncProc = Start-Process -FilePath $child -ArgumentList 'getenv','NUB_PROBE_SECRET_TOKEN' -NoNewWindow -PassThru -Wait
-    $ncCode = $ncProc.ExitCode
+    # NC: a child INHERITING the parent env SEES the token. The call operator launches the
+    # native child with the current process env block (which now carries the token) and
+    # $LASTEXITCODE is the child's REAL exit code -- Start-Process -PassThru .ExitCode can be
+    # $null with -NoNewWindow, which is what made this NC spuriously INCONCLUSIVE.
+    & $child getenv NUB_PROBE_SECRET_TOKEN | Write-Host
+    $ncCode = $LASTEXITCODE
     Write-Host "NC (inherit env) getenv exit: $ncCode (expect 0 = present)"
     # main: scrubbed env via ProcessStartInfo (no token)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
