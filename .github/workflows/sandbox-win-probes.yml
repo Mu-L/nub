@@ -3,9 +3,11 @@
 # primitives on a real windows-latest runner BEFORE any nub-sandbox Windows backend
 # is greenlit. These are STANDALONE probe programs -- they do NOT touch crates/nub-sandbox.
 #
-# The GH Actions windows-latest job token is ELEVATED (IsElevated=True), so each probe is
-# relaunched under the LINKED non-elevated token (run-deelevated.ps1) to genuinely test the
-# "no elevation required" claim. Each probe has a NEGATIVE CONTROL so a pass can't be vacuous.
+# The GH Actions windows-latest job token is ELEVATED (IsElevated=True) and the runneradmin
+# account has NO UAC linked split-token, so each probe is relaunched under a SYNTHESIZED
+# de-elevated token (CreateRestrictedToken(LUA_TOKEN) -> CreateProcessWithTokenW, run-
+# deelevated.ps1) to genuinely test the "no elevation required" claim. Each probe has a
+# NEGATIVE CONTROL so a pass can't be vacuous, and reports mechanism + unprivileged separately.
 name: sandbox-win-probes
 on:
   workflow_dispatch:
@@ -19,6 +21,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: ASCII guard (no mojibake -- PS 5.1 mis-decodes non-ASCII)
+        shell: powershell
+        run: |
+          $bad=@()
+          Get-ChildItem -Path tests/sandbox-win-probes -File | ForEach-Object {
+            $bytes=[System.IO.File]::ReadAllBytes($_.FullName)
+            for($i=0;$i -lt $bytes.Length;$i++){ if($bytes[$i] -gt 127){ $bad+="$($_.Name) @byte $i"; break } }
+          }
+          if($bad.Count -gt 0){ Write-Host "NON-ASCII bytes found:`n$($bad -join "`n")"; exit 1 }
+          Write-Host "ASCII guard OK (all probe files are 7-bit ASCII)"
       - name: Environment / elevation baseline
         shell: powershell
         run: |
@@ -57,3 +69,14 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| 1 - FS read-deny (KEY) | ${{ steps.p1.outcome }} |"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| 2 - FS write-confine | ${{ steps.p2.outcome }} |"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| 3 - egress/job/env | ${{ steps.p3.outcome }} |"
+      - name: Gate (fail the job unless every probe PASSed)
+        if: always()
+        shell: powershell
+        run: |
+          $p1='${{ steps.p1.outcome }}'; $p2='${{ steps.p2.outcome }}'; $p3='${{ steps.p3.outcome }}'
+          Write-Host "probe1=$p1 probe2=$p2 probe3=$p3"
+          # A probe step that did not even run leaves an empty/skipped outcome -- treat anything
+          # other than an explicit 'success' as a failure so the harness goes RED loudly.
+          $ok = ($p1 -eq 'success') -and ($p2 -eq 'success') -and ($p3 -eq 'success')
+          if(-not $ok){ Write-Host "GATE FAIL: not all probes PASSed (read the per-probe logs for PASS/FAIL/INCONCLUSIVE)"; exit 1 }
+          Write-Host "GATE OK: all probes PASSed"

@@ -64,21 +64,26 @@ try {
 
     Section 'VERDICT'
     Write-Host "NC-B (allowed read) exit=$codeAllowed (expect 0); secret read exit=$codeSecret (expect 5)"
+    # $mech is the SECURITY outcome of the AppContainer deny-ACE. It is independent of the
+    # PARENT's elevation: the child is always a restricted lowbox token whose deny is enforced.
+    # The "unprivileged" sub-claim (setup needs no admin) is tracked separately via $isAdmin.
     if ($codeAllowed -ne 0) {
-        Write-Host "INCONCLUSIVE: AppContainer child could not read the allowed file (exit=$codeAllowed) -> NC-B broken (traversal/launch, not a deny-ACE result)"
-        $probe1='INCONCLUSIVE'
+        $mech='INCONCLUSIVE'; $detail="AppContainer child could not read the allowed file (exit=$codeAllowed) -> NC-B broken (traversal/launch, not a deny-ACE result)"
     } elseif ($codeSecret -eq 5) {
-        if (-not $isAdmin) { Write-Host "PASS: unprivileged FS read-deny CONFIRMED (allowed readable, secret blocked, not elevated)"; $probe1='PASS' }
-        else { Write-Host "read-deny held but process is ELEVATED -> cannot claim 'unprivileged'"; $probe1='INCONCLUSIVE(elevated)' }
+        $mech='PASS'; $detail="allowed readable, secret blocked (ACCESS_DENIED)"
     } elseif ($codeSecret -eq 0) {
-        Write-Host "*** FAIL: SECRET LEAKED -- read-deny DID NOT HOLD ***"; $probe1='FAIL'
+        $mech='FAIL'; $detail="SECRET LEAKED -- read-deny DID NOT HOLD"
     } else {
-        Write-Host "INCONCLUSIVE: secret-read exit=$codeSecret (neither 0 nor 5)"; $probe1='INCONCLUSIVE'
+        $mech='INCONCLUSIVE'; $detail="secret-read exit=$codeSecret (neither 0 nor 5)"
     }
 }
 finally {
     [void][AC]::DeleteAppContainerProfile($acName)
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
-Write-Host "PROBE1 RESULT: $probe1"
+$unpriv = (-not $isAdmin)
+if ($mech -eq 'PASS' -and $unpriv) { $probe1='PASS' }
+elseif ($mech -eq 'PASS' -and -not $unpriv) { $probe1='INCONCLUSIVE'; $detail="$detail; mechanism CONFIRMED but parent ELEVATED -> unprivileged sub-claim not shown in this run" }
+else { $probe1=$mech }
+Write-Host "PROBE1 read-deny: ${probe1}: $detail  [mechanism=$mech unprivileged=$unpriv]"
 if ($probe1 -ne 'PASS') { exit 1 } else { exit 0 }

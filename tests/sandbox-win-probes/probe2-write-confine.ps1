@@ -62,17 +62,19 @@ try {
 
     Section 'VERDICT'
     Write-Host "allowed-write exit=$codeAllowed (expect 0); outside-write exit=$codeOutside (expect 5)"
-    if($codeAllowed -ne 0){ Write-Host "INCONCLUSIVE: child could not write allowed dir (exit=$codeAllowed) -> NC-B broken"; $probe2='INCONCLUSIVE' }
-    elseif($codeOutside -eq 5){
-        if(-not $isAdmin){ Write-Host "PASS: unprivileged write-confine CONFIRMED"; $probe2='PASS' }
-        else { Write-Host "confine held but ELEVATED -> cannot claim unprivileged"; $probe2='INCONCLUSIVE(elevated)' }
-    }
-    elseif($codeOutside -eq 0){ Write-Host "*** FAIL: WROTE OUTSIDE -- write-confine DID NOT HOLD ***"; $probe2='FAIL' }
-    else { Write-Host "INCONCLUSIVE: outside-write exit=$codeOutside (neither 0 nor 5)"; $probe2='INCONCLUSIVE' }
+    # $mech = security outcome (independent of parent elevation; the child is a lowbox token).
+    if($codeAllowed -ne 0){ $mech='INCONCLUSIVE'; $detail="child could not write allowed dir (exit=$codeAllowed) -> NC-B broken" }
+    elseif($codeOutside -eq 5){ $mech='PASS'; $detail="allowed-dir write OK, outside-dir write blocked (ACCESS_DENIED)" }
+    elseif($codeOutside -eq 0){ $mech='FAIL'; $detail="WROTE OUTSIDE -- write-confine DID NOT HOLD" }
+    else { $mech='INCONCLUSIVE'; $detail="outside-write exit=$codeOutside (neither 0 nor 5)" }
 }
 finally {
     [void][AC]::DeleteAppContainerProfile($acName)
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 }
-Write-Host "PROBE2 RESULT: $probe2"
+$unpriv = (-not $isAdmin)
+if ($mech -eq 'PASS' -and $unpriv) { $probe2='PASS' }
+elseif ($mech -eq 'PASS' -and -not $unpriv) { $probe2='INCONCLUSIVE'; $detail="$detail; mechanism CONFIRMED but parent ELEVATED -> unprivileged sub-claim not shown in this run" }
+else { $probe2=$mech }
+Write-Host "PROBE2 write-confine: ${probe2}: $detail  [mechanism=$mech unprivileged=$unpriv]"
 if($probe2 -ne 'PASS'){ exit 1 } else { exit 0 }

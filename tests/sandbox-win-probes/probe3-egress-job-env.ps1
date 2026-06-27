@@ -149,6 +149,13 @@ finally { Remove-Item Env:\NUB_PROBE_SECRET_TOKEN -ErrorAction SilentlyContinue;
 
 Section 'PROBE3 SUMMARY'
 $results.GetEnumerator() | Sort-Object Name | ForEach-Object { Write-Host ("  {0}: {1}" -f $_.Name,$_.Value) }
-Write-Host "IsElevated: $isAdmin (expect False)"
-$allPass = ($results['3A'] -eq 'PASS') -and ($results['3B'] -eq 'PASS') -and ($results['3C'] -eq 'PASS') -and (-not $isAdmin)
-if($allPass){ Write-Host "PROBE3 RESULT: PASS"; exit 0 } else { Write-Host "PROBE3 RESULT: NOT-ALL-PASS (see per-subprobe)"; exit 1 }
+$unpriv = (-not $isAdmin)
+Write-Host "IsElevated: $isAdmin (unprivileged sub-claim expects False)"
+# Mechanism (egress block / job reap / env scrub) is independent of parent elevation.
+$mechPass = ($results['3A'] -eq 'PASS') -and ($results['3B'] -eq 'PASS') -and ($results['3C'] -eq 'PASS')
+$detail = "3A=$($results['3A']) 3B=$($results['3B']) 3C=$($results['3C'])"
+if ($mechPass -and $unpriv) { $probe3='PASS' }
+elseif ($mechPass -and -not $unpriv) { $probe3='INCONCLUSIVE'; $detail="$detail; mechanisms CONFIRMED but parent ELEVATED -> unprivileged sub-claim not shown" }
+else { $probe3='NOT-ALL-PASS' }
+Write-Host "PROBE3 egress/job/env: ${probe3}: $detail  [unprivileged=$unpriv]"
+if($probe3 -eq 'PASS'){ exit 0 } else { exit 1 }
