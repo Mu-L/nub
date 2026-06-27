@@ -131,16 +131,53 @@ scratch + ONE base-anchor cache root (HOME-repointed) + the DARWIN confstr pair.
 
 ## §Catalog — cache-family holes (empirical sweep)
 
-<!-- Filled from the cache-family empirical sweep: per family — representative package, install
-command, exact denied out-of-package write path under strict, genuine-write-vs-prefetchable,
-HOME-repoint capture. -->
+Every row reproduced against the real tool under the write-confine profile (EPERM captured), on
+the mega-fixture (Bun-trusted list + frameworks, `pnpm install --ignore-scripts`).
 
-## Conclusion (so far)
+| Family | Repr. pkg | Install cmd | Denied out-of-pkg write under strict | Genuine write vs pre-populatable | HOME-repoint captures? |
+|---|---|---|---|---|---|
+| node-gyp-build + bundled prebuilds | bufferutil, bcrypt | `node-gyp-build` | **NONE** — strict exit 0, loads in-pkg `prebuilds/*.node` | no write | n/a |
+| prebuild-install | sqlite3 | `prebuild-install \|\| node-gyp rebuild` | `npm_config_cache/_prebuilds` (default `~/.npm/_prebuilds`); `.node` extracts in-pkg | genuine (tarball cache) | yes (via `npm_config_cache`, default `$HOME/.npm`) |
+| node-gyp from source | cpu-features, better-sqlite3 | `node-gyp rebuild` | devdir `~/Library/Caches/node-gyp/<ver>` (HOME-derived); objects/`.node` in-pkg | genuine on FIRST header fetch; **pre-populatable read-only after** (headers present → strict exit 0) | yes |
+| browser/engine blobs | cypress, electron, playwright-core | `node …/install` | `~/Library/Caches/{Cypress,electron,ms-playwright}` (HOME-derived); binary RUNS from cache | genuine cache write | yes (all 3) |
+| prisma | @prisma/engines | `node scripts/postinstall.js` | `~/.cache/prisma` (`getRootCacheDir`, HOME/XDG-derived); engine copied in-pkg | genuine download cache (live denial NOT reproduced — postinstall self-skipped; path source-confirmed) | yes |
+| sharp | sharp | `node install/check.js` | **NONE** — prebuilt optionalDep `@img/sharp-darwin-arm64` | no write | n/a |
+| node-sass | node-sass | `node scripts/install.js` | **NONE by default** — binary in-pkg `vendor/<abi>/binding.node`; cache copy → `npm_config_cache/node-sass`. Hole only if user sets `SASS_BINARY_DIR` outside pkg | in-pkg + captured cache | yes |
+| **git-hook installers** | pre-commit | `node install.js` | **`<project>/.git/hooks/pre-commit`** — `EPERM open` | **genuine project-tree write, NOT a cache** | **NO — the one true residual** |
+
+Representative captured EPERM: `prebuild-install warn install EPERM … mkdir '…/extcache-sqlite'`;
+`gyp ERR! … EPERM … mkdir '…/fresh-devdir-cpu'`; `EPERM … mkdir '…/fresh-{cypress,electron,pw}-cache'`;
+`node-sass: Unable to save binary … EPERM mkdir '…/darwin-arm64-147'` (external dir only);
+`pre-commit: Found .git in <proj>/.git → EPERM … open '<proj>/.git/hooks/pre-commit'`.
+
+**HOME-collapse, independently confirmed by the sweep:** with `HOME=$CACHEROOT` and relaxed jail
+granting ONLY `$CACHEROOT`, four independent tool caches (node-gyp headers, Cypress, electron,
+ms-playwright) all relocated inside that one root and the builds/downloads COMPLETED.
+
+**Residuals beyond the one cache root:**
+- **git-hook `<project>/.git/hooks`** — not HOME-derived, not a cache; the single legitimate
+  project-tree write-confine collision (pre-commit, husky, simple-git-hooks, yorkie, …). A narrow,
+  opt-in `.git/hooks` carve-out for trusted hook installers, or those installers no-op under strict.
+- **`npm_config_cache`** — defaults to `$HOME/.npm` (captured if unset), but commonly set
+  explicitly, so point it into the same cache root rather than relying on the HOME default.
+- **OS tmp root + Apple confstr scratch** — `TMPDIR`/`TMP`/`TEMP` → private scratch; the per-user
+  `/private/var/folders/<uid>/{T,C}` confstr pair (§Darwin).
+
+**Not-reproduced flags (honest):** prisma's live denial (postinstall self-skipped even after wiping
+the engine + lock — cache path source-confirmed + HOME/XDG-derived, so it collapses, but the denial
+wasn't forced); git-hook installers other than pre-commit failed on a hand-built-fixture artifact
+(broken pnpm symlinks from a `cp -R`), not a sandbox finding — zero-dep pre-commit cleanly proved
+the `.git/hooks` collision.
+
+## Conclusion
 
 The write-confine mechanism is sound and bypass-resistant on macOS: symlink-escape, `..`, and
 in-jail hardlink-creation all fail closed because Seatbelt matches the canonical path and gates
 link-creation on the target. The one mandatory correctness rule is **canonicalizing every
 write-allow path** (a symlink-form allow is inert → would deny all writes and break every build
-under a `/tmp`- or `/var`-rooted tree). Package-dir-only is not a viable write set; pkg + private
-tmp + one base-anchor-captured cache root is. The cache-family catalog + the HOME-collapse
-verdict follow below once the sweep completes.
+under a `/tmp`- or `/var`-rooted tree). Package-dir-only is not a viable write set; **pkg + private
+tmp + one base-anchor-captured cache root (HOME + `npm_config_cache` → it) + the DARWIN confstr
+pair** is — the N-tool cache enumeration collapses to one granted root (§Catalog/§Collapse). The
+sole non-cache residual is the git-hook `<project>/.git/hooks` write (an opt-in carve-out for
+trusted hook installers). And node-gyp headers are pre-populatable read-only (strict exit 0 once
+present), so prefetch drives the cache write-need of the dominant native family toward zero.
