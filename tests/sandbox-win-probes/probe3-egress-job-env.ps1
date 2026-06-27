@@ -129,11 +129,13 @@ try {
     & $child getenv NUB_PROBE_SECRET_TOKEN | Write-Host
     $ncCode = $LASTEXITCODE
     Write-Host "NC (inherit env) getenv exit: $ncCode (expect 0 = present)"
-    # main: scrubbed env via ProcessStartInfo (no token)
+    # main: scrubbed env via ProcessStartInfo (no token). Use the .Arguments STRING, not
+    # .ArgumentList -- the latter does not exist in .NET Framework (Windows PowerShell 5.1),
+    # so $psi.ArgumentList was $null and .Add() threw, forcing the spurious INCONCLUSIVE.
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName=$child
     $psi.UseShellExecute=$false
-    [void]$psi.ArgumentList.Add('getenv'); [void]$psi.ArgumentList.Add('NUB_PROBE_SECRET_TOKEN')
+    $psi.Arguments='getenv NUB_PROBE_SECRET_TOKEN'
     $psi.EnvironmentVariables.Clear()
     $psi.EnvironmentVariables['SystemRoot']=$env:SystemRoot
     $psi.EnvironmentVariables['windir']=$env:windir

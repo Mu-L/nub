@@ -24,8 +24,10 @@ jobs:
       - name: ASCII guard (no mojibake -- PS 5.1 mis-decodes non-ASCII)
         shell: powershell
         run: |
+          # Scope to the EXECUTED scripts only -- PS 5.1 mis-parses non-ASCII in .ps1/.cs.
+          # Markdown docs (probe-results.md) may use em-dashes etc. and are not parsed.
           $bad=@()
-          Get-ChildItem -Path tests/sandbox-win-probes -File | ForEach-Object {
+          Get-ChildItem -Path tests/sandbox-win-probes -File -Include *.ps1,*.cs -Recurse | ForEach-Object {
             $bytes=[System.IO.File]::ReadAllBytes($_.FullName)
             for($i=0;$i -lt $bytes.Length;$i++){ if($bytes[$i] -gt 127){ $bad+="$($_.Name) @byte $i"; break } }
           }
