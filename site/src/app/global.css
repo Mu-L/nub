@@ -447,3 +447,12 @@ a[href] {
     display: none !important;
   }
 }
+
+/* Cap the docs/guides prose measure. The body serif (Newsreader) is unusually
+   compact (~0.43em average advance), so fumadocs' default 900px article column
+   runs ~116 characters per line; 720px brings it to a comfortable ~95. Keyed on
+   `#nd-page` (the fumadocs article id) so it overrides the built-in
+   `max-w-[900px]` without touching fumadocs' markup. */
+#nd-page {
+  max-width: 720px;
+}
