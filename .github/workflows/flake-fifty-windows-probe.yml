@@ -23,6 +23,16 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      # Stage the nub-native addon exactly as the real CI Test job does (ci.yml).
+      # transform-core.mjs loads runtime/addons/nub-native.node by path, so a .ts
+      # entrypoint cannot transpile without it. Omitting this is what made the first
+      # probe run crash with nubNative=null in the PARENT (not a concurrency bug).
+      - name: Build + stage nub-native addon
+        shell: bash
+        run: |
+          (cd crates/nub-native && cargo build)
+          mkdir -p runtime/addons
+          cp target/debug/nub_native.dll runtime/addons/nub-native.node
       # Build the test binary once, then run only the target test repeatedly.
       - name: Build the integration test (no-run)
         run: cargo test -p nub-cli --test integration --no-run
