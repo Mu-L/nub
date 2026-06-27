@@ -198,7 +198,7 @@ function HeroPill() {
 function HeroH1({ className = '' }: { className?: string }) {
   return (
     <h1
-      className={`text-balance font-display font-medium leading-[1.05] tracking-tight text-fd-foreground ${className}`}
+      className={`text-balance font-display font-medium leading-[1.12] tracking-tight text-fd-foreground ${className}`}
     >
       The all-in-one JavaScript toolkit that{' '}
       <span className="italic text-ember">augments</span> Node.js instead of trying
