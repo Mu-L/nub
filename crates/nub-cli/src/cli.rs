@@ -4179,24 +4179,15 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
             .map(|p| nub_core::workspace::env::discover_env_files(&p.root))
             .unwrap_or_default()
     };
-    // Pre-expand env vars (same path as the direct file runner). Auto `.env*` is
-    // suppressed when `--env-file` is present; `merge_child_env` applies the gate
-    // and overlays the explicit `--env-file` vars (shell still wins).
-    let auto_env = project
-        .as_ref()
-        .map(|p| nub_core::workspace::env::load_env_files(&p.root))
-        .unwrap_or_default();
-    let env_vars = merge_child_env(
-        auto_env,
-        env_file_present,
-        ENV_FILE_VARS.get().unwrap_or(&HashMap::new()),
-    );
-    // The RAW (unexpanded) values Node's `--env-file` args deliver, so the inject
-    // loop below can skip any var whose value expansion didn't change — leaving it
-    // to Node's `--env-file` to live-reload across restarts (#207). Empty when the
-    // user passed `--env-file`: auto-discovery is suppressed and Node gets no
-    // `--env-file` args, so injection is the only delivery channel — inject all.
+    // Load the `.env*` files ONCE: `raw_env` is the unexpanded merge (the values
+    // Node's `--env-file` args deliver), `auto_env` is the same map expanded. A
+    // single read (rather than `load_env_files` + a second `load_env_files_raw`)
+    // avoids re-parsing every file twice and closes the TOCTOU window where a file
+    // changing between two reads could spuriously inject a plain var.
     let raw_env = if env_file_present {
+        // `--env-file` suppresses auto-discovery: no auto `--env-file` args reach
+        // Node, so injection is the only delivery channel — leave `raw_env` empty
+        // so the inject loop injects every var (see `watch_inject_vars`).
         HashMap::new()
     } else {
         project
@@ -4204,6 +4195,19 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
             .map(|p| nub_core::workspace::env::load_env_files_raw(&p.root))
             .unwrap_or_default()
     };
+    // Pre-expand the auto base to the same map the direct file runner's
+    // `load_env_files` produces. When `--env-file` is present `merge_child_env`
+    // discards this (auto-discovery suppressed), so the empty `raw_env` clone is
+    // fine — only the explicit `--env-file` overlay survives there.
+    let mut auto_env = raw_env.clone();
+    nub_core::workspace::env::expand_env_map(&mut auto_env);
+    // `merge_child_env` applies the `--env-file` suppression gate and overlays the
+    // explicit `--env-file` vars (shell still wins).
+    let env_vars = merge_child_env(
+        auto_env,
+        env_file_present,
+        ENV_FILE_VARS.get().unwrap_or(&HashMap::new()),
+    );
 
     let nub_binary = nub_core::node::spawn::current_nub_binary()?;
     let preload_path = nub_core::node::spawn::find_public_preload(&nub_binary);
