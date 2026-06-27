@@ -205,6 +205,14 @@
   font-size: 0.75rem;
 }
 
+/* Docs prose leading: Encode Sans's tall x-height makes the default 1.75 (28px at
+   16px) read dense — lines crowd together. Open body paragraphs + list items to
+   1.9. Scoped to #nd-page so the blog/homepage prose keep their own rhythm. */
+#nd-page .prose p,
+#nd-page .prose li {
+  line-height: 1.9;
+}
+
 .prose figure.shiki button,
 .blog-prose figure.shiki button {
   color: var(--nub-code-muted);
@@ -498,4 +506,5 @@ a[href] {
 #nd-page {
   max-width: 720px;
 }
+
 

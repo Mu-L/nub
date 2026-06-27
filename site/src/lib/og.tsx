@@ -187,8 +187,11 @@ function Card({ eyebrow, title }: CardProps) {
             display: 'flex',
             fontFamily: 'IBM Plex Mono',
             fontWeight: 400,
-            fontSize: '26px',
-            letterSpacing: '0.04em',
+            // Sized so the mono x-height matches the 48px Encode Sans wordmark's
+            // x-height (Plex Mono 0.516/em vs Encode 0.543/em → ~48px), so the
+            // domain reads at the same optical size as "nub." across the footer.
+            fontSize: '48px',
+            letterSpacing: '0.02em',
             color: MUTED,
           }}
         >
