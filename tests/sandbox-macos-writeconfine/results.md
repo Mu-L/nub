@@ -112,6 +112,16 @@ the confstr pair (`DARWIN_USER_TEMP_DIR` + `DARWIN_USER_CACHE_DIR`) silences it 
 grants them with `--darwin-temp` (jail-run passes it by default); paths queried from `getconf`
 so the `<uid>` hash is correct on any machine.
 
+**Breadth note (surfaced by the smoke suite):** `--darwin-temp` grants the WHOLE
+`/private/var/folders/<uid>/{T,C}` subtree, so anything any of the user's processes drops there
+is writable by the jailed script. That is the per-user OS temp/cache tree (already
+same-user-readable, OS-managed, not a code-execution persistence sink), so the risk is low — but
+it means a test fixture must NOT be placed under the darwin temp dir or its writes look
+"allowed" (the smoke suite bases its fixture under `/tmp` for exactly this reason). A tighter
+alternative if the breadth is ever a concern: grant only a nub-created subdir of the darwin temp
+dir and repoint the toolchain at it — but xcrun's confstr lookup ignores env, so that needs a
+per-build bind/copy and isn't worth it for OS scratch.
+
 ## §Collapse — base-anchor HOME-repoint (the optimization verdict)
 
 **Repointing `HOME` at ONE granted cache root collapses the N per-tool caches to a single grant.**

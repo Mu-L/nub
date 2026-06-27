@@ -15,9 +15,15 @@ build needed — the harness is a Node profile generator + a bash runner, runnab
 
 | File | Role |
 |---|---|
-| `gen-profile.mjs` | SBPL write-confine profile generator. Canonicalizes every write-allow path (the load-bearing correctness rule — see `results.md` §Bypass). `--mode strict` = pkg + tmp only; `--mode relaxed` = + the `--write` cache allowlist. |
+| `gen-profile.mjs` | SBPL write-confine profile generator. Canonicalizes every write-allow path (the load-bearing correctness rule — see `results.md` §Canon). `--mode strict` = pkg + tmp only; `--mode relaxed` = + the `--write` cache allowlist; `--darwin-temp` grants the Apple-toolchain confstr scratch. |
+| `gen-profile.test.mjs` | Generator unit tests (`node gen-profile.test.mjs`) — canonicalization, write-deny floor, device set, strict/relaxed gating, SBPL escaping, darwin-temp. |
 | `jail-run.sh` | Wraps a command in `sandbox-exec -p <profile>` with cwd = the package dir and the npm-lifecycle env (PATH incl. the tree `.bin`, `INIT_CWD`, `npm_config_*`, tmp anchors repointed at the granted scratch). Captures exit code + parsed denied write paths. `--mode control` runs un-sandboxed (the baseline). |
+| `smoke-test.sh` | Self-contained enforcement + bypass smoke suite (no fixture, no network) — the fast CI core. `./smoke-test.sh`. |
 | `results.md` | The findings: bypass/correctness analysis, the holes catalog per cache-family, the minimal cache-allowlist, the base-anchor collapse verdict, and the optimization analysis. |
+
+CI: `.github/workflows/sandbox-macos-writeconfine.yml` runs the unit tests + smoke suite on
+`macos-latest` (mirror of `sandbox-win-probes.yml`); the heavy per-family runs are reproduced on
+demand, not in CI.
 
 ## The experiment (per package / cache-family)
 

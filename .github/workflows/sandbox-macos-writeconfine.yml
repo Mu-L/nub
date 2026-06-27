@@ -1,0 +1,35 @@
+# Validation harness for the macOS Seatbelt write-confine mechanism the build-jail
+# relies on (thread: sandbox). Runs the self-contained core on a real macos-latest
+# runner: the SBPL profile-generator unit tests + the enforcement/bypass smoke tests
+# (write-confine, symlink-escape, .. traversal, in-jail hardlink creation, fail-closed
+# parse, device minimum, canonicalization). No mega-fixture, no network — the heavy
+# per-cache-family runs live in results.md and are reproduced on demand, not in CI.
+# Mirror of .github/workflows/sandbox-win-probes.yml.
+name: sandbox-macos-writeconfine
+on:
+  workflow_dispatch:
+  push:
+    branches: [fs-write-confine]
+    paths:
+      - 'tests/sandbox-macos-writeconfine/**'
+      - '.github/workflows/sandbox-macos-writeconfine.yml'
+jobs:
+  writeconfine:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Environment baseline
+        run: |
+          echo "uname: $(uname -a)"
+          echo "node:  $(node --version)"
+          echo "sandbox-exec: $(command -v sandbox-exec)"
+          echo "DARWIN_USER_TEMP_DIR=$(getconf DARWIN_USER_TEMP_DIR)"
+      - name: Profile-generator unit tests
+        working-directory: tests/sandbox-macos-writeconfine
+        run: node gen-profile.test.mjs
+      - name: Enforcement + bypass smoke tests
+        working-directory: tests/sandbox-macos-writeconfine
+        run: ./smoke-test.sh
