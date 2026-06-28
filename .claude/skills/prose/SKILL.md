@@ -1,21 +1,33 @@
 ---
 name: prose
 description: >-
-  Project-agnostic copywriting / prose / tone style guide for any user-facing
-  text: GitHub issue & PR comments, public-facing documentation, blog &
-  marketing copy, release notes, and chat replies. Invoke (via the Skill tool)
-  BEFORE writing or rewriting any of those — an issue/PR reply, a docs page, a
-  blog or homepage passage, release notes, a description field — and before
-  applying a general copy-style correction (which must be swept everywhere, not
-  fixed in one spot). The through-line: factual, neutral, terse, scannable —
-  state what's true, cut everything that doesn't add a fact, build for a reader
-  who skims. Encodes GitHub maintainer-hygiene tone, sentence/heading mechanics
-  (never open a sentence or heading with inline code), scannability, honesty/
-  restraint, release-notes + marquee-announcement + migration-entry shape,
-  markdown mechanics (never hard-wrap paragraphs), and the universal tone rules.
-  The canonical full guide is PROSE.md at the repo root; this skill is its
-  trigger + index. Project-specific copy rules (brand vocabulary, claim-tracing,
-  product framing) layer ON TOP and live in AGENTS.md, not here.
+  Copywriting / prose / tone style guide for EVERY user-facing or public-facing
+  text artifact. INVOKE THIS SKILL (via the Skill tool) BEFORE you write or edit
+  ANY of the following — and if you are a SUB-AGENT instructed to do any of them,
+  invoke it yourself first; the agent that writes the copy loads this skill, the
+  orchestrator does not load it on a sub-agent's behalf:
+  (1) ANY GitHub-facing text — before running `gh issue comment`, `gh pr comment`,
+  `gh pr create` / any `--body`, `gh issue close --comment`, `gh pr review` /
+  `gh pr comment` review notes, or `gh release create` / `gh release edit
+  --notes`; i.e. any issue reply or comment, PR description/body, issue-close
+  note, code-review comment, or release notes.
+  (2) ANY documentation — creating or editing a file under `site/content/docs/**`
+  or `site/content/blog/**`, `README.md`, `CHANGELOG`, `wiki/**` user-facing
+  pages, or any `.md` / `.mdx` that ships to users.
+  (3) Marketing / homepage / blog copy, a `package.json` or npm `description`,
+  or any other description/summary field.
+  (4) Whenever you APPLY a general copy-style correction — sweep it everywhere it
+  applies, not just the one spot it was raised, and record it in PROSE.md.
+  (5) A substantive prose chat reply.
+  Through-line: factual, neutral, terse, scannable — state what's true, cut
+  everything that doesn't add a fact, build for a reader who skims. Encodes
+  GitHub maintainer-hygiene tone, sentence/heading mechanics (never open a
+  sentence or heading with inline code), scannability, honesty/restraint,
+  release-notes + marquee-announcement + migration-entry shape, markdown
+  mechanics (never hard-wrap paragraphs), and the universal tone rules. Canonical
+  full guide: PROSE.md at the repo root (this skill is its trigger + index).
+  Project-specific copy rules (brand vocabulary, claim-tracing, product framing)
+  live in AGENTS.md, layered on top.
 ---
 
 # prose
@@ -25,6 +37,8 @@ description: >-
 ## When this applies
 
 Any user-facing text: a GitHub issue/PR comment, a docs page (`site/content/docs/**`), blog/marketing/homepage copy, release notes, a package/PR description field, or a chat reply. Also whenever you receive a *general* copy-style correction — apply it everywhere it's relevant, not only at the spot it was raised, and record it in PROSE.md.
+
+**The agent that WRITES the copy loads this skill — not the orchestrator on its behalf.** If you are delegating copy work (a sub-agent that will post an issue/PR comment, write a PR body, close an issue, edit docs, or draft release notes), put "load the prose skill before writing" in that sub-agent's prompt. The orchestrator loads this skill only for copy it writes in its OWN turn (a chat reply, a control-surface edit). Comment / PR-body / docs / release-notes writing is delegable — delegate it, and the writer loads the skill.
 
 ## What's in PROSE.md (read the relevant section before writing)
 

@@ -19,6 +19,11 @@
 # Symlinked so worktree agents can Read/Grep them without a multi-GB copy.
 symlink .repos
 
+# Internal design corpus (plans, command/runtime specs, research). Gitignored so
+# absent in a fresh worktree — symlinked so an impl agent can read the canonical
+# spec a .fray thread points to (e.g. wiki/commands/init.md).
+symlink wiki
+
 # fray orchestration control surface. Symlinked so a worktree-isolated sub-agent
 # can Edit its OWN .fray/<slug>.md thread (write-ownership) instead of the
 # orchestrator re-transcribing it. .fray/ is gitignored so it's absent in a fresh

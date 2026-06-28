@@ -18,6 +18,20 @@ description: >-
 
 ---
 
+## Optical ≠ mathematical — equal numbers routinely look wrong
+
+**The second core insight (codified after shipping a "balanced" button that wasn't):** a layout can be mathematically/geometrically consistent and still look *wrong*, because human perception is not a pixel ruler. Measuring `getBoundingClientRect` and confirming "padding is 14px on both sides" proves nothing about whether it *looks* balanced. NEVER declare a spacing/alignment/centering change correct from measurements alone — change it, screenshot it, and **look**, then adjust by eye until it looks right. The numbers are a starting point, not the verdict.
+
+Recurring sources of "correct but looks wrong" — when you see these, expect to nudge *against* the math:
+
+- **Rounded caps (pills, `rounded-full`) eat edge space.** Text/icon sitting `px-3.5` from a rounded end looks *tighter* than the same padding against a square edge, because the corner curves away from the content. A pill with symmetric padding and a leading icon looks lopsided: the text-adjacent cap needs **more** padding than the icon-adjacent one. (Fix that shipped: `pill` keeps symmetric `px`, each button adds `pr-*`/`pl-*` on its text side — Copy = icon-left so `pr-4`; Open = chevron-right so `pl-4`, the mirror.)
+- **Icon ink ≠ icon box.** A `w-4` icon whose glyph is 14px and visually light (thin strokes, mass off-center — e.g. a two-square copy glyph) leaves dead space inside its box, inflating the *perceived* gap to adjacent text well beyond the measured flex `gap`.
+- **Optical centering ≠ geometric centering.** A glyph can be mathematically centered in its box and ride visually high/low because the font's ink sits asymmetrically in the em (serifs and tall-ascender faces especially). Triangles/play-icons need to shift toward their visual mass, not their bbox center.
+
+The discipline: when something "is correct" but the user (or you) sees it as off, **believe the eye and re-look at the screenshot**, don't re-cite the measurement. Geometry decides occlusion/clipping; the eye decides balance/scale/centering. Both passes, every time.
+
+---
+
 ## The four `evaluate_script` routines
 
 Replace `'SELECTOR'` with a real CSS selector before running.
