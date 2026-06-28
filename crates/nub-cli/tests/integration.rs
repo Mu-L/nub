@@ -4385,11 +4385,24 @@ fn nubx_resolution_spec() {
         r#"{"name":"t","scripts":{"build":"node -e \"console.log('SCRIPT-BUILD')\""}}"#,
     )
     .unwrap();
+    // A real `node_modules/.bin` entry is platform-shaped: a bare shebang file on
+    // POSIX, but on Windows `find_bin` only matches `.cmd`/`.exe`/`.bat`/`.ps1`, so
+    // a Windows bin needs a `.cmd` shim alongside the JS (exactly what npm/pnpm
+    // write, and what the nubx-test fixture's `hello`+`hello.cmd` pair does). The
+    // `.cmd` runs `node <bare-file> %*` so args forward; the bare file's shebang is
+    // stripped by Node. Without the shim, the Bin tier misses on Windows and falls
+    // through to the gated registry — the windows-latest-only failure this fixes.
     let bin_dir = dir.join("node_modules/.bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     std::fs::write(
         bin_dir.join("mytool"),
         "#!/usr/bin/env node\nconsole.log('BIN '+JSON.stringify(process.argv.slice(2)));\n",
+    )
+    .unwrap();
+    #[cfg(windows)]
+    std::fs::write(
+        bin_dir.join("mytool.cmd"),
+        "@ECHO off\nnode \"%~dp0\\mytool\" %*\n",
     )
     .unwrap();
     #[cfg(unix)]
