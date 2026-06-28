@@ -10,10 +10,18 @@
 ---------------------------------------------------------------------------- */
 
 @theme {
-  --font-display: var(--font-newsreader), ui-serif, Georgia, serif;
-  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
-  --font-sans: var(--font-newsreader), ui-serif, Georgia, serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, monospace;
+  /* Site face: Encode Sans across body AND headings, replacing the Newsreader
+     serif (2026-06-27). Newsreader's small x-height made lowercase read too
+     small at a given point size; Encode Sans's larger x-height reads sturdier
+     and sits at the same optical size as the mono. This @theme block is the SOLE
+     switch point — everything resolves through these three vars. TO REVERT to
+     Newsreader, set all three back to
+     `var(--font-newsreader), ui-serif, Georgia, serif` (it stays registered in
+     layout.tsx for exactly that). */
+  --font-display: var(--font-encode), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-encode), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-encode), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 
   /* color pops — used sparingly against the ink ground. These are the DARK-mode
      values (bright, tuned to read against the near-black ground). Light mode
@@ -189,6 +197,22 @@
   color: var(--nub-code-foreground);
 }
 
+/* Docs fenced code: nudge 13px → 12.5px so an 80-column line (the enforced lint
+   budget, scripts/lint-code-line-length.mjs) fits the 720px column even on
+   ~1280px laptops, where the layout narrows the article before the 720 cap
+   binds. Scoped to #nd-page (docs/guides); the homepage/blog panels keep size. */
+#nd-page figure.shiki pre {
+  font-size: 0.75rem;
+}
+
+/* Docs prose leading: Encode Sans's tall x-height makes the default 1.75 (28px at
+   16px) read dense — lines crowd together. Open body paragraphs + list items to
+   1.9. Scoped to #nd-page so the blog/homepage prose keep their own rhythm. */
+#nd-page .prose p,
+#nd-page .prose li {
+  line-height: 1.9;
+}
+
 .prose figure.shiki button,
 .blog-prose figure.shiki button {
   color: var(--nub-code-muted);
@@ -197,6 +221,32 @@
 .prose figure.shiki button:hover,
 .blog-prose figure.shiki button:hover {
   color: var(--nub-code-foreground);
+}
+
+/* ```diff fences. The `nub:diff` transformer strips the leading +/- marker and
+   tags each changed line `data-diff="add|remove"`; here we paint a subtle,
+   GitHub-style line highlight — a light green/red wash plus a solid left accent
+   bar — and neutralize shiki's bright green/red diff text to the normal code
+   foreground so the BACKGROUND (not a marker column or loud text) carries the
+   add/remove signal. The line is a flex child that stretches to the code's full
+   width, so the wash is full-bleed across the scroll extent. */
+.prose figure.shiki .line[data-diff],
+.blog-prose figure.shiki .line[data-diff] {
+  color: var(--nub-code-foreground);
+}
+.prose figure.shiki .line[data-diff] span,
+.blog-prose figure.shiki .line[data-diff] span {
+  color: var(--nub-code-foreground);
+}
+.prose figure.shiki .line[data-diff='add'],
+.blog-prose figure.shiki .line[data-diff='add'] {
+  background: rgba(63, 185, 110, 0.14);
+  box-shadow: inset 2px 0 0 rgba(63, 185, 110, 0.65);
+}
+.prose figure.shiki .line[data-diff='remove'],
+.blog-prose figure.shiki .line[data-diff='remove'] {
+  background: rgba(240, 98, 98, 0.13);
+  box-shadow: inset 2px 0 0 rgba(240, 98, 98, 0.6);
 }
 
 html {
@@ -345,21 +395,25 @@ pre .line[data-output] span {
   color: var(--nub-code-muted) !important;
 }
 
-/* IBM Plex Mono against the Newsreader serif body. Prose is dominated by
-   lowercase, so the perceived size of an inline-code token is governed by its
-   x-height, not its cap-height — and Plex Mono's x-height runs tall. At the old
-   0.9em the mono x-height measured 7.43px against the serif's 7.05px (ratio
-   1.054), so every code token read visibly *larger* and heavier than the words
-   around it. 0.84em brings the mono x-height to 6.94px (ratio 0.984) — a hair
-   below the serif lowercase, which optically balances the token against Plex
-   Mono's heavier stroke so it sits *in* the sentence rather than bulging out of
-   it. The slight negative tracking further trims the chunky feel. em-relative
-   so it tracks the surrounding size in headings, tables, and body alike. Code
-   blocks (`pre code`) are excluded and unchanged. */
+/* Geist Mono against the Encode Sans body. X-height parity with Encode Sans lands
+   near 1.0em, but even at parity the mono reads a touch large in a sentence, so we
+   set it a tick UNDER (0.95em ≈ x-height ratio 0.93) so the token sits *in* the
+   line rather than on top of it. Border removed — the soft background tint alone
+   marks a token as code without boxing it in. em-relative so it tracks the
+   surrounding size in headings, tables, and body. Code blocks (`pre code`) are
+   excluded and keep their own sizing. */
 :not(pre) > code {
-  font-size: 0.84em;
-  letter-spacing: -0.01em;
+  font-size: 0.95em;
+  letter-spacing: -0.005em;
   font-variant-ligatures: none;
+  border: none;
+}
+
+/* The bg-only chip needs a visible step above the page to register. fumadocs'
+   --color-fd-muted (#1b1916) sits barely above the #100f0d dark ground, so lift
+   the inline-code tint a notch in dark mode. Light mode's tint already reads. */
+.dark :not(pre) > code {
+  background-color: #2a2620;
 }
 
 /* Constrain the home navbar's row to the content column so the search/theme/
@@ -383,6 +437,16 @@ pre .line[data-output] span {
   #nd-docs-layout {
     --fd-sidebar-width: 310px;
   }
+}
+
+/* Nav labels are Encode Sans at 14px, where its normal width reads a touch thin.
+   The variable face exposes the `wdth` axis (see the Encode Sans load in
+   layout.tsx), so a subtle font-stretch widens the letterforms via the real
+   designed axis — sturdier, no distortion, no weight bump. Sidebar-only; the rest
+   of the site keeps normal width. (Command chips are Geist Mono — no width axis —
+   so they're unaffected.) */
+#nd-sidebar a {
+  font-stretch: 110%;
 }
 
 /* Prev/next pager — the fumadocs FooterItem link is text-sm (14px) and the page-name
@@ -456,3 +520,5 @@ a[href] {
 #nd-page {
   max-width: 720px;
 }
+
+

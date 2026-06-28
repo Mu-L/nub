@@ -1,21 +1,18 @@
 import './global.css';
 import { RootProvider } from 'fumadocs-ui/provider/next';
-import { Fraunces, Newsreader, IBM_Plex_Mono, Caveat } from 'next/font/google';
+import {
+  Newsreader,
+  Geist_Mono,
+  Caveat,
+  Encode_Sans,
+} from 'next/font/google';
 import type { ReactNode } from 'react';
 import type { Metadata, Viewport } from 'next';
 
-const fraunces = Fraunces({
-  subsets: ['latin'],
-  variable: '--font-fraunces',
-  display: 'swap',
-  // `opsz` drives the optical-size response used by the display headings; the
-  // `SOFT`/`WONK` axes were configured but never read by any class or
-  // font-variation-settings rule, so they only inflated the variable-font
-  // download (render-blocking + LCP). Dropping them is a no-visual-change win.
-  axes: ['opsz'],
-  preload: true,
-});
-
+// Newsreader — the PREVIOUS site serif, kept registered ONLY so reverting the
+// Encode-Sans switch is a CSS-only change (point the @theme font vars back at
+// --font-newsreader). It is referenced by nothing in the rendered CSS, so the
+// browser never actually downloads it — a zero-cost revert hook, not a FOUC tax.
 const newsreader = Newsreader({
   subsets: ['latin'],
   variable: '--font-newsreader',
@@ -23,11 +20,38 @@ const newsreader = Newsreader({
   style: ['normal', 'italic'],
 });
 
-const plexMono = IBM_Plex_Mono({
+// Geist Mono — the site's monospace, paired with Encode Sans (switched from IBM
+// Plex Mono 2026-06-27). Plex Mono's wide, heavy glyphs read markedly LARGER than
+// Encode Sans at a matched x-height, so inline code and the docs TOC chips looked
+// oversized next to the prose. Geist Mono is narrower and lighter, so it sits in
+// scale with the humanist sans.
+const geistMono = Geist_Mono({
   subsets: ['latin'],
-  variable: '--font-plex-mono',
+  variable: '--font-geist-mono',
   display: 'swap',
   weight: ['400', '500', '600'],
+});
+
+// Encode Sans — the site's primary text + display face, body and headings alike
+// (switched site-wide from the Newsreader serif, 2026-06-27). Newsreader's small
+// x-height made lowercase read too small; Encode Sans's larger x-height matches
+// the mono and reads at a sturdier size. `preload` because it paints the first,
+// above-the-fold text — preloading it (and NOT preheating any unused face) is the
+// core FOUC mitigation. The metric-matched fallback next/font generates keeps the
+// pre-swap layout near-identical, so the swap is barely perceptible.
+//
+// Loaded as the VARIABLE face (no pinned `weight`) with the `wdth` axis exposed,
+// so `font-stretch` is live — the docs sidebar dials a subtle widening (Encode
+// Sans's normal width reads a touch thin at 14px nav size). A single variable
+// face typically costs no more than the four static weights it replaces, and
+// default rendering (no font-stretch) is unchanged width, so only the sidebar
+// shifts; everything else paints identically.
+const encodeSans = Encode_Sans({
+  subsets: ['latin'],
+  variable: '--font-encode',
+  display: 'swap',
+  axes: ['wdth'],
+  preload: true,
 });
 
 // Handwriting face — used ONLY by the optional "Leave a Star" nudge near the
@@ -131,7 +155,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${newsreader.variable} ${plexMono.variable} ${caveat.variable}`}
+      className={`${newsreader.variable} ${geistMono.variable} ${caveat.variable} ${encodeSans.variable}`}
       suppressHydrationWarning
     >
       <body className="flex min-h-screen flex-col antialiased">

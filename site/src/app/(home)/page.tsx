@@ -47,7 +47,10 @@ function Container({ children, className = '' }: { children: ReactNode; classNam
 }
 
 function Mono({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-[0.84em] text-fd-foreground">{children}</span>;
+  // 0.95em — Geist Mono set a tick under x-height parity with Encode Sans so the
+  // token reads in-scale with the sentence rather than a hair large (same value as
+  // inline `code` in global.css).
+  return <span className="font-mono text-[0.95em] tracking-[-0.005em] text-fd-foreground">{children}</span>;
 }
 
 /* An external link to upstream docs (Node, oxc). Neutral underline that brightens
@@ -173,11 +176,18 @@ function HeroPill() {
       href="/blog/introducing-nub"
       className="group inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/50 py-1 pl-1 pr-3 text-sm leading-none text-fd-muted-foreground hover:border-ember/50"
     >
-      <span className="rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
+      {/* Per-element optical nudges to a common center: with the pill's leading-none
+          line box + Encode Sans metrics, the mono caps badge rides ~1.9px HIGH while
+          the sans text + arrow sit ~1.5–2px LOW. Measured against the pill center and
+          corrected so all three share one optical baseline. */}
+      <span className="translate-y-[1.9px] rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
         New
       </span>
-      <span className="translate-y-px text-fd-foreground">Introducing Nub</span>
-      <span aria-hidden className="translate-y-px text-fd-muted-foreground group-hover:translate-x-0.5">
+      <span className="-translate-y-[1.5px] text-fd-foreground">Introducing Nub</span>
+      <span
+        aria-hidden
+        className="-translate-y-[2px] text-fd-muted-foreground transition-transform group-hover:translate-x-0.5"
+      >
         →
       </span>
     </Link>
@@ -187,7 +197,7 @@ function HeroPill() {
 function HeroH1({ className = '' }: { className?: string }) {
   return (
     <h1
-      className={`text-balance font-display font-medium leading-[1.05] tracking-tight text-fd-foreground ${className}`}
+      className={`text-balance font-display font-medium leading-[1.2] tracking-tight text-fd-foreground ${className}`}
     >
       The all-in-one JavaScript toolkit that{' '}
       <span className="italic text-ember">augments</span> Node.js instead of trying
@@ -199,7 +209,7 @@ function HeroH1({ className = '' }: { className?: string }) {
 function HeroSub({ className = '' }: { className?: string }) {
   return (
     <p
-      className={`text-balance text-lg leading-relaxed text-fd-muted-foreground md:text-xl ${className}`}
+      className={`text-balance text-lg leading-[1.75] text-fd-muted-foreground md:text-xl ${className}`}
     >
       A TypeScript-first toolchain for Node.js. Run TypeScript files,{' '}
       <Mono>package.json</Mono>{' '}scripts, and local CLIs on the{' '}
@@ -233,7 +243,12 @@ async function Hero() {
         <div className="grid w-full items-center gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(640px,1fr)] xl:gap-12">
           <div className="min-w-0">
             <HeroPill />
-            <HeroH1 className="mt-6 text-4xl md:text-5xl" />
+            {/* Fluid in the 2-col zone: the xl grid squeezes the heading column to
+                ~528px at the 1280 boundary, where a flat 48px wraps to 4 lines.
+                clamp() scales the type with the viewport so it stays ≤3 lines through
+                the squeeze, then caps at 48px once there's room. Single-column (<xl)
+                keeps the flat 4xl/5xl — the heading is full-width there. */}
+            <HeroH1 className="mt-6 text-4xl md:text-5xl xl:text-[clamp(2.3rem,3vw,3rem)]" />
             <HeroSub className="mt-6" />
             <div className="mt-9">
               <InstallTabs />

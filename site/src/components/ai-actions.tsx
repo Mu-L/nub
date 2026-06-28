@@ -126,9 +126,9 @@ function CursorIcon() {
 const pill =
   'inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/60 px-3.5 py-1.5 text-[0.8rem] text-fd-foreground backdrop-blur transition hover:border-ember/60 disabled:opacity-60';
 
-/* Newsreader's ink mass rides high in its line box (the eye discounts descender
-   space), so serif labels need a ~1px optical down-nudge inside the pills. */
-const label = 'translate-y-[1px]';
+/* Encode Sans centers its ink in the line box, so labels need no optical
+   nudge (the Newsreader serif rode high and wanted a ~1px down-nudge here). */
+const label = '';
 
 function CopyMarkdownButton({ markdownUrl }: { markdownUrl: string }) {
   // Warm the cache on mount so the first click is already on the fast path.
@@ -152,7 +152,7 @@ function CopyMarkdownButton({ markdownUrl }: { markdownUrl: string }) {
       onClick={onClick}
       onPointerEnter={() => prefetchMarkdown(markdownUrl)}
       onFocus={() => prefetchMarkdown(markdownUrl)}
-      className={`group ${pill}`}
+      className={`group ${pill} pr-4`}
     >
       <span className="inline-flex h-4 w-4 items-center justify-center text-fd-muted-foreground transition group-hover:text-ember">
         {checked ? <CheckIcon /> : <CopyIcon />}
@@ -249,7 +249,7 @@ function ViewOptions({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className={`${pill} ${open ? 'border-ember/60' : ''}`}
+        className={`${pill} pl-4 ${open ? 'border-ember/60' : ''}`}
       >
         <span className={label}>Open</span>
         <span className="text-fd-muted-foreground">
