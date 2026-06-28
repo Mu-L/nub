@@ -4198,7 +4198,11 @@ fn nubx_registry_fallthrough_fails_closed_in_ci() {
         .output()
         .expect("spawn nubx");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(out.status.code(), Some(0), "must fail closed in CI: {stderr}");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "must fail closed in CI: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("ci"),
         "CI fallthrough must name CI: {stderr}"
@@ -4227,6 +4231,15 @@ fn nubx_yes_flag_bypasses_the_consent_gate() {
     assert!(
         !stderr.contains("refusing to download"),
         "-y must bypass the gate (no refusal message): {stderr}"
+    );
+    // A FAILED fetch must NOT record consent — otherwise a one-time `y` on a
+    // not-yet-published spec becomes a standing silent run-grant. The ledger
+    // (under the isolated XDG_CACHE_HOME) must hold no entry for the dead spec.
+    let ledger = dir.join("xdg-cache/nub/dlx/consent.json");
+    let recorded = std::fs::read_to_string(&ledger).unwrap_or_default();
+    assert!(
+        !recorded.contains("definitely-not-installed-xyzzy"),
+        "a failed fetch must not record consent: {recorded}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

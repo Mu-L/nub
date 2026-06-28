@@ -4449,15 +4449,16 @@ fn run_exec_with_dlx(
             crate::nubx_consent::Decision::Proceed { record } => record,
             crate::nubx_consent::Decision::Refused(code) => return Ok(code),
         };
-        let result = crate::pm_engine::run_dlx_for_nubx(bin, args, &flags);
-        // Record consent only after a granted fetch we actually ran — the ledger
-        // reflects tools the user fetched, never a refused or pre-empted one. (On
-        // a tool's own non-zero exit the engine may `process::exit`, bypassing
-        // this; that only costs a re-prompt next time, which is the safe default.)
-        if record && result.is_ok() {
+        let (code, fetched_ok) = crate::pm_engine::run_dlx_for_nubx(bin, args, &flags)?;
+        // Record consent ONLY after a confirmed successful fetch+run (`fetched_ok`),
+        // never on a 404 / failed install — otherwise a one-time `y` on a
+        // not-yet-published spec would become a standing silent run-grant for a name
+        // an attacker could later publish. A tool that ran and exited non-zero still
+        // counts as fetched (consent stands); only a fetch/install failure does not.
+        if record && fetched_ok {
             crate::nubx_consent::record(&specs);
         }
-        return result;
+        return Ok(code);
     }
 
     // Plain `nub exec`. Per exec.md (decision 2026-05-26): `nub exec` does NOT
@@ -9450,8 +9451,8 @@ mod tests {
 
     #[test]
     fn nubx_parity_noops_parse_without_consuming_the_bin() {
-        // `-y`/`--yes` (no-op) and `--ignore-existing` (warn+ignore) must not be
-        // mistaken for the bin positional.
+        // `-y`/`--yes` (the consent escape hatch) and `--ignore-existing`
+        // (warn+ignore) must not be mistaken for the bin positional.
         let Command::Nubx {
             yes,
             ignore_existing,

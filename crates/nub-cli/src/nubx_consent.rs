@@ -57,28 +57,30 @@ pub enum Decision {
 /// token) — the same thing handed to the engine, so the gate and the fetch agree
 /// on identity. `yes` is `nubx -y`.
 ///
-/// A ledger HIT (recorded + within TTL for a floating spec) proceeds with no
-/// prompt — consent was given when the spec was first recorded. A MISS routes by
-/// context: `-y` → proceed (and record); CI / non-TTY → refuse; TTY → prompt.
+/// The order is load-bearing for the locked contract. `-y` is explicit consent
+/// and proceeds in ANY context. Otherwise **CI and non-TTY fail closed
+/// unconditionally** — the ledger is NOT consulted there, so a restored/shared
+/// `consent.json` can never let a fetch run silently where no human can confirm.
+/// The ledger's "skip the prompt" hit applies ONLY in an interactive terminal,
+/// where a human granted that consent and is present to have aborted it.
 pub fn gate(specs: &[String], yes: bool) -> Decision {
     if specs.is_empty() {
         // Defensive: no identity to gate on. Refuse rather than fetch blind.
         eprintln!("nubx: cannot determine what to fetch.");
         return Decision::Refused(1);
     }
-    let key = ledger_key(specs);
-    let pinned = specs.iter().all(|s| is_pinned_spec(s));
 
-    if ledger_has_valid(&key, pinned) {
-        // Already consented (and still fresh, for a floating spec). Run, no prompt.
-        return Decision::Proceed { record: false };
-    }
-
-    // A ledger miss: this is new (or newly-stale) code about to run.
+    // `-y`: explicit up-front consent — proceed in CI, non-TTY, or a terminal.
+    // Record only a spec we don't already hold a live grant for (don't churn it).
     if yes {
-        return Decision::Proceed { record: true };
+        return Decision::Proceed {
+            record: !has_live_consent(specs),
+        };
     }
 
+    // No `-y`. CI → always fail closed (a human can't intervene; the blast radius
+    // is largest). The ledger is deliberately not checked — "CI → fail closed" is
+    // unconditional.
     if is_ci() {
         eprintln!(
             "nubx: refusing to download {} in CI.\n\
@@ -88,6 +90,7 @@ pub fn gate(specs: &[String], yes: bool) -> Decision {
         return Decision::Refused(1);
     }
 
+    // No terminal to confirm at → fail closed, ledger not checked.
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         eprintln!(
             "nubx: refusing to download {} without a terminal to confirm at.\n\
@@ -97,6 +100,11 @@ pub fn gate(specs: &[String], yes: bool) -> Decision {
         return Decision::Refused(1);
     }
 
+    // Interactive terminal: a previously-recorded consent (fresh, for a floating
+    // spec) skips the prompt; a new or newly-stale spec prompts.
+    if has_live_consent(specs) {
+        return Decision::Proceed { record: false };
+    }
     if prompt_yes(specs) {
         Decision::Proceed { record: true }
     } else {
@@ -105,10 +113,19 @@ pub fn gate(specs: &[String], yes: bool) -> Decision {
     }
 }
 
+/// Whether the ledger holds a still-valid consent for this spec set (pinned =
+/// forever, floating = within TTL).
+fn has_live_consent(specs: &[String]) -> bool {
+    let pinned = specs.iter().all(|s| is_pinned_spec(s));
+    ledger_has_valid(&ledger_key(specs), pinned)
+}
+
 /// Record a granted consent. Called by the caller *after* a `Proceed { record:
-/// true }` run, so the ledger only ever reflects tools we actually fetched. A
-/// write failure is non-fatal (the worst case is a re-prompt next time) — never
-/// block a successful run on the ledger.
+/// true }` AND a confirmed successful fetch+run, so the ledger only ever reflects
+/// tools that actually resolved and ran — never a 404 / failed install, whose
+/// "consent" would otherwise become a standing grant for a name with no bytes yet
+/// (an attacker could later publish it). A write failure is non-fatal (worst case
+/// is a re-prompt next time) — never block a successful run on the ledger.
 pub fn record(specs: &[String]) {
     let key = ledger_key(specs);
     let pinned = specs.iter().all(|s| is_pinned_spec(s));
