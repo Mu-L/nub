@@ -4359,6 +4359,169 @@ fn nubx_file_wins_over_script() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The nubx flag/argv resolution spec (`wiki/research/nubx-flag-env-resolution.md`
+/// §3 edge-case table). nubx is a pure pass-through runner: it locates the SUBJECT
+/// token, decides its TIER by precedence (file > script > bin > registry), then
+/// hands the RAW remaining argv to that tier's runner. This drives the table as
+/// real argv0 invocations and asserts each lands in the right tier with the right
+/// raw argv — the file tier (the headline #224 fix), the `-r`/`-p` collision
+/// rulings, and the SCRIPT re-dispatch to `nub run`. Registry/consent rows live in
+/// their own focused tests above.
+#[test]
+fn nubx_resolution_spec() {
+    let (nubx, dir) = nubx_alias();
+    // `app.js` echoes the argv + execArgv Node actually received, so a delegated
+    // file invocation is verified by what reached Node — not just exit codes.
+    std::fs::write(
+        dir.join("app.js"),
+        "console.log('ARGV='+JSON.stringify(process.argv.slice(2))+\
+         ' EXEC='+JSON.stringify(process.execArgv));\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub/x.js"), "console.log('SUBX');\n").unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name":"t","scripts":{"build":"node -e \"console.log('SCRIPT-BUILD')\""}}"#,
+    )
+    .unwrap();
+    let bin_dir = dir.join("node_modules/.bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::write(
+        bin_dir.join("mytool"),
+        "#!/usr/bin/env node\nconsole.log('BIN '+JSON.stringify(process.argv.slice(2)));\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            bin_dir.join("mytool"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+
+    let nx = |args: &[&str]| -> (String, String, i32) {
+        let out = Command::new(&nubx)
+            .args(args)
+            .current_dir(&dir)
+            .env("CI", "1") // pin the non-TTY registry branch deterministically
+            .env("XDG_CACHE_HOME", dir.join("xdg-cache"))
+            .output()
+            .expect("spawn nubx");
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            out.status.code().unwrap_or(-1),
+        )
+    };
+
+    // ── FILE tier — a leading Node flag, eval, stdin, `--`, and `--node` compat
+    // all reach Node; the raw argv (minus nub's own `--node`) is preserved. This is
+    // the half #224 broke: clap used to reject any Node flag before the file.
+    let (o, e, _) = nx(&["--inspect-port=0", "--enable-source-maps", "app.js"]);
+    assert!(
+        o.contains(r#"EXEC=["--inspect-port=0","--enable-source-maps"]"#),
+        "leading Node flags must reach Node verbatim: {o}{e}"
+    );
+    let (o, _, _) = nx(&["--import", "./app.js", "app.js", "tail"]); // value-flag skips its value
+    assert!(
+        o.contains(r#"ARGV=["tail"]"#),
+        "a Node value-flag consumes its value; the next bare token is the subject: {o}"
+    );
+    assert!(
+        nx(&["-e", "console.log(2+2)"]).0.contains('4'),
+        "`-e` eval is the Node tier"
+    );
+    // `--` is PRESERVED into Node's argv (not stripped) — node `app.js -- --foo`
+    // keeps `--` as a program arg.
+    assert!(
+        nx(&["app.js", "--", "--foo"])
+            .0
+            .contains(r#"ARGV=["--","--foo"]"#),
+        "the first `--` after a file must reach Node, not be stripped"
+    );
+    assert!(
+        nx(&["--node", "app.js"]).0.contains(r#"EXEC=[]"#),
+        "`--node` is stripped + forces compat: no augmentation flags in execArgv"
+    );
+    // The review's P0 re-confirm: a relative / bare path that EXISTS resolves as a
+    // FILE, never falling through to the registry.
+    assert!(
+        nx(&["./app.js"]).0.contains("ARGV="),
+        "`./app.js` runs as a file"
+    );
+    assert!(
+        nx(&["sub/x.js"]).0.contains("SUBX"),
+        "a bare relative path that exists runs as a file"
+    );
+    assert!(
+        nx(&["app.js"]).0.contains("ARGV="),
+        "a bare filename that exists runs as a file"
+    );
+
+    // ── SCRIPT tier — a bare script re-dispatches to `nub run`, gaining its full
+    // flag surface. A run-only flag (`--if-present`) now works; a Node flag on a
+    // script is a clean clap error, never a silent registry fetch.
+    assert!(
+        nx(&["build"]).0.contains("SCRIPT-BUILD"),
+        "a bare script runs via `nub run`"
+    );
+    assert!(
+        nx(&["--if-present", "build"]).0.contains("SCRIPT-BUILD"),
+        "`--if-present` reaches `nub run` (the script tier's full grammar)"
+    );
+    let (_, e, code) = nx(&["--inspect", "build"]);
+    assert!(
+        code != 0 && e.contains("--inspect") && !e.to_lowercase().contains("download"),
+        "a Node flag on a script is a clean error from `nub run`, not a registry attempt: {e}"
+    );
+
+    // ── BIN tier — flags after the bin reach the bin; `--` is dropped once.
+    assert!(
+        nx(&["mytool", "a1"]).0.contains(r#"BIN ["a1"]"#),
+        "a local bin runs with its args"
+    );
+    assert!(
+        nx(&["mytool", "--help"]).0.contains(r#"BIN ["--help"]"#),
+        "a flag after the bin reaches it"
+    );
+    assert!(
+        nx(&["mytool", "--", "--fix"])
+            .0
+            .contains(r#"BIN ["--fix"]"#),
+        "the bin's first `--` is dropped"
+    );
+
+    // ── Collisions (decided): `-p` = `--package` (registry force, NOT Node print);
+    // `-r` = `--recursive` (workspace, NOT Node `--require`).
+    let (_, e, _) = nx(&["-p", "cowsay", "mytool"]);
+    assert!(
+        e.to_lowercase().contains("download") || e.to_lowercase().contains("ci"),
+        "`-p` forces the registry tier even with a local `mytool`: {e}"
+    );
+    let (_, e, code) = nx(&["-p", "cowsay", "--no-install", "mytool"]);
+    assert!(
+        code == 127 && e.contains("--no-install"),
+        "`-p`+`--no-install` errors 127, no fetch: {e}"
+    );
+    let (_, e, code) = nx(&["-r", "build"]);
+    assert!(
+        code != 0 && e.to_lowercase().contains("workspace"),
+        "`-r` is `--recursive` (workspace run), never Node's `--require`: {e}"
+    );
+
+    // ── No subject at all → the missing-name bail (registry consent never fires).
+    let (_, e, code) = nx(&["--node"]);
+    assert!(
+        code != 0 && e.contains("missing binary name"),
+        "no subject bails: {e}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── Section 7: pnpm workspace behavior tests ────────────────────
 
 /// --bail: when a workspace package fails, stop execution.

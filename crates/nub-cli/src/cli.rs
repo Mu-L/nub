@@ -1620,6 +1620,7 @@ fn value_consuming_flags(subcommand: &str) -> &'static [&'static str] {
             "--workspace",
             "--resume-from",
             "--script-shell",
+            "--reporter",
             "--cwd",
             "--workspace-concurrency",
         ],
@@ -2151,22 +2152,24 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
 }
 
 fn run_nubx() -> Result<i32> {
-    // nubx <bin> [args...] routes through the dedicated `Nubx` clap grammar
-    // (its own workspace + npx flag surface; NOT `nub exec`). The three-position
-    // rule is identical: a flag before the bin (`nubx --node eslint`, `nubx -p
-    // left-pad pad`) is nubx's; a flag after the bin (`nubx eslint --node`,
-    // `nubx eslint --help`) reaches the bin verbatim.
+    // nubx is a PURE PASS-THROUGH runner: locate the SUBJECT token, decide its TIER
+    // by precedence (file > script > bin > registry), then hand the RAW remaining
+    // argv to that tier's existing runner unchanged. Subject location is asymmetric
+    // — the open-ended Node/FILE tier scans a baked Node arity table while the
+    // closed nub-owned tiers resolve through clap (the `Nubx` grammar, or a
+    // re-dispatch to `nub run`). The classifier is `crate::nubx_resolve::classify`;
+    // this function only maps each route to its runner. See that module for why the
+    // two mechanisms are needed (clap fails-closed on a future Node flag).
     let args: Vec<String> = env::args().skip(1).collect();
 
     // `--help`/`--version` are nubx's own flags only when they appear BEFORE the
-    // bin positional (the three-position rule: a flag after the bin reaches the
-    // bin verbatim — `nubx eslint --help` is eslint's help). When no bin name has
-    // been seen yet and one of these leading flags appears, honor it like
-    // `nub --help`/`nub --version` instead of bailing on "missing binary name"
-    // (the bail fired before this check, so `nubx --help`/`--version` errored).
+    // subject (the three-position rule: a flag after the subject reaches the
+    // resolved runner verbatim — `nubx eslint --help` is eslint's help). When no
+    // subject has been seen yet and one of these leading flags appears, honor it
+    // like `nub --help`/`nub --version`.
     for arg in &args {
         if arg == "--" || !arg.starts_with('-') {
-            break; // bin positional (or its `--` separator) — stop scanning
+            break; // subject (or its `--` separator) — stop scanning
         }
         match arg.as_str() {
             "--help" | "-h" => {
@@ -2181,22 +2184,49 @@ fn run_nubx() -> Result<i32> {
         }
     }
 
-    if args.is_empty() || args.iter().all(|a| a.starts_with('-') && a != "--") {
-        // No bin name at all (empty, or only leading flags like `nubx --node`).
-        bail!(
-            "nubx: missing binary name\nUsage: nubx [-p <spec>] [--node] [--no-install] <bin> [args...]"
-        );
+    let cwd = env::current_dir().ok();
+    // `is_script` is injected so the classifier stays filesystem-light: it reports
+    // whether a bare subject is a package.json script (the script tier, which beats
+    // bins and re-dispatches to `nub run` for the full run-flag surface).
+    let is_script = |token: &str| {
+        cwd.as_deref()
+            .and_then(nub_core::workspace::detect::detect_project)
+            .and_then(|p| nub_core::workspace::scripts::resolve_script(&p.manifest, token))
+            .is_some()
+    };
+
+    match crate::nubx_resolve::classify(&args, cwd.as_deref(), &is_script) {
+        // FILE/Node tier — a file subject, an `-e`/`--eval`/`--print` eval, or stdin.
+        // Delegate the raw argv (nub's `--node` already stripped) to the file runner;
+        // Node binds flags-vs-entry. This is the headline #224 fix: a leading Node
+        // flag (`--inspect`, `--import x`, `-e`) now reaches Node instead of
+        // clap-erroring.
+        crate::nubx_resolve::NubxRoute::File { compat, argv } => {
+            run_file_with_compat(&argv, compat)
+        }
+        // SCRIPT tier — re-dispatch the original argv through `nub run`, whose full
+        // grammar (`--if-present`, `--filter`, `--reporter`, …) the `Nubx` grammar
+        // lacks. The subject was confirmed a script, so `run` resolves it directly.
+        crate::nubx_resolve::NubxRoute::Script => {
+            let mut rest = vec!["run".to_string()];
+            rest.extend(args);
+            dispatch_subcommand(rest)
+        }
+        // BIN / REGISTRY / workspace-bin tier, a `-p`-forced fetch, or no subject —
+        // the existing `Nubx` clap dispatch. Arm the DLX fallback (a local miss
+        // fetches-and-runs, gated) exactly as before.
+        crate::nubx_resolve::NubxRoute::Owned => {
+            if args.is_empty() || args.iter().all(|a| a.starts_with('-') && a != "--") {
+                bail!(
+                    "nubx: missing binary name\nUsage: nubx [-p <spec>] [--node] [--no-install] <bin> [args...]"
+                );
+            }
+            NUBX_DLX_FALLBACK.store(true, Ordering::Relaxed);
+            let mut rest = vec!["nubx".to_string()];
+            rest.extend(args);
+            dispatch_subcommand(rest)
+        }
     }
-
-    // `nubx` is nub's `npx`/`pnpm dlx`: a locally-installed bin runs locally (no
-    // network), and a bin absent from `node_modules/.bin` transparently falls
-    // back to DLX (fetch into a throwaway project + run). Arm that fallback for
-    // the exec path below — `nub exec` itself stays no-network.
-    NUBX_DLX_FALLBACK.store(true, Ordering::Relaxed);
-
-    let mut rest = vec!["nubx".to_string()];
-    rest.extend(args);
-    dispatch_subcommand(rest)
 }
 
 /// The local tiers of `nubx`'s unified resolution chain — FILE then SCRIPT —
@@ -2215,7 +2245,7 @@ fn nubx_resolve_local(token: &str, compat_mode: bool, args: &[String]) -> Option
     // `./cli` or a bare `index.ts` when it is a real file — mirroring `mux`. A
     // path-shaped token is a file *intent* even when missing: let the file runner
     // emit the not-found rather than misread `./foo` as a script/bin/package.
-    if is_path_shaped(token) || cwd.join(token).is_file() {
+    if crate::nubx_resolve::is_path_shaped(token) || cwd.join(token).is_file() {
         let mut file_args = Vec::with_capacity(args.len() + 1);
         file_args.push(token.to_string());
         file_args.extend(args.iter().cloned());
@@ -2236,16 +2266,6 @@ fn nubx_resolve_local(token: &str, compat_mode: bool, args: &[String]) -> Option
         args,
         &ScriptExecOpts::default(),
     ))
-}
-
-/// A token the user clearly means as a filesystem path — an explicit relative or
-/// absolute prefix. A bare name (`eslint`) is NOT path-shaped; it only counts as
-/// the file tier if it verbatim-exists as a file.
-fn is_path_shaped(token: &str) -> bool {
-    token.starts_with("./")
-        || token.starts_with("../")
-        || token.starts_with('/')
-        || (cfg!(windows) && (token.starts_with(".\\") || token.starts_with("..\\")))
 }
 
 fn run_as_node() -> Result<i32> {
