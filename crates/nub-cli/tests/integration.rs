@@ -4210,6 +4210,42 @@ fn nubx_registry_fallthrough_fails_closed_in_ci() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A pre-recorded consent must NOT bypass the CI fail-closed gate. The ledger's
+/// "skip the prompt" hit applies only in an interactive terminal — in CI the gate
+/// fails closed unconditionally, so a restored/shared `consent.json` can't let a
+/// fetch run silently where no human can confirm. (The P2-A regression guard.)
+#[test]
+fn nubx_preseeded_consent_still_fails_closed_in_ci() {
+    let (nubx, dir) = nubx_alias();
+    // Seed an immortal (pinned) consent for the spec, as a shared/restored cache
+    // would carry it. The ledger lives at <XDG_CACHE_HOME>/nub/dlx/consent.json.
+    let ledger_dir = dir.join("xdg-cache/nub/dlx");
+    std::fs::create_dir_all(&ledger_dir).unwrap();
+    std::fs::write(
+        ledger_dir.join("consent.json"),
+        r#"{"preseeded-tool-zzz":{"specs":["preseeded-tool-zzz"],"recorded_at":9999999999,"pinned":true}}"#,
+    )
+    .unwrap();
+    let out = Command::new(&nubx)
+        .arg("preseeded-tool-zzz")
+        .current_dir(&dir)
+        .env("CI", "1")
+        .env("XDG_CACHE_HOME", dir.join("xdg-cache"))
+        .output()
+        .expect("spawn nubx");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a pre-seeded ledger must not bypass CI fail-closed: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("ci"),
+        "must still refuse in CI despite the seeded consent: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `-y` is the escape hatch: it passes the consent gate even non-interactively,
 /// so the run proceeds to a fetch (which then fails on the unreachable registry).
 /// The proof is the ABSENCE of the gate's refusal message — `-y` got through.
