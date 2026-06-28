@@ -724,6 +724,137 @@ fn test_link_all_nested_node_modules_for_direct_deps() {
 }
 
 #[test]
+fn test_hoisted_duplicates_same_dep_path_at_multiple_sites() {
+    // A version conflict at the root forces `shared@1.0.0` to nest under
+    // BOTH `a` and `b` — two placements of the SAME dep_path at the SAME
+    // depth. The hoisted materializer fills a depth level in parallel, so
+    // this drives two concurrent materializations of one dep_path; on
+    // macOS+APFS that means two concurrent `build_tree` calls for one
+    // shared `trees/` entry. Asserts every copy lands complete (the
+    // regression guard for the build_tree staging-dir collision: a shared
+    // staging dir published a partial tree, dropping files here).
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = dir.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let store = Store::at(dir.path().join("store/files"));
+    let mut indices = BTreeMap::new();
+
+    // shared@1.0.0 carries several files so a partial tree is detectable.
+    let mut shared_v1 = PackageIndex::default();
+    for (path, body) in [
+        (
+            "package.json",
+            "{\"name\":\"shared\",\"version\":\"1.0.0\"}",
+        ),
+        ("index.js", "module.exports = 'shared@1';"),
+        ("lib/util.js", "module.exports = 42;"),
+    ] {
+        shared_v1.insert(
+            path.to_string(),
+            store.import_bytes(body.as_bytes(), false).unwrap(),
+        );
+    }
+    indices.insert("shared@1.0.0".to_string(), shared_v1);
+    indices.insert(
+        "shared@2.0.0".to_string(),
+        package_index(
+            &store,
+            "{\"name\":\"shared\",\"version\":\"2.0.0\"}",
+            "module.exports = 'shared@2';",
+        ),
+    );
+    indices.insert(
+        "a@1.0.0".to_string(),
+        package_index(
+            &store,
+            "{\"name\":\"a\",\"version\":\"1.0.0\"}",
+            "module.exports = 'a';",
+        ),
+    );
+    indices.insert(
+        "b@1.0.0".to_string(),
+        package_index(
+            &store,
+            "{\"name\":\"b\",\"version\":\"1.0.0\"}",
+            "module.exports = 'b';",
+        ),
+    );
+
+    let pkg = |name: &str, version: &str, deps: &[(&str, &str)]| LockedPackage {
+        name: name.to_string(),
+        version: version.to_string(),
+        dep_path: format!("{name}@{version}"),
+        dependencies: deps
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .collect(),
+        ..Default::default()
+    };
+    let mut packages = BTreeMap::new();
+    packages.insert("shared@2.0.0".to_string(), pkg("shared", "2.0.0", &[]));
+    packages.insert("shared@1.0.0".to_string(), pkg("shared", "1.0.0", &[]));
+    packages.insert(
+        "a@1.0.0".to_string(),
+        pkg("a", "1.0.0", &[("shared", "1.0.0")]),
+    );
+    packages.insert(
+        "b@1.0.0".to_string(),
+        pkg("b", "1.0.0", &[("shared", "1.0.0")]),
+    );
+
+    let dep = |name: &str, dep_path: &str| DirectDep {
+        name: name.to_string(),
+        dep_path: dep_path.to_string(),
+        dep_type: DepType::Production,
+        specifier: None,
+    };
+    let mut importers = BTreeMap::new();
+    importers.insert(
+        ".".to_string(),
+        vec![
+            dep("shared", "shared@2.0.0"),
+            dep("a", "a@1.0.0"),
+            dep("b", "b@1.0.0"),
+        ],
+    );
+    let graph = LockfileGraph {
+        importers,
+        packages,
+        ..Default::default()
+    };
+
+    let linker = Linker::new(&store, LinkStrategy::Copy).with_node_linker(NodeLinker::Hoisted);
+    linker.link_all(&project_dir, &graph, &indices).unwrap();
+
+    let nm = project_dir.join("node_modules");
+    // shared@2.0.0 at the root; shared@1.0.0 nested under both requesters.
+    assert_eq!(
+        std::fs::read_to_string(nm.join("shared/index.js")).unwrap(),
+        "module.exports = 'shared@2';"
+    );
+    for parent in ["a", "b"] {
+        let nested = nm.join(parent).join("node_modules/shared");
+        assert_eq!(
+            std::fs::read_to_string(nested.join("index.js")).unwrap(),
+            "module.exports = 'shared@1';",
+            "{parent}'s nested shared@1 index.js"
+        );
+        // The multi-file payload must be complete at every site — a
+        // raced partial tree would drop lib/util.js.
+        assert_eq!(
+            std::fs::read_to_string(nested.join("lib/util.js")).unwrap(),
+            "module.exports = 42;",
+            "{parent}'s nested shared@1 lib/util.js"
+        );
+        assert!(
+            nested.join("package.json").exists(),
+            "{parent}'s nested shared@1 package.json"
+        );
+    }
+}
+
+#[test]
 fn test_global_virtual_store_is_populated() {
     let dir = tempfile::tempdir().unwrap();
     let project_dir = dir.path().join("project");
