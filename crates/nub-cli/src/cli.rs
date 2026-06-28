@@ -57,6 +57,11 @@ pub struct NubxDlxFlags {
     pub no_install: bool,
     /// `-q`/`--quiet`: suppress the fetch progress output.
     pub quiet: bool,
+    /// `-y`/`--yes`: the explicit consent escape hatch for the implicit registry
+    /// tier — let CI / non-TTY through and skip the TTY first-fetch prompt
+    /// ([`crate::nubx_consent`]). Without it, a registry fallthrough fails closed
+    /// in CI / non-TTY and prompts once per spec in an interactive terminal.
+    pub yes: bool,
 }
 
 /// `--reporter <MODE>` for `nub run`. `default` is the existing prefixed /
@@ -1979,7 +1984,7 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
             no_install,
             no_fetch,
             quiet,
-            yes: _,
+            yes,
             ignore_existing,
             mut args,
         }) => {
@@ -1994,8 +1999,6 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
             if ignore_existing {
                 eprintln!("nubx: --ignore-existing was removed in npm v9 and is ignored.");
             }
-            // `-y`/`--yes` is a no-op: nubx (like `pnpm dlx`) never prompts before
-            // fetching, so there is nothing to confirm.
 
             if workspace_run {
                 // The npx fetch-path flags only make sense for the single-tool
@@ -2034,14 +2037,28 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
                     &ws_opts,
                 )
             } else {
-                let dlx_flags = NubxDlxFlags {
-                    package,
-                    // `--no` is npx's alias for `--no-install` in nubx's
-                    // no-prompt model: both refuse to fetch a missing tool.
-                    no_install: no_install || no_fetch,
-                    quiet,
-                };
-                run_exec_with_dlx(&bin, node, &args, Some(&dlx_flags))
+                // Unified-runner resolution chain: file → script → (bin →
+                // registry). The file/script tiers are nub's addition over npx's
+                // bins-only model; the bin→registry tail lives in
+                // `run_exec_with_dlx`. The order matches `run`/`mux` so a token
+                // means the same thing on every nub surface (file > script > bin),
+                // and scripts beat bins. A `-p`/`--package` spec is an explicit
+                // "fetch this package", so it skips local resolution entirely
+                // (npx behaves the same — a local bin never shadows `-p`).
+                if package.is_empty()
+                    && let Some(result) = nubx_resolve_local(&bin, node, &args)
+                {
+                    result
+                } else {
+                    let dlx_flags = NubxDlxFlags {
+                        package,
+                        // `--no` is npx's alias for `--no-install`: refuse to fetch.
+                        no_install: no_install || no_fetch,
+                        quiet,
+                        yes,
+                    };
+                    run_exec_with_dlx(&bin, node, &args, Some(&dlx_flags))
+                }
             }
         }
         Some(Command::Upgrade {
@@ -2180,6 +2197,55 @@ fn run_nubx() -> Result<i32> {
     let mut rest = vec!["nubx".to_string()];
     rest.extend(args);
     dispatch_subcommand(rest)
+}
+
+/// The local tiers of `nubx`'s unified resolution chain — FILE then SCRIPT —
+/// tried before the bin → registry tail in [`run_exec_with_dlx`]. Returns
+/// `Some(result)` when a tier matched and ran; `None` to fall through. Only the
+/// bare single-tool path reaches here (`-p` and the workspace flags never do).
+///
+/// Precedence is file > script, matching `run`/`mux` so a token resolves the same
+/// way on every nub surface; scripts then beat bins in the tail. The local tiers
+/// never touch the network — only a full local miss reaches the gated registry.
+fn nubx_resolve_local(token: &str, compat_mode: bool, args: &[String]) -> Option<Result<i32>> {
+    let cwd = env::current_dir().ok()?;
+
+    // FILE tier: a path-shaped token, or a file by that exact name in cwd. The
+    // verbatim-existence check (not extension sniffing) runs an extensionless
+    // `./cli` or a bare `index.ts` when it is a real file — mirroring `mux`. A
+    // path-shaped token is a file *intent* even when missing: let the file runner
+    // emit the not-found rather than misread `./foo` as a script/bin/package.
+    if is_path_shaped(token) || cwd.join(token).is_file() {
+        let mut file_args = Vec::with_capacity(args.len() + 1);
+        file_args.push(token.to_string());
+        file_args.extend(args.iter().cloned());
+        return Some(run_file_with_compat(&file_args, compat_mode));
+    }
+
+    // SCRIPT tier: a package.json script named exactly `token`, run through the
+    // same single-script path `nub run <script>` uses (lifecycle hooks + the
+    // `$ <cmd>` echo intact). Scripts beat bins — consistency with run/mux, and a
+    // colliding script is far easier to rename than a dependency's `.bin` name.
+    let project = nub_core::workspace::detect::detect_project(&cwd)?;
+    let cmd = nub_core::workspace::scripts::resolve_script(&project.manifest, token)?;
+    Some(run_single_script(
+        token,
+        &cmd,
+        &project,
+        compat_mode,
+        args,
+        &ScriptExecOpts::default(),
+    ))
+}
+
+/// A token the user clearly means as a filesystem path — an explicit relative or
+/// absolute prefix. A bare name (`eslint`) is NOT path-shaped; it only counts as
+/// the file tier if it verbatim-exists as a file.
+fn is_path_shaped(token: &str) -> bool {
+    token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with('/')
+        || (cfg!(windows) && (token.starts_with(".\\") || token.starts_with("..\\")))
 }
 
 fn run_as_node() -> Result<i32> {
@@ -4363,14 +4429,35 @@ fn run_exec_with_dlx(
     }
 
     // Not in node_modules/.bin. The `nubx` entry point (and only it) falls back
-    // to DLX here — fetch the tool into a throwaway project and run it, matching
-    // `npx`/`pnpm dlx` (local-first, DLX as the fallback). nub is a complete
-    // package manager, so `nubx <uninstalled-tool>` fetches-and-runs rather than
-    // shelling out to the project's foreign PM. We follow `pnpm dlx` semantics:
-    // no interactive confirm-prompt, just fetch+run (nub is pnpm-compatible).
+    // to the registry here — fetch the tool into a throwaway project and run it,
+    // matching `npx` local-first resolution. This is the IMPLICIT registry tier,
+    // so it is gated: `nubx` never executes remote code silently. The gate fails
+    // closed in CI and any non-TTY, prompts once per spec in an interactive
+    // terminal, and runs without a prompt once a spec is recorded as consented;
+    // `-y` is the explicit escape hatch. (Explicit `nub dlx` bypasses all of this
+    // — invoking it IS the consent — and reaches the engine on its own verb path.)
     if NUBX_DLX_FALLBACK.load(Ordering::Relaxed) {
         let flags = dlx_flags.cloned().unwrap_or_default();
-        return crate::pm_engine::run_dlx_for_nubx(bin, args, &flags);
+        // The gate keys on the canonical install set — the `-p` packages, or the
+        // bare bin token — the same identity the engine resolves and runs.
+        let specs: Vec<String> = if flags.package.is_empty() {
+            vec![bin.to_string()]
+        } else {
+            flags.package.clone()
+        };
+        let record = match crate::nubx_consent::gate(&specs, flags.yes) {
+            crate::nubx_consent::Decision::Proceed { record } => record,
+            crate::nubx_consent::Decision::Refused(code) => return Ok(code),
+        };
+        let result = crate::pm_engine::run_dlx_for_nubx(bin, args, &flags);
+        // Record consent only after a granted fetch we actually ran — the ledger
+        // reflects tools the user fetched, never a refused or pre-empted one. (On
+        // a tool's own non-zero exit the engine may `process::exit`, bypassing
+        // this; that only costs a re-prompt next time, which is the safe default.)
+        if record && result.is_ok() {
+            crate::nubx_consent::record(&specs);
+        }
+        return result;
     }
 
     // Plain `nub exec`. Per exec.md (decision 2026-05-26): `nub exec` does NOT
