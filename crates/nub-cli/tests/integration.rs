@@ -4420,10 +4420,17 @@ fn nubx_resolution_spec() {
     // ── FILE tier — a leading Node flag, eval, stdin, `--`, and `--node` compat
     // all reach Node; the raw argv (minus nub's own `--node`) is preserved. This is
     // the half #224 broke: clap used to reject any Node flag before the file.
+    //
+    // Augmentation PREPENDS nub's own execArgv (the preload + experimental flags)
+    // and APPENDS the user's verbatim, so the user's leading flags are the TAIL of
+    // execArgv, in their original order. Assert that tail — NOT an exact-from-start
+    // match, which only holds when augmentation is off (the trap that masked this
+    // locally: a worktree target dir outside the tree can't find runtime/, so the
+    // dev binary ran un-augmented while CI ran augmented).
     let (o, e, _) = nx(&["--inspect-port=0", "--enable-source-maps", "app.js"]);
     assert!(
-        o.contains(r#"EXEC=["--inspect-port=0","--enable-source-maps"]"#),
-        "leading Node flags must reach Node verbatim: {o}{e}"
+        o.contains(r#""--inspect-port=0","--enable-source-maps"]"#),
+        "leading Node flags must reach Node verbatim, in order, as the execArgv tail: {o}{e}"
     );
     let (o, _, _) = nx(&["--import", "./app.js", "app.js", "tail"]); // value-flag skips its value
     assert!(
