@@ -14,11 +14,11 @@ $ nub run dev              # run a package.json script
 $ nubx prisma generate     # run a CLI from node_modules/.bin
 ```
 
-It's a Rust CLI that orchestrates the Node you already have installed and augments it through Node's own public extension surfaces — `module.registerHooks()`, `--import` preloads, `NODE_OPTIONS`, N-API addons. It doesn't replace your runtime, your package manager, or your editor.
+It's a Rust CLI that runs on stock Node — provisioning the version your project pins, or using whatever's on your `PATH` when nothing's pinned — and augments it through Node's own public extension surfaces — `module.registerHooks()`, `--import` preloads, `NODE_OPTIONS`, N-API addons. It doesn't replace your runtime, your package manager, or your editor.
 
 ## Is it a new runtime?
 
-No. Nub runs *on* Node — your `node` binary, on your `PATH`. There is no Nub runtime, no Nub JavaScript engine, no separate compatibility surface. When `nub index.ts` runs, what's actually executing is the Node you installed via `nvm`, `mise`, `brew`, the official installer, or whatever else; Nub spawns it, registers a load hook for TypeScript / JSX / YAML / TOML, preloads polyfills where Node is behind, and gets out of the way. See [How does it work under the hood?](#how-does-it-work-under-the-hood) for the mechanism-level answer.
+No. Nub runs *on* stock Node. There is no Nub runtime, no Nub JavaScript engine, no separate compatibility surface. When `nub index.ts` runs, what's actually executing is a stock `node` binary — the version your project pins, which Nub provisions from nodejs.org if it's missing, or whatever's on your `PATH` when nothing's pinned; Nub spawns it, registers a load hook for TypeScript / JSX / YAML / TOML, preloads polyfills where Node is behind, and gets out of the way. See [How does it work under the hood?](#how-does-it-work-under-the-hood) for the mechanism-level answer.
 
 ## Is it a fork of Node?
 
@@ -69,11 +69,11 @@ Works. CommonJS, `require()`, dynamic `require()`, `require.cache`, `module.expo
 
 ## What about native (N-API) addons?
 
-Works. Native addons compile against Node's N-API ABI, and Nub is running on your Node binary, so addons load exactly as they do on plain Node. (Nub itself ships its `oxc` transpiler as an N-API addon; that path is the same path your `better-sqlite3` or `@napi-rs/canvas` uses.)
+Works. Native addons compile against Node's N-API ABI, and Nub is running on a stock Node binary, so addons load exactly as they do on plain Node. (Nub itself ships its `oxc` transpiler as an N-API addon; that path is the same path your `better-sqlite3` or `@napi-rs/canvas` uses.)
 
 ## Does it support all Node core modules?
 
-Yes. Every `node:` core module — `node:fs`, `node:http`, `node:test`, `node:worker_threads`, `node:sqlite`, `node:crypto`, all of them — works because they're provided by your Node binary, not by Nub.
+Yes. Every `node:` core module — `node:fs`, `node:http`, `node:test`, `node:worker_threads`, `node:sqlite`, `node:crypto`, all of them — works because they're provided by the stock Node binary, not by Nub.
 
 ## What Node versions does it support?
 
@@ -183,9 +183,9 @@ Full details: [Runtime → Environment variables](/docs/runtime/env).
 
 Nub is a Rust CLI. When you type `nub script.ts`, the Rust binary:
 
-1. Resolves the `node` on your `PATH`.
+1. Resolves the Node version your project pins — `devEngines.runtime`, `.node-version`, `.nvmrc`, or `engines.node` — provisioning it from nodejs.org if it's missing, and falling back to the `node` on your `PATH` when nothing's pinned.
 2. Reads your nearest `package.json`, `tsconfig.json`, and `.env*` files.
-3. Spawns that Node with `--import` pointing at Nub's preload bundle and `NODE_OPTIONS` set to whatever experimental flags are needed for your Node version.
+3. Spawns that Node with `--import` pointing at Nub's preload bundle and `NODE_OPTIONS` set to whatever experimental flags are needed for that Node version.
 4. The preload bundle calls `module.registerHooks()` to install Nub's load hook (TS / JSX / YAML / TOML / JSON5 / JSONC transpile-and-parse path, backed by an N-API binding to `oxc`), installs polyfills (`Temporal`, `URLPattern`, `WebSocket`, `Worker`, WinterTC gap globals) where Node is behind, and hands control to your script.
 5. Subprocesses inherit the same augmentation recursively — `node hello.js` from inside a script, the Node process Vite or Next.js spawns for a dev server, the worker pool your test runner spins up, `child_process.spawn("node", …)` from your own code, all augmented.
 
