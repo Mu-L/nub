@@ -178,11 +178,14 @@ fn is_dlx_flag(tok: &str) -> bool {
     )
 }
 
-/// Workspace fan-out flags. They mean the subject is NOT a local file, but keep
-/// scanning for the subject — a workspace SCRIPT run (`nubx --filter foo build`)
-/// still resolves a script and re-dispatches to `nub run`. The bool is whether the
-/// flag consumes a following value token (so the scan skips it).
-fn workspace_flag(tok: &str) -> Option<bool> {
+/// `nub run`/workspace routing flags. Their presence means the subject is NOT a
+/// local file, but the scan keeps walking for the subject — a workspace/script run
+/// (`nubx --filter foo build`, `nubx --reporter silent build`) still resolves the
+/// script and re-dispatches to `nub run`. The bool is whether the flag consumes a
+/// following value token (so the scan skips it). The value-consuming arm must stay
+/// in sync with `value_consuming_flags("run")` in cli.rs so a run value-flag's
+/// argument is never mistaken for the subject.
+fn nub_routing_flag(tok: &str) -> Option<bool> {
     match tok {
         "-r"
         | "--recursive"
@@ -192,7 +195,14 @@ fn workspace_flag(tok: &str) -> Option<bool> {
         | "--include-workspace-root"
         | "--parallel"
         | "--fail-if-no-match" => Some(false),
-        "-F" | "--filter" | "--workspace" | "--workspace-concurrency" | "--cwd" => Some(true),
+        "-F"
+        | "--filter"
+        | "--workspace"
+        | "--workspace-concurrency"
+        | "--cwd"
+        | "--resume-from"
+        | "--script-shell"
+        | "--reporter" => Some(true),
         _ => None,
     }
 }
@@ -216,7 +226,7 @@ fn is_unrecognized_node_flag(tok: &str) -> bool {
     !(head == "--node"
         || is_package_flag(head)
         || is_dlx_flag(head)
-        || workspace_flag(head).is_some()
+        || nub_routing_flag(head).is_some()
         || matches!(head, "--eval" | "--print"))
 }
 
@@ -301,12 +311,12 @@ fn scan(
         if !saw_routing && matches!(tok, "-e" | "--eval" | "--print") {
             return Scan::NodeTier;
         }
-        // Workspace fan-out: not a file; keep scanning for the subject so a
-        // workspace script run can still resolve + re-dispatch to `nub run`.
-        if let Some(consumes_value) = workspace_flag(tok) {
+        // `nub run`/workspace routing: not a file; keep scanning for the subject so
+        // a workspace/script run can still resolve + re-dispatch to `nub run`.
+        if let Some(consumes_value) = nub_routing_flag(tok) {
             saw_routing = true;
             if consumes_value && !tok.contains('=') {
-                i += 1; // skip the flag's value token
+                i += 1; // skip the flag's separate-token value
             }
             i += 1;
             continue;
@@ -319,18 +329,16 @@ fn scan(
             i += 1;
             continue;
         }
-        // A Node value-flag consumes its value token — unless it is the inline
-        // `--flag=value` form, which is self-contained.
+        // A Node value-flag consumes its separate-token value (skip two). The inline
+        // `--flag=value` form never reaches here — it isn't in the table verbatim, so
+        // it falls through below as a zero-arity token, which is exactly right (the
+        // value is self-contained, no separate token to skip).
         if is_node_value_flag(tok, extra_value) {
-            if tok.starts_with("--") && tok.contains('=') {
-                i += 1;
-            } else {
-                i += 2;
-            }
+            i += 2;
             continue;
         }
-        // Anything else (`--node`, a Node boolean / V8 / NoOp, or an unknown flag)
-        // is zero-arity for subject scanning — skip one.
+        // Anything else (`--node`, an inline `--flag=value`, a Node boolean / V8 /
+        // NoOp, or an unknown flag) is zero-arity for subject scanning — skip one.
         i += 1;
     }
     // Only flags, no subject / eval / stdin.
@@ -557,6 +565,22 @@ mod tests {
     fn workspace_filter_on_a_script_routes_to_run() {
         assert_eq!(route(&["--filter", "foo", "build"]), NubxRoute::Script);
         assert_eq!(route(&["--filter", "foo", "tsc"]), NubxRoute::Owned); // bin
+    }
+
+    #[test]
+    fn run_value_flags_before_the_subject_consume_their_value() {
+        // A `nub run` value-flag must skip its value so the subject is located, not
+        // mis-read as the flag's argument (the run value-flag set is shared with
+        // value_consuming_flags("run")).
+        assert_eq!(route(&["--reporter", "silent", "build"]), NubxRoute::Script);
+        assert_eq!(
+            route(&["--resume-from", "pkg", "-r", "build"]),
+            NubxRoute::Script
+        );
+        assert_eq!(
+            route(&["--script-shell", "/bin/sh", "build"]),
+            NubxRoute::Script
+        );
     }
 
     #[test]
