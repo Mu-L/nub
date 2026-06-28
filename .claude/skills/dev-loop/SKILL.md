@@ -51,6 +51,10 @@ make addon
 
 There is **no `nub build` command** — the dev build is `cargo build -p nub-cli --profile fast` (or `make install-dev` for the full binary+addon on PATH).
 
+**Build politeness on this shared dev host (HIGH PRIORITY — the maintainer works on this machine).** A full cargo build can saturate all cores and make the maintainer's machine non-responsive. Two throttles keep it polite:
+- **Job cap (already set, machine-wide):** `~/.cargo/config.toml` pins `[build] jobs = 6` (of 8 perf cores), so no build grabs every core. CI is unaffected (it runs on GitHub runners, not this config). Leave it in place.
+- **Background QoS / nice — wrap every agent build:** launch builds as `taskpolicy -b cargo build -p nub-cli --profile fast` (macOS background QoS → schedules on E-cores + yields to interactive) or `nice -n 10 cargo build …`. This lets a build run without making the machine sluggish. If a build is already hammering the host, `renice 20 -p <pid>` + `taskpolicy -b -p <pid>` the running `cargo`/`rustc` tree for immediate relief.
+
 **Why `fast`, never `release`, for iteration** (measured 2026-06-20, macOS arm64):
 
 | build | wall time |
