@@ -4498,7 +4498,8 @@ fn nubx_resolution_spec() {
         "a Node flag on a script is a clean error from `nub run`, not a registry attempt: {e}"
     );
 
-    // ── BIN tier — flags after the bin reach the bin; `--` is dropped once.
+    // ── BIN tier — flags after the bin reach the bin; the post-target `--` is
+    // KEPT verbatim (Option A, decided 2026-06-28 — = pnpm 10 exec / node).
     assert!(
         nx(&["mytool", "a1"]).0.contains(r#"BIN ["a1"]"#),
         "a local bin runs with its args"
@@ -4510,8 +4511,8 @@ fn nubx_resolution_spec() {
     assert!(
         nx(&["mytool", "--", "--fix"])
             .0
-            .contains(r#"BIN ["--fix"]"#),
-        "the bin's first `--` is dropped"
+            .contains(r#"BIN ["--","--fix"]"#),
+        "the bin's post-target `--` is kept verbatim (Option A)"
     );
 
     // ── Collisions (decided): `-p` = `--package` (registry force, NOT Node print);
