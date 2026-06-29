@@ -87,6 +87,15 @@
 ///   aube cannot make nub silently inherit its `/etc/aube` policy: the brand
 ///   boundary holds on the system path the same way it already held on the env
 ///   override (`NUB_MANAGED_CONFIG_PATH`, via `config_env_prefix`).
+/// - `config_namespace` = `None` — nub has NO branded user/project config file.
+///   The engine never reads `~/.config/aube/config.toml` or
+///   `<cwd>/.config/aube/config.toml` (the leak this profile closes), and nub
+///   does NOT substitute a `~/.config/nub/` home of its own: a nub project's
+///   config surface is the neutral `.npmrc` + the sanctioned `NUB_*` env knobs,
+///   so there is no bespoke nub config file to author or read. Mirrors how
+///   `managed_config_system_dir = None` would skip the system read — here the
+///   user/project branded-file read/write is skipped entirely. Standalone aube
+///   keeps `Some("aube")`, so its `~/.config/aube/config.toml` path is unchanged.
 /// - `canonical_lockfile_always_wins` = `false` — `lock.yaml` never silently
 ///   outranks a foreign lockfile beside it; that state is the loud
 ///   ambiguity/contradiction error (was
@@ -155,6 +164,10 @@ pub(crate) const NUB: aube_util::Embedder = aube_util::Embedder {
     cache_namespace: "nub/pm",
     data_namespace: "nub",
     managed_config_system_dir: Some("nub"),
+    // No branded user/project config file: nub never reads `~/.config/aube/`
+    // (or `<cwd>/.config/aube/`) and authors no `~/.config/nub/` of its own —
+    // a nub project's config surface is `.npmrc` + the `NUB_*` env knobs.
+    config_namespace: None,
     canonical_lockfile_always_wins: false,
     runtime_switching: false,
     self_engines_check: false,
@@ -213,6 +226,7 @@ const _: () = {
     assert!(matches!(NUB.cache_namespace.as_bytes(), b"nub/pm"));
     assert!(matches!(NUB.data_namespace.as_bytes(), b"nub"));
     assert!(matches!(NUB.managed_config_system_dir, Some(d) if matches!(d.as_bytes(), b"nub")));
+    assert!(NUB.config_namespace.is_none());
     assert!(matches!(NUB.manifest_namespace.as_bytes(), b""));
     assert!(NUB.workspace_yaml.is_none());
     assert!(NUB.env_prefix.is_none());

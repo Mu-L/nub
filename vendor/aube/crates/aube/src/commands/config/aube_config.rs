@@ -81,9 +81,20 @@ impl AubeConfigEdit {
     }
 }
 
-pub(crate) fn user_aube_config_path() -> miette::Result<PathBuf> {
+/// User-scope branded config path: `~/.config/<dir>/config.toml`, where `<dir>`
+/// is the active embedder's [`config_namespace`]. `Ok(None)` when the embedder
+/// opts out of a branded user/project config file ([`config_namespace`] = `None`,
+/// e.g. nub) — the tool then reads and writes no such file, keeping its config
+/// surface on `.npmrc` + env. Standalone aube derives `~/.config/aube/config.toml`
+/// byte-for-byte (its profile sets `Some("aube")`).
+///
+/// [`config_namespace`]: aube_util::Embedder::config_namespace
+pub(crate) fn user_aube_config_path() -> miette::Result<Option<PathBuf>> {
+    let Some(ns) = aube_util::embedder().config_namespace else {
+        return Ok(None);
+    };
     if let Some(dir) = aube_util::env::xdg_config_home() {
-        return Ok(dir.join("aube").join("config.toml"));
+        return Ok(Some(dir.join(ns).join("config.toml")));
     }
     let home = aube_util::env::home_dir().ok_or_else(|| {
         miette!(
@@ -91,16 +102,49 @@ pub(crate) fn user_aube_config_path() -> miette::Result<PathBuf> {
             aube_util::prog()
         )
     })?;
-    Ok(home.join(".config").join("aube").join("config.toml"))
+    Ok(Some(home.join(".config").join(ns).join("config.toml")))
 }
 
-/// Project-scope aube config path: `<project>/.config/aube/config.toml`.
-/// Mirrors the XDG layout used at user-scope so the same file name and
-/// folder shape applies everywhere. Project-scope is an alternative to
-/// committing aube-specific settings into a project `.npmrc` shared
-/// with npm/pnpm/yarn.
-pub(crate) fn project_aube_config_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".config").join("aube").join("config.toml")
+/// Project-scope branded config path: `<project>/.config/<dir>/config.toml`,
+/// where `<dir>` is the active embedder's [`config_namespace`]. Mirrors the XDG
+/// layout used at user-scope. `None` when the embedder opts out
+/// ([`config_namespace`] = `None`); standalone aube derives
+/// `<project>/.config/aube/config.toml`. Project-scope is an alternative to
+/// committing aube-specific settings into a project `.npmrc` shared with
+/// npm/pnpm/yarn.
+///
+/// [`config_namespace`]: aube_util::Embedder::config_namespace
+pub(crate) fn project_aube_config_path(project_dir: &Path) -> Option<PathBuf> {
+    let ns = aube_util::embedder().config_namespace?;
+    Some(project_dir.join(".config").join(ns).join("config.toml"))
+}
+
+/// Error for a config-file WRITE under a profile with no branded config file
+/// ([`config_namespace`] = `None`). Unreachable for standalone aube (always
+/// `Some`); an embedder like nub keeps settings on `.npmrc`/env, so a write that
+/// targets the branded file has no destination.
+///
+/// [`config_namespace`]: aube_util::Embedder::config_namespace
+fn no_branded_config_file_err() -> miette::Report {
+    miette!(
+        code = aube_codes::errors::ERR_AUBE_NO_BRANDED_CONFIG_FILE,
+        help = "this setting isn't part of the shared `.npmrc` surface; set it in `pnpm-workspace.yaml` / `package.json`, or via an environment variable.",
+        "{prog} has no user/project config file — it stores settings in `.npmrc` and the environment, so this key can't be written to a config file.",
+        prog = aube_util::prog(),
+    )
+}
+
+/// The user-scope config-file path for a WRITE, erroring when the active profile
+/// has no branded config file. Write paths use this; reads use
+/// [`user_aube_config_path`] directly and skip on `None`.
+pub(super) fn user_config_write_path() -> miette::Result<PathBuf> {
+    user_aube_config_path()?.ok_or_else(no_branded_config_file_err)
+}
+
+/// The project-scope config-file path for a WRITE, erroring when the active
+/// profile has no branded config file.
+pub(super) fn project_config_write_path(project_dir: &Path) -> miette::Result<PathBuf> {
+    project_aube_config_path(project_dir).ok_or_else(no_branded_config_file_err)
 }
 
 /// System-managed config path (`/etc/<dir>/managed.toml`), where `<dir>` is the
@@ -156,14 +200,19 @@ pub(crate) fn load_managed_entries() -> Vec<(String, String)> {
 }
 
 pub(crate) fn load_user_entries() -> Vec<(String, String)> {
-    let Ok(path) = user_aube_config_path() else {
+    // `Ok(None)` (profile has no branded config file, e.g. nub) and `Err`
+    // (no home dir) both yield no entries — the branded file is simply absent.
+    let Ok(Some(path)) = user_aube_config_path() else {
         return Vec::new();
     };
     load_entries_at(&path)
 }
 
 pub(crate) fn load_project_entries(project_dir: &Path) -> Vec<(String, String)> {
-    load_entries_at(&project_aube_config_path(project_dir))
+    match project_aube_config_path(project_dir) {
+        Some(path) => load_entries_at(&path),
+        None => Vec::new(),
+    }
 }
 
 fn load_entries_at(path: &Path) -> Vec<(String, String)> {
@@ -379,6 +428,32 @@ mod tests {
             Some(PathBuf::from("/etc/aube/managed.toml"))
         );
         assert_eq!(managed_config_env_var(), "AUBE_MANAGED_CONFIG_PATH");
+    }
+
+    /// Default-preserving contract for the profile-derived USER/PROJECT config
+    /// paths: under the default (AUBE) profile the user path ends in
+    /// `aube/config.toml` and the project path is exactly
+    /// `<project>/.config/aube/config.toml`, byte-for-byte as before the path was
+    /// routed through `config_namespace`. The `None` branch (nub: no branded
+    /// config file → both paths absent, no `.config/aube/` read or write) can't be
+    /// asserted here — registering a non-AUBE profile would flip the
+    /// process-global `OnceLock` fallback every default-profile test depends on —
+    /// so it's pinned by nub's `pm_engine::identity` compile-time assertion
+    /// (`config_namespace.is_none()`) and the nub-side `pm_identity` brand sweep.
+    #[test]
+    fn user_project_config_paths_are_aube_branded_under_default_profile() {
+        let user = user_aube_config_path()
+            .expect("aube profile resolves a path")
+            .expect("aube profile has a branded config file");
+        assert!(
+            user.ends_with("aube/config.toml"),
+            "user path must live under the aube namespace: {}",
+            user.display()
+        );
+        assert_eq!(
+            project_aube_config_path(Path::new("/proj")),
+            Some(PathBuf::from("/proj/.config/aube/config.toml"))
+        );
     }
 
     #[cfg(unix)]
