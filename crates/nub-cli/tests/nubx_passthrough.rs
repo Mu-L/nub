@@ -31,7 +31,11 @@ fn nub_binary() -> PathBuf {
     let mut path = std::env::current_exe().unwrap();
     path.pop(); // deps/
     path.pop(); // debug/ or release/
-    path.push("nub");
+    // `nub` on unix, `nub.exe` on Windows. `Command::new` auto-appends `.exe` on
+    // Windows so the bare name spawns fine, but the `std::fs::copy(nub → nubx)`
+    // below does NOT — it needs the real filename or the source doesn't exist and
+    // the copy panics. EXE_SUFFIX is "" off Windows.
+    path.push(format!("nub{}", std::env::consts::EXE_SUFFIX));
     path
 }
 
