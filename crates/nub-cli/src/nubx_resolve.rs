@@ -234,8 +234,9 @@ fn is_unrecognized_node_flag(tok: &str) -> bool {
 #[derive(Debug, PartialEq, Eq)]
 pub enum NubxRoute {
     /// Node/FILE tier — a file subject, an `-e`/`--eval`/`--print` eval, or stdin
-    /// `-`. Delegate `argv` (with nub's own `--node` removed) to the file runner in
-    /// `compat` mode. The flags reach Node verbatim; Node binds flags-vs-entry.
+    /// `-`. Delegate `argv` (with nub's own LEADING `--node` removed) to the file
+    /// runner in `compat` mode. The flags reach Node verbatim; Node binds
+    /// flags-vs-entry.
     File { compat: bool, argv: Vec<String> },
     /// SCRIPT tier — the bare subject is a package.json script and no registry/dlx
     /// flag is present. Re-dispatch the ORIGINAL argv through `nub run` for its full
@@ -249,13 +250,29 @@ pub enum NubxRoute {
 
 /// Outcome of the flag scan, before the script-vs-bin filesystem decision.
 enum Scan {
-    /// File subject / eval / stdin → the Node tier.
-    NodeTier,
+    /// File subject / eval / stdin → the Node tier. `compat` is set when nub's own
+    /// `--node` opt-out stood in the LEADING flag region; `argv` is the original
+    /// argv with exactly those leading `--node` flags removed. A program-arg
+    /// `--node` after the subject, and a `--node` consumed as a value-flag's value,
+    /// are NOT removed (the scan stops at the subject and skips value tokens, so
+    /// they never register as leading flags).
+    NodeTier { compat: bool, argv: Vec<String> },
     /// A bare subject token that is not a local file. `allow_script` is false when a
     /// registry/dlx flag was seen (those forbid the `nub run` re-dispatch).
     Subject { name: String, allow_script: bool },
     /// `-p`-forced registry, or no subject token at all → the `Nubx` dispatch.
     Owned,
+}
+
+/// Build the file-tier argv: the original args minus the LEADING `--node` flags at
+/// `node_idx`. Tokens after the subject (a program-arg `--node`) and a `--node`
+/// consumed as a value-flag's value never appear in `node_idx`, so they survive.
+fn file_argv(args: &[String], node_idx: &[usize]) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter(|(i, _)| !node_idx.contains(i))
+        .map(|(_, a)| a.clone())
+        .collect()
 }
 
 /// Walk argv with the Node arity table to locate the subject and classify the
@@ -269,6 +286,8 @@ fn scan(
 ) -> Scan {
     let mut saw_routing = false; // a workspace/dlx flag → the subject is not a file
     let mut allow_script = true; // a registry/dlx flag forbids the `nub run` route
+    let mut compat = false; // nub's `--node` opt-out seen in the leading flag region
+    let mut node_idx: Vec<usize> = Vec::new(); // positions of those leading `--node` flags
     let mut i = 0;
     while i < args.len() {
         let tok = args[i].as_str();
@@ -277,7 +296,10 @@ fn scan(
         // like a flag). Node does the same.
         if tok == "--" {
             return match args.get(i + 1) {
-                Some(sub) if !saw_routing && is_file(sub) => Scan::NodeTier,
+                Some(sub) if !saw_routing && is_file(sub) => Scan::NodeTier {
+                    compat,
+                    argv: file_argv(args, &node_idx),
+                },
                 Some(sub) => Scan::Subject {
                     name: sub.clone(),
                     allow_script,
@@ -287,12 +309,18 @@ fn scan(
         }
         // A bare `-` is stdin — Node's subject, not a flag.
         if tok == "-" {
-            return Scan::NodeTier;
+            return Scan::NodeTier {
+                compat,
+                argv: file_argv(args, &node_idx),
+            };
         }
         // A bare token (no leading `-`) is the subject candidate.
         if !tok.starts_with('-') {
             if !saw_routing && is_file(tok) {
-                return Scan::NodeTier;
+                return Scan::NodeTier {
+                    compat,
+                    argv: file_argv(args, &node_idx),
+                };
             }
             return Scan::Subject {
                 name: tok.to_string(),
@@ -309,7 +337,10 @@ fn scan(
         // prior routing flag so a workspace/dlx flag still wins. (`-p` is excluded
         // above — it is nubx's `--package`, never Node's `--print`.)
         if !saw_routing && matches!(tok, "-e" | "--eval" | "--print") {
-            return Scan::NodeTier;
+            return Scan::NodeTier {
+                compat,
+                argv: file_argv(args, &node_idx),
+            };
         }
         // `nub run`/workspace routing: not a file; keep scanning for the subject so
         // a workspace/script run can still resolve + re-dispatch to `nub run`.
@@ -329,6 +360,20 @@ fn scan(
             i += 1;
             continue;
         }
+        // nub's own `--node` (the compat opt-out) standing as a LEADING flag: record
+        // its position for removal + flip compat, then keep scanning. Only a
+        // standalone leading `--node` reaches here — one consumed as a value-flag's
+        // value (`--import --node`) was already skipped by that flag's `i += 2`, and
+        // one AFTER the subject is never walked (the scan returns at the subject). So
+        // both stay in argv verbatim with compat OFF, matching `nub <file>` / real
+        // node. (Fixes the P1: the old whole-argv strip ate a program-arg `--node`
+        // and wrongly forced compat.)
+        if tok == "--node" {
+            compat = true;
+            node_idx.push(i);
+            i += 1;
+            continue;
+        }
         // A Node value-flag consumes its separate-token value (skip two). The inline
         // `--flag=value` form never reaches here — it isn't in the table verbatim, so
         // it falls through below as a zero-arity token, which is exactly right (the
@@ -337,32 +382,12 @@ fn scan(
             i += 2;
             continue;
         }
-        // Anything else (`--node`, an inline `--flag=value`, a Node boolean / V8 /
-        // NoOp, or an unknown flag) is zero-arity for subject scanning — skip one.
+        // Anything else (an inline `--flag=value`, a Node boolean / V8 / NoOp, or an
+        // unknown flag) is zero-arity for subject scanning — skip one.
         i += 1;
     }
     // Only flags, no subject / eval / stdin.
     Scan::Owned
-}
-
-/// Strip nub's own `--node` (appearing before any `--`) from argv and report
-/// whether it was present. Mirrors the hijack path: `--node` is nub-owned and must
-/// not reach Node, but a `--node` AFTER `--` is a literal program argument.
-fn strip_node_flag(args: &[String]) -> (bool, Vec<String>) {
-    let mut compat = false;
-    let mut out = Vec::with_capacity(args.len());
-    let mut saw_separator = false;
-    for a in args {
-        if !saw_separator && a == "--node" {
-            compat = true;
-            continue;
-        }
-        if a == "--" {
-            saw_separator = true;
-        }
-        out.push(a.clone());
-    }
-    (compat, out)
 }
 
 /// True if `token` should run as a FILE: an explicit path shape, or a verbatim
@@ -391,7 +416,6 @@ pub fn classify(
     cwd: Option<&Path>,
     is_script: &dyn Fn(&str) -> bool,
 ) -> NubxRoute {
-    let (compat, file_argv) = strip_node_flag(args);
     let is_file = |t: &str| file_tier_match(t, cwd);
 
     // Forward-compat: if the target Node is newer than the baked baseline AND an
@@ -400,10 +424,7 @@ pub fn classify(
     let extra = extra_value_flags(args, cwd);
 
     match scan(args, &is_file, extra.as_ref()) {
-        Scan::NodeTier => NubxRoute::File {
-            compat,
-            argv: file_argv,
-        },
+        Scan::NodeTier { compat, argv } => NubxRoute::File { compat, argv },
         Scan::Subject { name, allow_script } => {
             if allow_script && is_script(&name) {
                 NubxRoute::Script
@@ -468,12 +489,8 @@ mod tests {
         // cwd-less classify: route via `scan` directly with a fake `is_file`.
         let is_file =
             |t: &str| is_path_shaped(t) || matches!(t, "app.js" | "sub/x.js" | "index.ts");
-        let (compat, file_argv) = strip_node_flag(&args);
         match scan(&args, &is_file, None) {
-            Scan::NodeTier => NubxRoute::File {
-                compat,
-                argv: file_argv,
-            },
+            Scan::NodeTier { compat, argv } => NubxRoute::File { compat, argv },
             Scan::Subject { name, allow_script } => {
                 if allow_script && is_script(&name) {
                     NubxRoute::Script
@@ -533,12 +550,39 @@ mod tests {
     }
 
     #[test]
-    fn compat_flag_is_stripped_and_recorded() {
-        is_file_route(&["--node", "app.js"], true);
-        match route(&["--node", "app.js"]) {
-            NubxRoute::File { argv, .. } => assert_eq!(argv, vec!["app.js"]),
-            other => panic!("got {other:?}"),
-        }
+    fn node_flag_only_stripped_in_leading_position() {
+        // Asserts a File route with the exact compat bit AND argv.
+        let file = |argv: &[&str], compat: bool, expect_argv: &[&str]| match route(argv) {
+            NubxRoute::File { compat: c, argv: a } => {
+                assert_eq!(c, compat, "compat for {argv:?}");
+                assert_eq!(a, expect_argv, "argv for {argv:?}");
+            }
+            other => panic!("{argv:?} → expected File, got {other:?}"),
+        };
+
+        // LEADING `--node` is nub's compat opt-out: stripped + flips compat.
+        file(&["--node", "app.js"], true, &["app.js"]);
+        // P1 regression: a `--node` AFTER the subject is a PROGRAM ARGUMENT — it must
+        // survive verbatim and must NOT flip compat (file tier stays byte-identical
+        // to `nub <file>` / real node). The old whole-argv strip ate it.
+        file(
+            &["app.js", "arg1", "--node", "arg2"],
+            false,
+            &["app.js", "arg1", "--node", "arg2"],
+        );
+        // A `--node` consumed as a value-flag's VALUE (`--import --node`) is that
+        // flag's argument, not nub's compat flag — preserved, no compat flip.
+        file(
+            &["--import", "--node", "app.js"],
+            false,
+            &["--import", "--node", "app.js"],
+        );
+        // Mixed: the leading `--node` is stripped; a trailing program `--node` stays.
+        file(
+            &["--node", "app.js", "--node", "x"],
+            true,
+            &["app.js", "--node", "x"],
+        );
     }
 
     #[test]
