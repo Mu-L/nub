@@ -2654,6 +2654,48 @@ fn worker_throw_surfaces_to_parent_onerror() {
 }
 
 #[test]
+fn worker_unhandled_error_is_fatal() {
+    // ORACLE conformance (node:worker_threads): a worker 'error' with NO listener
+    // must be FATAL — surface visibly + nonzero exit — not silently swallowed.
+    // The bug: nub's browser-shape Worker is an EventTarget, whose dispatchEvent
+    // drops an unlistened event, so a failed worker load exited 0 in total silence
+    // (maintainer-found). The fixture spawns a worker whose module fails to
+    // resolve with no onerror; nub must now exit nonzero and print the error.
+    let (stdout, stderr, code) = run_nub("worker", "unhandled-error-fatal-main.ts");
+    assert_ne!(
+        code, 0,
+        "an unhandled worker error must be fatal (nonzero exit), not swallowed: \
+         code={code} stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("swallowed-and-survived"),
+        "process must not survive past the unhandled worker error: {stdout}"
+    );
+    assert!(
+        stderr.contains("does-not-exist") || stderr.contains("Cannot find"),
+        "the worker module-resolution error must be printed to stderr: {stderr}"
+    );
+}
+
+#[test]
+fn worker_error_listener_capture_identity_not_a_false_fatality() {
+    // The unhandled-'error' fatality keys on EventTarget's (type, callback,
+    // capture) listener identity. With a live BUBBLE 'error' listener present, a
+    // capture-only removeEventListener of the same fn must NOT empty the registry
+    // and spuriously throw — the handler must fire and the parent survive (exit 0).
+    let (stdout, stderr, code) = run_nub("worker", "error-listener-capture-main.ts");
+    assert_eq!(
+        code, 0,
+        "a live bubble error listener must not be treated as listener-less: \
+         code={code} stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("capture-bubble-handled:boom from worker"),
+        "the surviving bubble-phase error listener must fire: {stdout}"
+    );
+}
+
+#[test]
 fn worker_without_inbound_listener_exits_naturally() {
     // Regression (worker-polyfill delegation — worker-polyfill.md §4): the worker
     // scope once held a persistent `parentPort.on("message")` forwarder, keeping

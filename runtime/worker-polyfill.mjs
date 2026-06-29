@@ -133,6 +133,15 @@ export function installWorkerPolyfill() {
   class Worker extends EventTarget {
     #worker;
     #name;
+    // Live registry of 'error' listeners, so an UNHANDLED worker 'error' can be
+    // made fatal to match the oracle (node:worker_threads is an EventEmitter;
+    // EventTarget exposes no listener count). Keyed listener → set of capture
+    // flags, mirroring EventTarget's `(type, callback, capture)` listener identity
+    // — `(fn, capture)` and `(fn, bubble)` are TWO distinct registrations, so the
+    // registry must distinguish them or a capture-only remove could empty it while
+    // a live bubble listener remains (a false fatality). The onerror setter routes
+    // through addEventListener below, so it is tracked here automatically.
+    #errorListeners = new Map();
 
     constructor(url, options = {}) {
       super();
@@ -263,6 +272,21 @@ export function installWorkerPolyfill() {
             colno,
           })
         );
+        // ORACLE CONFORMANCE: node:worker_threads re-throws an 'error' that has
+        // NO listener (the EventEmitter unhandled-'error' convention) → it surfaces
+        // as an uncaughtException on the main thread, exit code 1, stack printed.
+        // nub's wrapper owns the node-side 'error' listener, so that throw never
+        // fires natively; we reproduce its fatality when the browser-shape Worker
+        // has no 'error'/onerror listener. Without this an EventTarget silently
+        // drops the unlistened event and a failed worker load exits 0 (the bug).
+        // process.nextTick (not a sync throw inside this emit callback) mirrors
+        // Node's surfacing path exactly: a fresh tick → uncaughtException, so a
+        // user process.on('uncaughtException') still intercepts it as on Node.
+        if (this.#errorListeners.size === 0) {
+          process.nextTick(() => {
+            throw err;
+          });
+        }
       });
       // No `exit` event: WHATWG Workers have no exit event (it is a
       // node:worker_threads concept, not part of the web Worker surface).
@@ -270,6 +294,44 @@ export function installWorkerPolyfill() {
 
     get name() {
       return this.#name;
+    }
+
+    // Track 'error' listeners (for the unhandled-'error' fatality above) without
+    // changing EventTarget semantics — super does the real registration; we only
+    // record/forget the (listener, capture) identity. The registry mirrors
+    // EventTarget's identity-based dedup INCLUDING the capture flag, so a
+    // capture-only remove can never empty it while a live bubble listener remains.
+    // The only un-mirrored case is {once}/{signal} auto-removal (EventTarget drops
+    // those without routing through this override) — a stale entry there errs
+    // toward DELIVERY (swallow), never toward a false fatality.
+    addEventListener(type, listener, options) {
+      super.addEventListener(type, listener, options);
+      if (
+        type === "error" &&
+        (typeof listener === "function" ||
+          (listener != null && typeof listener.handleEvent === "function"))
+      ) {
+        const capture =
+          options === true ||
+          (typeof options === "object" && options !== null && !!options.capture);
+        let caps = this.#errorListeners.get(listener);
+        if (!caps) this.#errorListeners.set(listener, (caps = new Set()));
+        caps.add(capture);
+      }
+    }
+
+    removeEventListener(type, listener, options) {
+      super.removeEventListener(type, listener, options);
+      if (type === "error") {
+        const capture =
+          options === true ||
+          (typeof options === "object" && options !== null && !!options.capture);
+        const caps = this.#errorListeners.get(listener);
+        if (caps) {
+          caps.delete(capture);
+          if (caps.size === 0) this.#errorListeners.delete(listener);
+        }
+      }
     }
 
     postMessage(data, transfer) {
