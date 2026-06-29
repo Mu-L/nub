@@ -46,19 +46,23 @@ pub fn run(args: DeleteArgs) -> miette::Result<()> {
             aube_config::project_aube_config_path(&crate::dirs::project_root_or_cwd()?)
         }
     };
-    let mut config_edit = aube_config::AubeConfigEdit::load(&config_path)?;
-    let mut sweep: Vec<String> = aliases.clone();
-    if let Some(meta) = meta
-        && !sweep.iter().any(|s| s == meta.name)
-    {
-        sweep.push(meta.name.to_string());
-    }
-    if !sweep.iter().any(|s| s == &args.key) {
-        sweep.push(args.key.clone());
-    }
-    if config_edit.remove_aliases(&sweep) {
-        config_edit.save(&config_path)?;
-        removed_paths.push(config_path.clone());
+    // No branded config file under this profile (e.g. nub) → nothing to sweep
+    // there; the `.npmrc` sweep below still runs.
+    if let Some(config_path) = &config_path {
+        let mut config_edit = aube_config::AubeConfigEdit::load(config_path)?;
+        let mut sweep: Vec<String> = aliases.clone();
+        if let Some(meta) = meta
+            && !sweep.iter().any(|s| s == meta.name)
+        {
+            sweep.push(meta.name.to_string());
+        }
+        if !sweep.iter().any(|s| s == &args.key) {
+            sweep.push(args.key.clone());
+        }
+        if config_edit.remove_aliases(&sweep) {
+            config_edit.save(config_path)?;
+            removed_paths.push(config_path.clone());
+        }
     }
 
     // `.npmrc`: sweep when the key is npm-shared (the canonical home
@@ -99,7 +103,7 @@ pub fn run(args: DeleteArgs) -> miette::Result<()> {
             return Err(missing_aube_key_error(
                 &args.key,
                 &aliases,
-                &config_path,
+                config_path.as_deref(),
                 location,
             ));
         }
@@ -176,24 +180,28 @@ fn try_delete_aube_map_entry(key: &str, location: Location) -> miette::Result<Op
 fn missing_aube_key_error(
     key: &str,
     aliases: &[String],
-    config_path: &Path,
+    config_path: Option<&Path>,
     location: Location,
 ) -> miette::Report {
+    // `None` (profile with no branded config file, e.g. nub): name the tool's
+    // config surface generically rather than a nonexistent file path.
+    let config_label = config_path.map_or_else(
+        || format!("{} config", aube_util::prog()),
+        |p| p.display().to_string(),
+    );
     if let Ok(npmrc_path) = location.path()
         && npmrc_path.exists()
         && let Ok(edit) = NpmrcEdit::load(&npmrc_path)
         && edit.entries().iter().any(|(k, _)| aliases.contains(k))
     {
         return miette!(
-            "{key} is not set in {} but an entry exists in {}.\n\
+            "{key} is not set in {config_label} but an entry exists in {}.\n\
              aube doesn't modify `.npmrc` for aube-only settings (it's shared with \
              npm/pnpm/yarn) — edit that file directly to remove it, or run \
-             `{} {key} <value>` to override it from {}.",
-            config_path.display(),
+             `{} {key} <value>` to override it from {config_label}.",
             npmrc_path.display(),
             aube_util::cmd("config set"),
-            config_path.display(),
         );
     }
-    miette!("{key} not set in {}", config_path.display())
+    miette!("{key} not set in {config_label}")
 }

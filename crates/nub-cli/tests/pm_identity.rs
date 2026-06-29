@@ -406,3 +406,114 @@ fn lock_yaml_is_nub_identity_and_conflicts_are_loud() {
         "declared nub keeps lock.yaml: {stderr}"
     );
 }
+
+/// Brand boundary on the config-FILE surface: under the NUB profile the engine
+/// reads NO branded user/project config file. The vendored engine's
+/// `~/.config/aube/config.toml` + `<cwd>/.config/aube/config.toml` (the leak)
+/// are ignored, and nub authors no `~/.config/nub/` home of its own — a planted
+/// `.config/nub/config.{toml}` is ignored too. The reader is `nub config get`,
+/// whose value would echo any honored file source. All four plants set
+/// `minimumReleaseAge`; with every branded file ignored the setting falls back
+/// to its built-in default, so the readout is NOT any planted value.
+///
+/// HOME + XDG_CONFIG_HOME are pinned to throwaway dirs so the user-scope plant
+/// is hermetic (never the developer's real `~/.config`).
+#[test]
+fn nub_profile_reads_no_branded_user_or_project_config_file() {
+    let dir = project("config-file-brand", r#"{"name":"app","version":"1.0.0"}"#);
+    let xdg_config = dir.join("xdg-config");
+
+    // User scope (XDG_CONFIG_HOME): both the aube leak and a would-be nub home.
+    std::fs::create_dir_all(xdg_config.join("aube")).unwrap();
+    std::fs::write(
+        xdg_config.join("aube").join("config.toml"),
+        "minimumReleaseAge = 4321\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(xdg_config.join("nub")).unwrap();
+    std::fs::write(
+        xdg_config.join("nub").join("config.toml"),
+        "minimumReleaseAge = 5555\n",
+    )
+    .unwrap();
+
+    // Project scope (<cwd>/.config/<brand>/config.toml).
+    std::fs::create_dir_all(dir.join(".config").join("aube")).unwrap();
+    std::fs::write(
+        dir.join(".config").join("aube").join("config.toml"),
+        "minimumReleaseAge = 7777\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join(".config").join("nub")).unwrap();
+    std::fs::write(
+        dir.join(".config").join("nub").join("config.toml"),
+        "minimumReleaseAge = 8888\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nub_binary())
+        .args(["config", "get", "minimumReleaseAge"])
+        .current_dir(&dir)
+        .env("HOME", dir.join("home"))
+        .env("USERPROFILE", dir.join("home"))
+        .env("XDG_CONFIG_HOME", &xdg_config)
+        .env("XDG_DATA_HOME", dir.join("xdg-data"))
+        .env("XDG_CACHE_HOME", dir.join("xdg-cache"))
+        .output()
+        .expect("failed to spawn nub");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    for planted in ["4321", "5555", "7777", "8888"] {
+        assert!(
+            !stdout.contains(planted),
+            "nub must ignore every branded config file (read `{planted}`): {stdout}"
+        );
+    }
+
+    // Write side: a `config set` must never AUTHOR a branded config file under
+    // nub — the value lands on the neutral `.npmrc`, and the pre-existing
+    // branded plants are left byte-for-byte untouched.
+    std::fs::create_dir_all(dir.join("home")).unwrap();
+    let set = Command::new(nub_binary())
+        .args([
+            "config",
+            "set",
+            "--location",
+            "user",
+            "minimumReleaseAge",
+            "1000",
+        ])
+        .current_dir(&dir)
+        .env("HOME", dir.join("home"))
+        .env("USERPROFILE", dir.join("home"))
+        .env("XDG_CONFIG_HOME", &xdg_config)
+        .env("XDG_DATA_HOME", dir.join("xdg-data"))
+        .env("XDG_CACHE_HOME", dir.join("xdg-cache"))
+        .output()
+        .expect("failed to spawn nub");
+    assert_eq!(
+        set.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+    assert!(
+        dir.join("home").join(".npmrc").exists(),
+        "the write must land on the neutral .npmrc"
+    );
+    assert_eq!(
+        std::fs::read_to_string(xdg_config.join("aube").join("config.toml")).unwrap(),
+        "minimumReleaseAge = 4321\n",
+        "config set must not write the aube-branded user config file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(xdg_config.join("nub").join("config.toml")).unwrap(),
+        "minimumReleaseAge = 5555\n",
+        "config set must not write a nub-branded user config file"
+    );
+}

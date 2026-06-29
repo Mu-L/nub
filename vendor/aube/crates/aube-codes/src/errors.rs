@@ -92,6 +92,7 @@ pub const ERR_AUBE_NPM_ONLY_COMMAND: &str = "ERR_AUBE_NPM_ONLY_COMMAND";
 pub const ERR_AUBE_COMPLETION_FAILED: &str = "ERR_AUBE_COMPLETION_FAILED";
 pub const ERR_AUBE_REMOVE_PRIOR_INSTALL_DIR: &str = "ERR_AUBE_REMOVE_PRIOR_INSTALL_DIR";
 pub const ERR_AUBE_CONFIG_NESTED_AUBE_KEY: &str = "ERR_AUBE_CONFIG_NESTED_AUBE_KEY";
+pub const ERR_AUBE_NO_BRANDED_CONFIG_FILE: &str = "ERR_AUBE_NO_BRANDED_CONFIG_FILE";
 pub const ERR_AUBE_CONFLICTING_BUILD_FLAGS: &str = "ERR_AUBE_CONFLICTING_BUILD_FLAGS";
 pub const ERR_AUBE_SHIM_CREATE_FAILED: &str = "ERR_AUBE_SHIM_CREATE_FAILED";
 pub const ERR_AUBE_SHIM_EXEC_FAILED: &str = "ERR_AUBE_SHIM_EXEC_FAILED";
@@ -497,6 +498,12 @@ pub const ALL: &[CodeMeta] = &[
         name: ERR_AUBE_CONFIG_NESTED_AUBE_KEY,
         category: category::ENGINE_CLI,
         description: "`aube config set <prefix>.<sub> …` was used for a key whose prefix is an aube map setting (e.g. `allowBuilds.<pkg>`). Such nested writes would otherwise land in `.npmrc` where aube doesn't read them and npm warns/errors about the unknown key — set the map in workspace yaml or `package.json#aube.<prefix>` instead.",
+        exit_code: None,
+    },
+    CodeMeta {
+        name: ERR_AUBE_NO_BRANDED_CONFIG_FILE,
+        category: category::ENGINE_CLI,
+        description: "A `config set` write targeted the tool's own user/project config file, but the active embedder profile has no branded config file (`config_namespace = None`) — it keeps settings on the neutral `.npmrc` + environment surface. Set the value in `.npmrc`, `pnpm-workspace.yaml`/`package.json`, or via an environment variable instead. Unreachable for standalone aube, which always has a `~/.config/aube/config.toml`.",
         exit_code: None,
     },
     CodeMeta {

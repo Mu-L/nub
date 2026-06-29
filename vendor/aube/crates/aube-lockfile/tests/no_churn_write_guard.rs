@@ -38,6 +38,7 @@ static NO_CHURN_TOOL: Embedder = Embedder {
     cache_namespace: "nochurn",
     data_namespace: "nochurn",
     managed_config_system_dir: Some("nochurn"),
+    config_namespace: Some("nochurn"),
     canonical_lockfile_always_wins: true,
     runtime_switching: true,
     self_engines_check: true,

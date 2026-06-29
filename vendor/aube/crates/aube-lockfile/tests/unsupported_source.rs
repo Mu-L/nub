@@ -31,6 +31,7 @@ static STRICT: Embedder = Embedder {
     cache_namespace: "aube",
     data_namespace: "aube",
     managed_config_system_dir: Some("aube"),
+    config_namespace: Some("aube"),
     canonical_lockfile_always_wins: true,
     runtime_switching: true,
     self_engines_check: true,

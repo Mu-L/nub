@@ -142,6 +142,22 @@ pub struct Embedder {
     /// tool's `/etc/<other>/managed.toml`. Distinct from the env-overridden
     /// managed path, which already follows [`config_env_prefix`](Self::config_env_prefix).
     pub managed_config_system_dir: Option<&'static str>,
+    /// Leaf directory under the XDG config root for the tool's OWN *user/project*
+    /// config file — `~/.config/<dir>/config.toml` at user scope and
+    /// `<cwd>/.config/<dir>/config.toml` at project scope, e.g. `Some("aube")` →
+    /// `~/.config/aube/config.toml`. `None` disables the branded user/project
+    /// config file ENTIRELY: the tool reads no such file (settings come only from
+    /// `.npmrc` + env + the per-setting defaults) and writes none, so a host
+    /// never reads another tool's `~/.config/<other>/config.toml` and never
+    /// authors a branded config file under its own name.
+    ///
+    /// This is a *user-authored* public config surface, so it follows the brand
+    /// boundary the same way [`managed_config_system_dir`](Self::managed_config_system_dir)
+    /// does for the system path: an embedder that keeps its settings on the
+    /// neutral `.npmrc`/env surface (nub) sets `None` rather than substituting a
+    /// `~/.config/<host>/` home. Standalone aube: `Some("aube")`, byte-for-byte
+    /// its prior `~/.config/aube/config.toml` path.
+    pub config_namespace: Option<&'static str>,
 
     // --- embedder-fixed behavior toggles (not user-tunable) ---
     /// When `true` (aube's default), this tool's canonical lockfile
@@ -333,6 +349,7 @@ pub const AUBE: Embedder = Embedder {
     cache_namespace: "aube",
     data_namespace: "aube",
     managed_config_system_dir: Some("aube"),
+    config_namespace: Some("aube"),
     canonical_lockfile_always_wins: true,
     runtime_switching: true,
     self_engines_check: true,
@@ -517,6 +534,7 @@ mod tests {
         assert_eq!(id.cache_namespace, "aube");
         assert_eq!(id.data_namespace, "aube");
         assert_eq!(id.managed_config_system_dir, Some("aube"));
+        assert_eq!(id.config_namespace, Some("aube"));
         assert!(id.canonical_lockfile_always_wins);
         assert!(id.runtime_switching);
         assert!(id.self_engines_check);

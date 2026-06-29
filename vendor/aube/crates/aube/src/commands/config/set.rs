@@ -285,6 +285,10 @@ fn sweep_stale_aube_config(
             aube_config::project_aube_config_path(&crate::dirs::project_root_or_cwd()?)
         }
     };
+    // No branded config file under this profile (e.g. nub) → nothing to sweep.
+    let Some(config_path) = config_path else {
+        return Ok(());
+    };
     let mut edit = aube_config::AubeConfigEdit::load(&config_path)?;
     let mut sweep: Vec<String> = aliases.to_vec();
     if !sweep.iter().any(|s| s == meta.name) {
@@ -314,10 +318,10 @@ fn reject_aube_map_key(key: &str, meta: &aube_settings::meta::SettingMeta) -> mi
 /// random scalars into a file other tools read.
 fn unknown_aube_config_target(location: Location) -> miette::Result<std::path::PathBuf> {
     match location {
-        Location::User | Location::Global => aube_config::user_aube_config_path(),
-        Location::Project => Ok(aube_config::project_aube_config_path(
-            &crate::dirs::project_root_or_cwd()?,
-        )),
+        Location::User | Location::Global => aube_config::user_config_write_path(),
+        Location::Project => {
+            aube_config::project_config_write_path(&crate::dirs::project_root_or_cwd()?)
+        }
     }
 }
 
@@ -332,10 +336,14 @@ fn aube_config_target(
     meta: &aube_settings::meta::SettingMeta,
 ) -> miette::Result<std::path::PathBuf> {
     match location {
-        Location::User | Location::Global => aube_config::user_aube_config_path(),
+        Location::User | Location::Global => aube_config::user_config_write_path(),
         Location::Project => {
             let cwd = crate::dirs::project_root_or_cwd()?;
-            let config_path = aube_config::project_aube_config_path(&cwd);
+            // Errors when the profile has no branded config file (e.g. nub);
+            // standalone aube always resolves a path. The workspace-yaml
+            // fallback below is reached only for the Some case, so its behavior
+            // is byte-identical to before for standalone aube.
+            let config_path = aube_config::project_config_write_path(&cwd)?;
             if !config_path.exists()
                 && aube_config::preferred_workspace_yaml_key(meta).is_some()
                 && let Some(yaml_path) = aube_manifest::workspace::workspace_yaml_existing(&cwd)
