@@ -209,14 +209,18 @@ fn nubx_bin_tier_keeps_dashdash_like_pnpm_exec() {
 }
 
 /// The subject boundary is resolved before the passthrough begins: a Node
-/// value-flag (`--env-file`) whose VALUE looks like the file subject binds the
+/// value-flag (`--title`) whose VALUE looks like the file subject binds the
 /// value, so the real subject is the token after it and only its trailing args
 /// forward — the resolver must not mistake the value for the subject (or strip
 /// the tail wrong). nubx-resolver-specific; the runner harness can't reach it.
+/// `--title` (vs `--env-file`) is chosen because it is floor-compatible: it takes
+/// an arbitrary string and exists on every supported Node, including the 18.19
+/// compat-tier floor — `--env-file` is a Node-20.6+ flag node 18.19 rejects with
+/// "bad option" before the fixture can run.
 #[test]
 fn nubx_resolver_value_flag_value_not_mistaken_for_subject() {
     assert_eq!(
-        nubx_argv(&["--env-file", "echo-argv.js", "echo-argv.js", "x"]),
+        nubx_argv(&["--title", "echo-argv.js", "echo-argv.js", "x"]),
         svec(&["x"]),
         "a value-flag value that looks like the subject must bind to the flag"
     );
