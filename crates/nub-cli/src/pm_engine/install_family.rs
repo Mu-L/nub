@@ -1071,10 +1071,36 @@ fn stamp_virgin_package_manager(cwd: &Path) {
     if find_manifest_root(cwd).is_none() {
         return;
     }
+    // Defensive symmetric-brand-boundary guard. The `truly_fresh` gate derives
+    // virginity from aube's lockfile detection, which does NOT recognize two
+    // foreign PM signals: bun's pre-1.2 BINARY lockfile `bun.lockb` (only the
+    // text `bun.lock` is a detection candidate) and a lone yarn-berry
+    // `.yarnrc.yml` config with no `yarn.lock` yet. Without this re-check a
+    // `packageManager: nub@…` stamp could land in a bun/yarn-owned project —
+    // exactly the brand imposition the virgin predicate forbids. Walk up like
+    // `is_truly_fresh_project` does for pnpm-named files, and bail on a hit.
+    if dir_walk_up_has_any(cwd, &["bun.lockb", ".yarnrc.yml"]) {
+        return;
+    }
     let value = format!("nub@{}", env!("CARGO_PKG_VERSION"));
     let _ = nub_core::pm::resolve::edit_root_manifest(cwd, |obj| {
         obj.insert("packageManager".into(), serde_json::Value::String(value));
     });
+}
+
+/// Bounded ancestor walk (inclusive, 16 levels like the identity/manifest
+/// walk-ups) testing whether any directory carries one of `names`.
+fn dir_walk_up_has_any(cwd: &Path, names: &[&str]) -> bool {
+    let mut dir = cwd.to_path_buf();
+    for _ in 0..16 {
+        if names.iter().any(|n| dir.join(n).exists()) {
+            return true;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    false
 }
 
 /// FAIL LOUD if `offline_active` and the session's yarn project configures a
@@ -1746,10 +1772,39 @@ mod tests {
     #[test]
     fn virgin_stamp_is_silent_noop_without_a_manifest() {
         let dir = tempfile::tempdir().unwrap();
+        // Hermeticity guard: the stamp walks UP for a manifest root, so if the
+        // tempdir sits under a checkout (TMPDIR inside a repo) it could reach an
+        // ancestor `package.json` and the no-op intent wouldn't hold. Assert the
+        // precondition and skip rather than risk touching an unrelated manifest.
+        if find_manifest_root(dir.path()).is_some() {
+            return;
+        }
         stamp_virgin_package_manager(dir.path());
         assert!(
             !dir.path().join("package.json").exists(),
             "stamp must never scaffold a missing package.json"
+        );
+    }
+
+    /// Symmetric brand boundary: a foreign PM signal aube's detection misses
+    /// (`bun.lockb`, pre-1.2 bun) still blocks the stamp, so nub never imposes
+    /// `packageManager: nub@…` on a bun-owned project.
+    #[test]
+    fn virgin_stamp_skips_an_undetected_foreign_lockfile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            "{\n  \"name\": \"app\"\n}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("bun.lockb"), b"\0bun").unwrap();
+
+        stamp_virgin_package_manager(dir.path());
+
+        let written = std::fs::read_to_string(dir.path().join("package.json")).unwrap();
+        assert!(
+            !written.contains("packageManager"),
+            "a bun.lockb project must not be stamped: {written:?}"
         );
     }
 }
