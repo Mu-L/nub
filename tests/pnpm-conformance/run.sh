@@ -112,8 +112,16 @@ fi
 # tunes the headroom.
 if [ "${NUB_CONF_NO_ULIMIT:-0}" != 1 ]; then
   HEADROOM="${NUB_CONF_PROC_HEADROOM:-800}"
-  CUR_PROCS="$(ps -U "$(id -u)" 2>/dev/null | wc -l | tr -d ' ')"
+  # `|| CUR_PROCS=200` is required: under `pipefail` a failing `ps` makes the
+  # whole substitution non-zero, which would abort the script via `set -e`
+  # before the empty-check fallback could run.
+  CUR_PROCS="$(ps -U "$(id -u)" 2>/dev/null | wc -l | tr -d ' ')" || CUR_PROCS=200
   [ -z "$CUR_PROCS" ] && CUR_PROCS=200
+  # The cap is a per-USER limit (RLIMIT_NPROC), enforced against the user's
+  # TOTAL live processes at fork time — not just this run's tree. HEADROOM must
+  # therefore exceed both jest's worker pool AND any concurrent fleet growth on
+  # a busy box, or a legitimate fork gets EAGAIN. Bump NUB_CONF_PROC_HEADROOM if
+  # so; the default 800 is generous for a normal run yet far below a 10k bomb.
   CAP=$((CUR_PROCS + HEADROOM))
   HARD="$(ulimit -Hu 2>/dev/null || echo unlimited)"
   if [ "$HARD" != unlimited ] && [ "$CAP" -gt "$HARD" ]; then CAP="$HARD"; fi
@@ -170,20 +178,27 @@ if [ ! -f "$SEAM" ]; then
   exit 2
 fi
 echo "==> swapping seam: $SEAM -> nub"
-# Back up the pristine pnpm seam to `*.orig-pnpm` ONLY when the seam is pristine
-# (not already our shim). The shim's nested-pnpm fallthrough execs this backup,
-# so overwriting it with an already-swapped seam (the stale-reuse failure mode)
-# would poison the fork-bomb guard. The clone-tag re-checkout above restores a
-# reused seam to pristine, so this only trips if a clone is hand-swapped.
+# The pristine-pnpm backup MUST keep the seam's original extension: the shim's
+# nested-pnpm fallthrough execs it as `node <backup>`, and node picks its loader
+# (ESM vs CJS) from the extension — a `.mjs` backup renamed to `.orig-pnpm` is
+# rejected (ERR_UNKNOWN_FILE_EXTENSION). So `pnpm.mjs` → `pnpm.orig-pnpm.mjs`,
+# `pnpm.cjs` → `pnpm.orig-pnpm.cjs`.
+SEAM_EXT="${SEAM##*.}"
+ORIG_BACKUP="${SEAM%.*}.orig-pnpm.${SEAM_EXT}"
+# Back up the pristine seam ONLY when the seam is pristine (not already our
+# shim). The fallthrough execs this backup, so overwriting it with an
+# already-swapped seam (the stale-reuse failure mode) would poison the
+# fork-bomb guard. The clone-tag re-checkout above restores a reused seam to
+# pristine, so this only trips if a clone is hand-swapped.
 if grep -q 'nub-pnpm-shim' "$SEAM" 2>/dev/null; then
-  echo "==> seam already swapped; preserving existing .orig-pnpm backup"
-  if [ ! -f "$SEAM.orig-pnpm" ] || grep -q 'nub-pnpm-shim' "$SEAM.orig-pnpm" 2>/dev/null; then
-    echo "error: seam is swapped but no pristine .orig-pnpm backup exists." >&2
+  echo "==> seam already swapped; preserving existing backup"
+  if [ ! -f "$ORIG_BACKUP" ] || grep -q 'nub-pnpm-shim' "$ORIG_BACKUP" 2>/dev/null; then
+    echo "error: seam is swapped but no pristine backup ($ORIG_BACKUP) exists." >&2
     echo "       remove $CLONE_DIR (or unset PNPM_CLONE_DIR) and re-run for a clean clone." >&2
     exit 2
   fi
 else
-  cp "$SEAM" "$SEAM.orig-pnpm"
+  cp "$SEAM" "$ORIG_BACKUP"
 fi
 # The shim body is CommonJS. A .cjs seam takes it verbatim; a .mjs seam would
 # force ESM and reject `require`, so for .mjs we emit an ESM wrapper that defers
@@ -191,10 +206,12 @@ fi
 # Bake the absolute nub path, the pristine-pnpm backup path, and the clone dir
 # into the shim — pnpm's createEnv() rebuilds a clean env (keeps only
 # PATH/COLORTERM/APPDATA), so exported env would not reach the spawned shim.
-# Substituting them into the file is the robust seam. `#` is the sed delimiter,
-# so any literal `#` in a path would break it — paths here never contain one.
+# Substituting them into the file is the robust seam. `#` is the sed delimiter
+# and `&`/`\` are special in sed's replacement — a path containing any of them
+# would corrupt the shim, but these paths (NUB_BIN, the clone/backup dirs) are
+# controlled local input that never contains them.
 SHIM_BODY="$(sed -e "s#__NUB_BIN__#${NUB_BIN}#" \
-                 -e "s#__ORIG_PNPM__#${SEAM}.orig-pnpm#" \
+                 -e "s#__ORIG_PNPM__#${ORIG_BACKUP}#" \
                  -e "s#__CLONE_DIR__#${CLONE_DIR}#" \
                  "$HERE/nub-pnpm-shim.cjs")"
 case "$SEAM" in
