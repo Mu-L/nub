@@ -184,7 +184,7 @@ export function installWorkerPolyfill() {
         if (asUrlString === null) {
           throw new TypeError("Worker constructor: url must be a string or URL");
         }
-  
+
         if (asUrlString.startsWith("blob:")) {
           // A `blob:` worker (WHATWG inline mechanism). Node cannot open a blob:
           // URL as a worker entry, and the Blob's bytes are only readable

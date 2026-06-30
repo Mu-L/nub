@@ -97,11 +97,16 @@ interface WorkerOptions {
   type?: "module" | "classic";
   name?: string;
   credentials?: "omit" | "same-origin" | "include";
+  // `eval: true` runs the constructor's first argument as the worker's source
+  // (Node's worker_threads inline form) instead of resolving it as a URL.
+  eval?: true;
 }
 interface __NubWorker extends EventTarget {
   readonly name: string;
   postMessage(message: any, transfer?: readonly (ArrayBuffer | MessagePort)[]): void;
-  terminate(): void;
+  // Returns the underlying worker_threads `Promise<exitCode>` (additive
+  // void→value widening; spec code that ignores the return is unaffected).
+  terminate(): Promise<number>;
   onmessage: ((this: Worker, ev: MessageEvent) => any) | null;
   onmessageerror: ((this: Worker, ev: MessageEvent) => any) | null;
   onerror: ((this: Worker, ev: ErrorEvent) => any) | null;

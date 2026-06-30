@@ -11,7 +11,11 @@ const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "modu
 worker.postMessage({ yaml: yamlCfg, toml: tomlCfg });
 worker.onmessage = (ev) => console.log(ev.data);
 worker.onerror = (ev) => console.error(ev);
-worker.terminate();
+// terminate() resolves to the exit code; { eval: true } takes an inline source.
+const exitCode: Promise<number> = worker.terminate();
+void exitCode;
+const inlineWorker = new Worker("self.postMessage(1)", { eval: true });
+void inlineWorker;
 
 // reportError (WinterTC global; not in @types/node).
 reportError(new Error("boom"));
