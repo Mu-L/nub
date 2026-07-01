@@ -38,7 +38,7 @@ export default async function BlogPost(props: {
             </span>
             <span className="text-fd-muted-foreground">{page.data.author}</span>
           </div>
-          <h1 className="mt-5 font-display text-4xl font-medium leading-[1.05] tracking-tight md:text-5xl">
+          <h1 className="mt-5 font-display text-4xl font-medium leading-[1.15] tracking-tight md:text-5xl">
             {page.data.title}
           </h1>
           {page.data.description ? (
