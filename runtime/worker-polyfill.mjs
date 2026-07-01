@@ -151,8 +151,7 @@ export function installWorkerPolyfill() {
       // node:worker_threads. Gated STRICTLY on `options.eval === true` — never
       // content-sniffed — so the spec URL path below is untouched for every web
       // caller. execArgv (carrying nub's preload) is forwarded for eval workers
-      // too, so they receive the worker-side scope (self/postMessage) like a
-      // file/data worker — verified across the support range (Node 18.19–26).
+      // too, so an eval worker inherits nub's augmentation like any other.
       const isEval = options.eval === true;
 
       // The WHATWG Worker constructor accepts a script URL. Per §10.2.6.3 the
@@ -186,11 +185,8 @@ export function installWorkerPolyfill() {
           // We close that gap by snapshotting the source SYNCHRONOUSLY at
           // `URL.createObjectURL(blob)` time (see installBlobUrlSupport) into a
           // module-scope registry keyed by URL, then spawn the source as a `data:`
-          // URL. We use data: (NOT eval:true) deliberately: the `--import` preload
-          // that installs nub's worker-side scope (self/postMessage) does NOT run in
-          // an eval:true worker on the compat-tier FLOOR (Node 18.19 — verified), so
-          // an eval-based blob worker has no `self` there; a data: URL worker is a
-          // real module load and DOES receive the preload on every supported tier.
+          // URL — a real module load (a proper worker entry that receives nub's
+          // preload, so `self`/`postMessage` are present) on every supported tier.
           const source = blobUrlSources.get(asUrlString);
           if (source === undefined) {
             throw new TypeError(
