@@ -36,23 +36,42 @@ nubx <remote-bin>  # equivalent to `nub dlx <remote-bin>`
 
 Other runners cover only a slice — `node` runs files, `npx` runs or fetches a bin, and pnpm splits the job across `run`, `exec`, and `dlx`:
 
-| Target                | `node` | `npx` | `pnpm` | `pnpm run` | `pnpm exec` | `pnpm dlx` | `nubx` |
-| --------------------- | :----: | :---: | :----: | :--------: | :---------: | :--------: | :----: |
-| JS/TS file            |   ✓    |   ✗   |   ✗    |     ✗      |      ✗      |     ✗      |   ✓    |
-| `package.json` script |   ✗    |   ✗   |   ✓    |     ✓      |      ✗      |     ✗      |   ✓    |
-| Local bin             |   ✗    |   ✓   |   ✓    |     ✗      |      ✓      |     ✗      |   ✓    |
-| Registry package      |   ✗    |   ✓   |   ✗    |     ✗      |      ✗      |     ✓      |   ✓    |
+<ColGlow>
+<table>
+  <thead>
+    <tr>
+      <th>Target</th>
+      <th><code>node</code></th>
+      <th><code>npx</code></th>
+      <th><code>pnpm</code></th>
+      <th><code className="whitespace-nowrap">pnpm run</code></th>
+      <th><code className="whitespace-nowrap">pnpm exec</code></th>
+      <th><code className="whitespace-nowrap">pnpm dlx</code></th>
+      <th><code>nubx</code></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>JS/TS file</td>
+      <td><Yes /></td><td><No /></td><td><No /></td><td><No /></td><td><No /></td><td><No /></td><td><Yes /></td>
+    </tr>
+    <tr>
+      <td><code>package.json</code> script</td>
+      <td><No /></td><td><No /></td><td><Yes /></td><td><Yes /></td><td><No /></td><td><No /></td><td><Yes /></td>
+    </tr>
+    <tr>
+      <td>Local bin</td>
+      <td><No /></td><td><Yes /></td><td><Yes /></td><td><No /></td><td><Yes /></td><td><No /></td><td><Yes /></td>
+    </tr>
+    <tr>
+      <td>Registry package</td>
+      <td><No /></td><td><Yes /></td><td><No /></td><td><No /></td><td><No /></td><td><Yes /></td><td><Yes /></td>
+    </tr>
+  </tbody>
+</table>
+</ColGlow>
 
 Only `npx` and `nubx` fall through from local to the registry in one command — `npx` for a bin, `nubx` for the full chain. Every pnpm command targets one tier and errors on a miss.
-
-## Single-purpose commands
-
-Each tier is also its own command — reach for one directly when you want only that tier:
-
-- [Running files](/docs/runtime) — `nub <file>`, TypeScript-first file execution.
-- [Script runner](/docs/runner/run) — `nub run`, the workspace-aware `package.json` script runner.
-- [Local bin runner](/docs/runner/exec) — `nub exec`, a local CLI from `node_modules/.bin`, never the registry.
-- [Remote bin runner](/docs/runner/dlx) — `nub dlx`, fetch and run a package from the registry, explicitly.
 
 <Callout title="Coming from npx">
 
@@ -119,6 +138,9 @@ nubx --node prisma generate
 
 ## Related
 
+- [Script runner](/docs/runner/run) — `nub run`, the workspace-aware `package.json` script runner.
+- [Local bin runner](/docs/runner/exec) — `nub exec`, a local CLI from `node_modules/.bin`, never the registry.
+- [Remote bin runner](/docs/runner/dlx) — `nub dlx`, fetch and run a package from the registry, explicitly.
 - [Running files](/docs/runtime) — TypeScript-first file execution.
 - [Watch mode](/docs/watch) — restart on change.
 - [Module resolution](/docs/runtime/resolution) — the resolver, including Yarn Plug'n'Play.
