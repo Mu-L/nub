@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Windows papercut survey for nub — runs a structured pass/fail sweep of the
+    Windows papercut survey for nub  -  runs a structured pass/fail sweep of the
     CLI surface and emits a human-readable console report plus a machine-readable
     JSON results file.
 
@@ -63,7 +63,7 @@ function Invoke-Check {
 
     $script:checkNum++
     $num = $script:checkNum
-    Write-Host "`n[$num] $id — $label" -ForegroundColor Cyan
+    Write-Host "`n[$num] $id  -  $label" -ForegroundColor Cyan
 
     $result = @{
         id       = $id
@@ -105,7 +105,23 @@ function Invoke-Check {
     $script:results.Add($result)
 }
 
+# PS5.1-compatible argument quoting (no regex with backslash; use Contains).
+function ConvertTo-ArgString {
+    param([string[]]$argList)
+    $parts = foreach ($a in $argList) {
+        if ($a.Contains(' ') -or $a.Contains('"') -or $a.Contains('`t')) {
+            # wrap in double-quotes; escape inner double-quotes
+            '"' + ($a -replace '"', '\"') + '"'
+        } else {
+            $a
+        }
+    }
+    return $parts -join " "
+}
+
 # Run a process with a timeout; return @{stdout stderr exit_code}.
+# PS5.1-compatible: uses ReadToEndAsync (not OutputDataReceived events)
+# and builds Arguments string (ArgumentList is .NET Core only).
 function Invoke-Process {
     param(
         [string]$exe,
@@ -120,31 +136,28 @@ function Invoke-Process {
     $psi.RedirectStandardError  = $true
     $psi.UseShellExecute        = $false
     $psi.WorkingDirectory       = $cwd
-    foreach ($a in $argList) { $psi.ArgumentList.Add($a) }
+    if ($argList.Count -gt 0) {
+        $psi.Arguments = ConvertTo-ArgString $argList
+    }
     foreach ($k in $env.Keys) { $psi.Environment[$k] = $env[$k] }
 
     $proc = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
 
-    $stdoutSb = [System.Text.StringBuilder]::new()
-    $stderrSb = [System.Text.StringBuilder]::new()
-    $proc.OutputDataReceived += { if ($_.Data) { $null = $stdoutSb.AppendLine($_.Data) } }
-    $proc.ErrorDataReceived  += { if ($_.Data) { $null = $stderrSb.AppendLine($_.Data) } }
-
-    $proc.Start()        | Out-Null
-    $proc.BeginOutputReadLine()
-    $proc.BeginErrorReadLine()
+    $null = $proc.Start()
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
 
     $exited = $proc.WaitForExit($timeoutSec * 1000)
     if (-not $exited) {
         try { $proc.Kill() } catch {}
         return @{ stdout=""; stderr="TIMEOUT after ${timeoutSec}s"; exit_code=124 }
     }
-    $proc.WaitForExit()   # flush async reads
+    $proc.WaitForExit()
 
     return @{
-        stdout    = $stdoutSb.ToString().TrimEnd()
-        stderr    = $stderrSb.ToString().TrimEnd()
+        stdout    = $stdoutTask.Result.TrimEnd()
+        stderr    = $stderrTask.Result.TrimEnd()
         exit_code = $proc.ExitCode
     }
 }
@@ -152,7 +165,7 @@ function Invoke-Process {
 # Write a UTF-8 file without BOM (PowerShell 5 default adds BOM).
 function Write-Utf8 {
     param([string]$path, [string]$content)
-    [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
 }
 
 # ── fixture directories ────────────────────────────────────────────────────────
@@ -186,7 +199,7 @@ Write-Utf8 (Join-Path $fixPkg "package.json") @'
 }
 '@
 
-# Native dep project — esbuild has postinstall that downloads a platform binary
+# Native dep project  -  esbuild has postinstall that downloads a platform binary
 Write-Utf8 (Join-Path $fixNative "package.json") @'
 {
   "name": "fix-native",
@@ -249,7 +262,7 @@ Invoke-Check -id "install-which-nub" -label "nub binary path sanity (Get-Command
 }
 
 Invoke-Check -id "install-bin-arch" -label "nub binary arch (ARM64 or x64)" -severity "minor" `
-    -note "ARM VM natively runs arm64; x64 runs under emulation — note which" -Body {
+    -note "ARM VM natively runs arm64; x64 runs under emulation  -  note which" -Body {
     $cmd = Get-Command $NubBin -ErrorAction SilentlyContinue
     if (-not $cmd) { return @{ pass=$false; detail="nub not found" } }
     try {
@@ -288,7 +301,7 @@ Invoke-Check -id "file-ts" -label "nub hello.ts (TypeScript just-works)" -severi
 
 Invoke-Check -id "file-stdin" -label "nub - (stdin execution)" -severity "major" -Body {
     $psi                        = [System.Diagnostics.ProcessStartInfo]::new($NubBin)
-    $psi.ArgumentList.Add("-")
+    $psi.Arguments              = "-"
     $psi.RedirectStandardInput  = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
@@ -330,7 +343,7 @@ Invoke-Check -id "run-greet" -label "nub run greet (plain node script)" -severit
 
 Invoke-Check -id "run-posix-ism" -label "nub run posix-ism (FOO=val node -e) via default cmd.exe" `
     -severity "major" `
-    -note "CMD.EXE cannot interpret 'FOO=val cmd' inline env assignment — expect fail without --shell-emulator; pass is if nub degrades gracefully" -Body {
+    -note "CMD.EXE cannot interpret 'FOO=val cmd' inline env assignment  -  expect fail without --shell-emulator; pass is if nub degrades gracefully" -Body {
     $r = Invoke-Process $NubBin @("run", "posix-ism") -cwd $fixPkg
     # On Windows with cmd.exe, 'FOO=1 node …' is not valid CMD syntax.
     # PASS if nub either: (a) routes it through sh and it works, or
@@ -340,7 +353,7 @@ Invoke-Check -id "run-posix-ism" -label "nub run posix-ism (FOO=val node -e) via
         stdout    = $r.stdout
         stderr    = $r.stderr
         exit_code = $r.exit_code
-        # Not a blocker if cmd.exe fails the POSIX syntax — record the observation
+        # Not a blocker if cmd.exe fails the POSIX syntax  -  record the observation
         pass      = (-not $crashed)
         detail    = "exit $($r.exit_code); observation: does nub surface a clear error or silently fail?"
     }
@@ -352,7 +365,7 @@ Invoke-Check -id "run-shell-emulator" -label "nub run posix-ism --shell-emulator
     # Check if sh.exe is findable first
     $sh = Get-Command "sh" -ErrorAction SilentlyContinue
     if (-not $sh) {
-        return @{ pass=$true; detail="SKIP — sh.exe not on PATH (no Git for Windows)" }
+        return @{ pass=$true; detail="SKIP  -  sh.exe not on PATH (no Git for Windows)" }
     }
     $r = Invoke-Process $NubBin @("run", "--shell-emulator", "posix-ism") -cwd $fixPkg
     @{
@@ -364,7 +377,7 @@ Invoke-Check -id "run-shell-emulator" -label "nub run posix-ism --shell-emulator
     }
 }
 
-# .cmd bin invocation via nub run — install is-odd so node_modules/.bin/is-odd.cmd exists
+# .cmd bin invocation via nub run  -  install is-odd so node_modules/.bin/is-odd.cmd exists
 Invoke-Check -id "run-install-fixture" -label "nub install in fix-pkg (needed for bin checks)" -severity "blocker" -Body {
     $r = Invoke-Process $NubBin @("install") -cwd $fixPkg -timeoutSec 120
     @{
@@ -387,7 +400,7 @@ Invoke-Check -id "run-cmd-bin" -label "nub exec is-odd (node_modules/.bin .cmd s
         exit_code = $r.exit_code
         # is-odd CLI prints true/false; any exit_code 0 means the .cmd shim resolved
         pass      = ($r.exit_code -eq 0)
-        detail    = "exit $($r.exit_code) — did .cmd shim resolve through cmd /C?"
+        detail    = "exit $($r.exit_code)  -  did .cmd shim resolve through cmd /C?"
     }
 }
 
@@ -487,7 +500,7 @@ Invoke-Check -id "node-ls" -label "nub node ls (list cached versions)" -severity
 }
 
 Invoke-Check -id "node-install" -label "nub node install 22 (provision from nodejs.org)" `
-    -severity "major" -note "Downloads ~30 MB — needs network; ARM64 VM gets arm64 build natively" -Body {
+    -severity "major" -note "Downloads ~30 MB  -  needs network; ARM64 VM gets arm64 build natively" -Body {
     $r = Invoke-Process $NubBin @("node", "install", "22") -timeoutSec 180
     @{
         stdout    = $r.stdout
@@ -550,8 +563,7 @@ Invoke-Check -id "watch-restart" -label "nub watch hello.js (start + touch + obs
     Write-Utf8 $watchFile 'console.log("run-" + Date.now());'
 
     $psi                        = [System.Diagnostics.ProcessStartInfo]::new($NubBin)
-    $psi.ArgumentList.Add("watch")
-    $psi.ArgumentList.Add($watchFile)
+    $psi.Arguments              = "watch " + (ConvertTo-ArgString @($watchFile))
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
     $psi.UseShellExecute        = $false
@@ -559,12 +571,9 @@ Invoke-Check -id "watch-restart" -label "nub watch hello.js (start + touch + obs
 
     $proc    = [System.Diagnostics.Process]::new()
     $proc.StartInfo = $psi
-    $lines   = [System.Collections.Generic.List[string]]::new()
-    $proc.OutputDataReceived += { if ($_.Data) { $lines.Add($_.Data) } }
-    $proc.ErrorDataReceived  += { if ($_.Data) { $lines.Add("[err] " + $_.Data) } }
-    $proc.Start()       | Out-Null
-    $proc.BeginOutputReadLine()
-    $proc.BeginErrorReadLine()
+    $null = $proc.Start()
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
 
     Start-Sleep -Seconds 3  # let it start
 
@@ -573,10 +582,16 @@ Invoke-Check -id "watch-restart" -label "nub watch hello.js (start + touch + obs
 
     Start-Sleep -Seconds 4  # wait for restart
 
-    try { $proc.Kill() } catch {}
-    $proc.WaitForExit(5000) | Out-Null
+    # Kill the entire process tree (nub spawns Node; Kill() only kills nub, Node inherits handle)
+    try { & taskkill /F /T /PID $proc.Id 2>&1 | Out-Null } catch {}
+    $proc.WaitForExit(3000) | Out-Null
 
-    $allOut = $lines -join "`n"
+    # Wait for async reads with a 3s cap to avoid blocking if child kept handle open
+    $readDone = [System.Threading.Tasks.Task]::WhenAll($stdoutTask, $stderrTask)
+    $null = $readDone.Wait(3000)
+    $allOut = ($(if ($stdoutTask.IsCompleted) { $stdoutTask.Result } else { "" }) +
+               "`n[err] " +
+               $(if ($stderrTask.IsCompleted) { $stderrTask.Result } else { "" })).TrimEnd()
     $runCount = ($allOut | Select-String -Pattern "run-\d+" -AllMatches).Matches.Count
 
     @{
