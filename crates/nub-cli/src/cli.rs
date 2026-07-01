@@ -5945,7 +5945,12 @@ fn run_pm(args: &[String]) -> Result<i32> {
                     .unwrap_or_else(|_| PathBuf::from("nub"));
                 println!("{}", exe.display());
                 std::io::stdout().flush().ok();
-                eprintln!("» this project uses nub (resolved from packageManager)");
+                // Name the field the nub identity actually resolved from — the
+                // virgin/bare-`use` path pins via `devEngines.packageManager`
+                // (no exact `packageManager`), only `use nub@<exact>` writes the
+                // latter.
+                let field = field_pin_provenance(&cwd);
+                eprintln!("» this project uses nub (resolved from {field})");
                 return Ok(0);
             }
             // A project may DECLARE a manager nub doesn't provision (bun — and
@@ -6157,17 +6162,30 @@ fn berry_pin_refusal(cwd: &Path) -> String {
 /// resolved against the registry before anything is written (never a range
 /// into `packageManager`). Berry (`yarn@<2+>`) is refused later, by the shared
 /// flow, once a concrete major is known. `use nub` (the full switch into nub
-/// identity, 2026-06-10 reversal) takes no version spec: it pins the running
-/// nub's own version — there is nothing to resolve.
+/// identity) takes an optional EXACT version: bare `nub` writes the non-locking
+/// devEngines caret range, `nub@<exact>` opts into the hard `packageManager`
+/// pin. A range/dist-tag spec for nub is refused — nub is the running binary,
+/// not a registry package, so there is nothing to resolve a range against.
 fn split_pm_arg(arg: &str) -> Result<(&str, Option<&str>)> {
     let (name, spec) = match arg.split_once('@') {
         Some((n, s)) => (n, Some(s.trim())),
         None => (arg, None),
     };
-    if name == "nub" && spec.is_some() {
+    // `nub pm use nub@<exact>` is the opt-in HARD pin (writes `packageManager:
+    // nub@<v>`); bare `nub pm use nub` is the non-locking devEngines range. nub
+    // is the running binary, not a registry package, so its spec must be an
+    // EXACT semver to pin — a dist-tag or range (`next`, `^1`, `1.x`, `1`) has
+    // nothing to resolve against (unlike npm/pnpm/yarn, whose specs resolve via
+    // the registry), so it never reaches the `packageManager` field.
+    if name == "nub"
+        && let Some(s) = spec
+        && s != "latest"
+        && semver::Version::parse(s).is_err()
+    {
         bail!(
-            "`nub pm use nub` takes no version — it pins the running nub ({}); \
-             update nub itself with `nub upgrade`.",
+            "`nub pm use nub@{s}` needs an exact version (e.g. nub@{0}) — nub is the \
+             running binary, not a registry package, so a range/tag can't be resolved. \
+             Bare `nub pm use nub` writes a non-locking devEngines range instead.",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -6362,7 +6380,12 @@ fn run_pm_use(name: &str, spec: &str, cwd: &Path) -> Result<i32> {
     // pm_engine::use_nub (manifest fields, lockfile rename/convert,
     // workspace-yaml migration, printed summary).
     if name == "nub" {
-        return crate::pm_engine::use_nub::run_use_nub(&root);
+        // A bare `nub pm use nub` arrives here with the "latest" default spec —
+        // it means the non-locking range, not an exact pin, so map it to `None`.
+        // Only an explicit `nub@<version>` (a concrete pin) opts into the hard
+        // `packageManager` field.
+        let exact_pin = (spec != "latest").then_some(spec);
+        return crate::pm_engine::use_nub::run_use_nub(&root, exact_pin);
     }
 
     let plan = use_align::plan_alignment(&root, name)?;
@@ -8779,13 +8802,18 @@ mod tests {
             run(&["use", "vlt"]).contains("npm, pnpm, yarn, bun, or nub"),
             "an unsupported PM names the use target set"
         );
-        // `use nub` is a live target (the full switch) but takes no version:
-        // it pins the running nub.
-        let err = run(&["use", "nub@1.2.3"]);
-        assert!(
-            err.contains("takes no version") && err.contains("nub upgrade"),
-            "`use nub@<v>` must refuse with the self-version rule: {err}"
-        );
+        // `use nub` is a live target (the full switch). Bare + `nub@<exact>` are
+        // both valid; only a range/dist-tag spec is refused — nub is the running
+        // binary, so there is nothing to resolve a range against. Both a dist-tag
+        // (`next`) and a digit-LEADING range (`1.x`) must be caught: the guard
+        // requires an exact semver parse, not merely a leading digit.
+        for bad in ["nub@next", "nub@1.x", "nub@1", "nub@^1.2.3"] {
+            let err = run(&["use", bad]);
+            assert!(
+                err.contains("needs an exact version") && err.contains("running binary"),
+                "`use {bad}` must refuse with the exact-version rule: {err}"
+            );
+        }
         assert!(
             run(&["use", "pnpm@"]).contains("empty version spec"),
             "a trailing @ is named, not treated as latest"
