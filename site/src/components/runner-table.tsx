@@ -49,6 +49,7 @@ export function ColGlow({ children }: { children: ReactNode }) {
         [&_table]:my-0 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm
         [&_thead_tr]:border-b [&_thead_tr]:border-fd-border [&_thead_tr]:bg-fd-muted/40
         [&_th]:whitespace-nowrap [&_th]:px-2 [&_th]:py-2.5 [&_th]:text-center [&_th]:text-xs [&_th]:font-medium [&_th]:text-fd-muted-foreground
+        [&_th_code]:!bg-transparent [&_th_code]:!p-0 [&_th_code]:!text-inherit
         [&_td]:px-2 [&_td]:py-2.5 [&_td]:text-center [&_td]:align-middle
         [&_tbody_tr]:border-b [&_tbody_tr]:border-fd-border/60 [&_tbody_tr:last-child]:border-0
         [&_th:first-child]:px-4 [&_th:first-child]:text-left [&_td:first-child]:whitespace-nowrap [&_td:first-child]:px-4 [&_td:first-child]:text-left
