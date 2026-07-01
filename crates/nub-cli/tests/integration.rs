@@ -1296,6 +1296,34 @@ fn fork_ts_with_ipc() {
 }
 
 #[test]
+fn preload_flag_rides_node_options_only_never_argv() {
+    // Dual-channel doubling regression, tier-robust. On the `nub <file>` path the
+    // preload flag (fast tier `--require`, compat tier `--import`) must ride
+    // NODE_OPTIONS ONLY, never also argv. A tool that rebuilds a fork's flags by
+    // MERGING process.execArgv + NODE_OPTIONS (Next `next build`, jest-worker)
+    // would otherwise collect the preload path TWICE and space-join the quoted
+    // duplicate into one broken `--require "a b"`, killing the fork with
+    // `Cannot find module 'a b'`. The invariant that kills the bug on EVERY tier:
+    // the preload is present in NODE_OPTIONS, ABSENT from execArgv, so a merge
+    // collects it exactly once. (Verified failing pre-fix — `preload-in-argv:true`,
+    // `preload-merged-count:2` — on both the fast and compat tiers.)
+    let (stdout, stderr, code) = run_nub("nested-spawn", "fork-reconstruct-parent.ts");
+    assert_eq!(code, 0, "reconstruct parent should exit 0: {stderr}");
+    assert!(
+        stdout.contains("preload-in-argv:false"),
+        "the preload flag must NOT be on argv (argv+NODE_OPTIONS double is the bug): {stdout}"
+    );
+    assert!(
+        stdout.contains("preload-in-node-options:true"),
+        "the preload flag must ride NODE_OPTIONS (how the direct child stays augmented): {stdout}"
+    );
+    assert!(
+        stdout.contains("preload-merged-count:1"),
+        "a fork that merges execArgv+NODE_OPTIONS must see the preload exactly once: {stdout}"
+    );
+}
+
+#[test]
 fn absolute_path_node_spawn() {
     let (stdout, stderr, code) = run_nub("nested-spawn", "abs-spawn.ts");
     assert_eq!(code, 0, "abs-path spawn should work: {stderr}");
@@ -1305,7 +1333,7 @@ fn absolute_path_node_spawn() {
     );
     assert!(
         stdout.contains("abs-child-ok"),
-        "enum transpiled via NODE_OPTIONS dual-channel: {stdout}"
+        "enum transpiled via the inherited NODE_OPTIONS preload: {stdout}"
     );
 }
 
@@ -2603,10 +2631,10 @@ fn typeless_package_ts_with_esm_syntax_loads_as_esm() {
 
 #[test]
 fn worker_transpiles_ts_entry() {
-    // A `Worker(new URL("./worker.ts", ...))` inherits nub's augmentation, so the
-    // worker thread transpiles its own .ts entry — including non-erasable `enum`
-    // syntax. The preload runs exactly once per thread (Node dedupes the
-    // --import that arrives via both execArgv and NODE_OPTIONS).
+    // A `Worker(new URL("./worker.ts", ...))` inherits nub's augmentation via the
+    // inherited NODE_OPTIONS preload, so the worker thread transpiles its own .ts
+    // entry — including non-erasable `enum` syntax. The preload rides a single
+    // channel (NODE_OPTIONS, not argv), so it runs exactly once per thread.
     let (stdout, stderr, code) = run_nub("worker", "main.ts");
     assert_eq!(
         code, 0,
