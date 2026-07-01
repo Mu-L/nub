@@ -6,6 +6,7 @@
 mod agent;
 mod cli;
 mod pm_engine;
+mod self_shim;
 
 use anyhow::Result;
 
