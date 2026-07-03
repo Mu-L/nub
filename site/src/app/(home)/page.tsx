@@ -176,17 +176,15 @@ function HeroPill() {
       href="/blog/introducing-nub"
       className="group inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/50 py-1 pl-1 pr-3 text-sm leading-none text-fd-muted-foreground hover:border-ember/50"
     >
-      {/* Per-element optical nudges to a common center: with the pill's leading-none
-          line box + Encode Sans metrics, the mono caps badge rides ~1.9px HIGH while
-          the sans text + arrow sit ~1.5–2px LOW. Measured against the pill center and
-          corrected so all three share one optical baseline. */}
-      <span className="translate-y-[1.9px] rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
+      {/* flex items-center centers all three optically (verified to <0.25px against the
+          pill center); no manual vertical nudges. */}
+      <span className="rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
         New
       </span>
-      <span className="-translate-y-[1.5px] text-fd-foreground">Introducing Nub</span>
+      <span className="text-fd-foreground">Introducing Nub</span>
       <span
         aria-hidden
-        className="-translate-y-[2px] text-fd-muted-foreground transition-transform group-hover:translate-x-0.5"
+        className="text-fd-muted-foreground transition-transform group-hover:translate-x-0.5"
       >
         →
       </span>

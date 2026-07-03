@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type {
   BaseLayoutProps,
   LinkItemType,
@@ -34,14 +35,25 @@ export function githubPillLink(): LinkItemType {
   };
 }
 
+/* The nav links (Docs/Blog) are 14px; the wordmark is 18px. Their line boxes
+   center identically, but the ink CENTER-OF-MASS does not — the larger wordmark's
+   glyph mass sits lower, so flush-centered links read as riding high next to it.
+   Measured via an alpha-weighted-centroid rasterization of each label: wordmark
+   COM 34.42px vs unnudged links 32.10px. Wrapping the label in this relative span
+   is itself worth ~1.5px of the correction (it re-boxes the flex child); the
+   remaining top:0.8px lands the links' COM at 34.40 — one optical center. */
+function NavLabel({ children }: { children: ReactNode }) {
+  return <span className="relative top-[0.8px]">{children}</span>;
+}
+
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
       title: <Wordmark />,
     },
     links: [
-      { text: 'Docs', url: '/docs', active: 'nested-url' },
-      { text: 'Blog', url: '/blog', active: 'nested-url' },
+      { text: <NavLabel>Docs</NavLabel>, url: '/docs', active: 'nested-url' },
+      { text: <NavLabel>Blog</NavLabel>, url: '/blog', active: 'nested-url' },
       githubPillLink(),
     ],
     themeSwitch: { enabled: true },
