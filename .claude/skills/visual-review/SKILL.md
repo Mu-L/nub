@@ -6,8 +6,10 @@ description: >-
   chrome-devtools MCP `evaluate_script` tool — instead of eyeballing a flat
   screenshot. Invoke BEFORE declaring any UI, site, or styling/layout change
   correct. Screenshots have no depth buffer, so z-index/occlusion/clip bugs are
-  exactly where "just look at it" fails; the four `evaluate_script` routines
-  below turn those fuzzy visual judgments into deterministic measurements.
+  exactly where "just look at it" fails; the `evaluate_script` routines below
+  turn those fuzzy visual judgments into deterministic measurements — including
+  optical center-of-mass, which measures the glyph ink's true visual center so
+  differently-sized labels can be aligned by more than eye.
 ---
 
 # Visual review — compute occlusion, don't perceive it
@@ -32,7 +34,7 @@ The discipline: when something "is correct" but the user (or you) sees it as off
 
 ---
 
-## The four `evaluate_script` routines
+## The `evaluate_script` routines
 
 Replace `'SELECTOR'` with a real CSS selector before running.
 
@@ -107,6 +109,56 @@ Compares two elements numerically. Use for anything that should align or sit at 
 
 State verdicts in px, not vibes: "left-edge delta 2px (clean)" or "gap 28px vs expected 24px."
 
+> ⚠️ `getBoundingClientRect` centers the **line box**, not the visible ink. For two elements at the **same** font-size this is fine. For elements at **different** font-sizes that must look centered together (a large wordmark beside small nav links, a caps badge beside body text), box-center is the wrong metric — they can be box-centered and still read as misaligned. Use routine §5 instead.
+
+### 5 — Optical center of mass (different font-sizes / "looks off but measures equal")
+
+This is the routine the "optical ≠ mathematical" section demands and §3 can't give you. It measures the **alpha-weighted centroid of the actual glyph ink** — the true optical center — by rasterizing each label's computed font to a canvas (no screenshot, no external image library: Canvas 2D + `getImageData` IS the raster surface). The full implementation lives next to this skill in [`optical-center.js`](optical-center.js); inline it into one `evaluate_script` call.
+
+```js
+// after inlining optical-center.js in the same evaluate_script:
+opticalCenter(['.wordmark', 'a[href="/docs"]', 'a[href="/blog"]'])
+//  → results:[{selector, comY, deltaFromAnchor}],  cssHint:[{selector, nudge}]
+//    deltaFromAnchor ~0 = optically aligned; cssHint gives the ready-to-paste translate.
+```
+
+- **One call does measure + fix + verify.** Pass `{ apply: true }` and it nudges each non-anchor toward the anchor, **re-measures the real post-nudge DOM, and iterates** — so it converges on the true residual even when the nudge (or a wrapping element) perturbs the baseline. Returns `{ before, after, appliedTranslateY }`. This is what turns a naive "−2.3px" into the correct value once the nudge is expressed as a wrapping span. Don't hand-derive nudges across a layout change — let the loop converge, then transcribe `appliedTranslateY` to CSS.
+- **`{ overlay: true }` paints the analysis onto the page** — a guide line on each label's COM (anchor solid-green, others dashed-red) with a px-delta label — so the **next screenshot self-documents** instead of making you reconcile a JSON number against a flat PNG.
+- **Anchor choice matters.** A **filled** pill/badge is optically centered by its BOX, not its caps ink; anchor to a bare-glyph sibling (or accept a sub-px residual) rather than dragging text to a caps centroid.
+- **Gotcha (auto-handled):** the baseline probe uses `vertical-align:baseline`, which flex/grid **ignore** — so the tool auto-descends from a flex `<a>` to the inline element that actually hosts the text. Hand it the natural selector; it finds the text host.
+- **Scope:** exact for a single line of plain text. Letter-spacing, `text-shadow`, `-webkit-text-stroke`, gradient text, or arbitrary raster content aren't in the font render — for those, screenshot the element's clip box and centroid the real pixels (draw the PNG into a canvas via `Image`+`getImageData`; still no external lib), or just trust the eye.
+
+**Integration — keep it to ONE tool call.** Steady-state usage is a single `evaluate_script`: inline the function + call it. To avoid re-inlining ~6KB every time, define it once via `navigate_page`'s `initScript` (runs on every new document) so `window.opticalCenter` is present in every later `evaluate_script` as a one-liner. The measure→apply→verify chain is NOT a series of calls — `{ apply: true }` does all three in-page and returns before/after. The only irreducible handoff is live-DOM → source CSS (the tool can't edit your source); `cssHint`/`appliedTranslateY` hand you the exact value to paste.
+
+### Works with any browser-automation tool
+
+`optical-center.js` is a bare, dependency-free function with JSON-in/JSON-out and no closure over outer scope — so it rides on **any** tool's evaluate primitive. The universal pattern is always the same two steps: **inject the source once (defines `window.opticalCenter`) → call it.** No MCP server needed; the overlay is drawn in-page, so every tool's own screenshot captures it.
+
+```js
+// chrome-devtools MCP — inline in one evaluate_script, or persist via initScript:
+navigate_page({ url, initScript: <contents of optical-center.js> })
+evaluate_script(`() => window.opticalCenter(['.wm','a[href="/docs"]'], { overlay:true })`)
+
+// Playwright (Node):
+await page.addInitScript({ path: 'optical-center.js' });     // window.opticalCenter on every doc
+const r = await page.evaluate(([t,o]) => window.opticalCenter(t,o),
+                              [['.wm','a[href="/docs"]'], { apply:true }]);
+
+// Puppeteer:
+await page.evaluateOnNewDocument(fs.readFileSync('optical-center.js','utf8'));
+const r = await page.evaluate((t,o) => window.opticalCenter(t,o),
+                              ['.wm','a[href="/docs"]'], { overlay:true });
+
+// Selenium / WebDriver (any language):
+driver.execute_script(open('optical-center.js').read())       // define it once
+r = driver.execute_script("return window.opticalCenter(arguments[0], arguments[1])",
+                          ['.wm', 'a[href="/docs"]'], { 'apply': True })
+
+// DevTools console / bookmarklet: paste the file, then call opticalCenter([...]).
+```
+
+The invariants that keep it portable — **don't break these** when editing the file: no `import`/`export`/`require` in the injected source, args stay plain JSON, the return stays JSON-serializable (never hand back a DOM node), and it keeps defining a single global. Those four are exactly what let one artifact serve chrome-devtools MCP, Playwright, Puppeteer, Selenium, and a bookmarklet unchanged.
+
 ### 4 — Viewport and off-screen
 
 An element pushed off-canvas reads out-of-viewport even when the screenshot crops it away:
@@ -132,7 +184,7 @@ Run this for any change to `site/` or other rendered UI. Steps 3–4 are the non
 2. **Console** — `list_console_messages`. A 200 response alongside a thrown error is still a broken page.
 3. **Occlusion pass** — run routine §1 on the changed element AND any neighbors near fixed/sticky/absolute/overlay elements (nav bars, modals, tooltips, dropdowns, sticky headers). `coverage < 1` with a non-ancestor cover → flag it.
 4. **Clip pass** — run routine §2 on the changed element.
-5. **Alignment/spacing pass** — for anything that should align or sit at a fixed gap, run §3. Assert the px deltas; don't eyeball.
+5. **Alignment/spacing pass** — for anything that should align or sit at a fixed gap, run §3. Assert the px deltas; don't eyeball. For labels at **different font-sizes** that must look centered together, run §5 (optical center of mass) — box-center (§3) is the wrong metric there.
 6. **Viewport pass** — confirm the element's box is inside `innerWidth/innerHeight` via §4.
 7. **State the verdict in measurements.** "coverage 1.0, clip: false, left-edge delta 0px" is a clean bill of health. "coverage 0.62, coveredBy: nav.topbar" is a flag. Never a bare "looks great."
 
