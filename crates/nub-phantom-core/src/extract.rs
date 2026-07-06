@@ -9,9 +9,11 @@
 //! spec classifies soft (e.g. `if (typeof phantom !== 'undefined') require('system')`,
 //! or `try { require('opt') } catch {}`). A top-level, unconditional require is
 //! hard. Type-only imports/exports are dropped — they are erased before runtime
-//! and would false-flag a devDep-typed package as a phantom. Dynamic specifiers
-//! (template/computed) are not recorded: they cannot be attributed to a package
-//! name, and guessing would risk a false positive.
+//! and would false-flag a devDep-typed package as a phantom. A dynamic
+//! `import(...)`/`require(...)`/`createRequire(...)(...)` is recorded only when
+//! its argument is a STATIC string (a literal, or a no-substitution template);
+//! a substituted-template or computed specifier cannot be attributed to a
+//! package name and is skipped — guessing would risk a false positive.
 //!
 //! Guard-ness is LEXICAL, not control-flow: a require in a function DECLARED
 //! inside an `if`/`try` is marked soft even if that function is later called
@@ -52,9 +54,9 @@ pub struct Occurrence {
 /// specifier occurrence. A parse that panics yields an empty list (the file is
 /// simply not analyzed rather than aborting the package).
 ///
-/// This is the BASELINE (full guard-aware AST visit) path. [`extract_optimized`]
-/// is the production entry — it applies a cost ladder that reaches this same
-/// full walk only for files that can actually carry a guarded (CJS) load.
+/// The production extraction path: a full, guard-aware AST visit. (A
+/// static-imports-only fast-path ladder was built and benchmarked but regressed
+/// the parse-dominated scan, so it was removed.)
 pub fn extract(path: &str, source: &str) -> Vec<Occurrence> {
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
@@ -68,143 +70,6 @@ pub fn extract(path: &str, source: &str) -> Vec<Occurrence> {
     };
     v.visit_program(&ret.program);
     v.out
-}
-
-/// The static-imports-only cost ladder — same outputs as [`extract`] on the
-/// phantom-relevant dimension (every recorded specifier + its correct `soft`
-/// flag) for all ordinary code, reached by the cheapest rung complete for the
-/// file's shape. INVESTIGATED + MEASURED but NOT the production path — it
-/// regresses the scan (parse+IO-dominated, CJS-heavy reachable graphs), so
-/// production uses [`extract`] (see `nub-phantom-scan::graph::extract_file`).
-///
-/// Residual known gap (why not "identical for EVERY input"): rung routing keys on
-/// a BYTE scan for a dynamic `import(` call ([`has_dynamic_import_call`]), which
-/// recognizes ASCII whitespace between `import` and `(` but NOT a comment or an
-/// exotic Unicode separator (`\u{A0}`, `\u{FEFF}`) there — `import/*c*/("x")`
-/// would route to the static-ESM rung and be dropped. Such forms are
-/// near-nonexistent in published code and the ladder is unused in production, so
-/// this is documented rather than fully closed.
-///
-/// The insight (why this is sound, not a heuristic): a `soft` (guarded) load can
-/// only occur inside a `try`/`catch` or a conditional branch, and the ONLY module
-/// forms that can be nested inside those are runtime CALLS — `require(...)`,
-/// `require.resolve(...)`, and dynamic `import(...)`. Static ESM `import ... from`
-/// / `export ... from` declarations are hoisted and, by the language grammar,
-/// exist ONLY at the top level of a module — they can never be guarded, so they
-/// are always hard. So:
-///
-/// - **(a) byte pre-filter** — a source with none of the substrings `import`,
-///   `require`, `from` has no module edge at all → return empty, no parse.
-/// - **(b) static-ESM fast path** — a source with no `require` substring and no
-///   dynamic-`import(` call has ONLY top-level static declarations. Parse once
-///   (oxc, cheap) but skip the deep AST visit: scan `program.body` at the top
-///   level. Complete by the grammar rule above, and every hit is hard.
-/// - **(c) guard-aware full walk** — a source containing `require` or a dynamic
-///   `import(` may carry a guarded load, so it needs the full guard-modeling
-///   visit ([`extract`]). This is the ONLY rung whose precision (`soft` vs hard)
-///   depends on control-flow nesting, and it is reserved for exactly the files
-///   that can express it.
-pub fn extract_optimized(path: &str, source: &str) -> Vec<Occurrence> {
-    // (a) No module-edge substring anywhere → nothing to record. `from` catches
-    // `export … from` / `import … from`; `import`/`require` catch the rest
-    // (bare imports, dynamic imports, requires, require.resolve).
-    if !contains_module_edge_bytes(source) {
-        return Vec::new();
-    }
-
-    // (c) Anything that could carry a GUARDED (soft) load — a `require`/
-    // `require.resolve` (CJS, the only form guardable in try/catch) or a dynamic
-    // `import(` call — takes the full guard-aware visit. `has_dynamic_import_call`
-    // distinguishes the dynamic `import(` call from a static `import … from`.
-    if source.contains("require") || has_dynamic_import_call(source) {
-        return extract(path, source);
-    }
-
-    // (b) Static-ESM only. Parse, then read top-level declarations without the
-    // deep recursive walk — sound because static import/export-from are
-    // grammatically top-level-only, and all are unguarded (hard).
-    let allocator = Allocator::default();
-    let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
-    let ret = Parser::new(&allocator, source, source_type).parse();
-    if ret.panicked {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for stmt in &ret.program.body {
-        record_toplevel_static(stmt, &mut out);
-    }
-    out
-}
-
-/// Byte pre-filter for rung (a): true if `source` contains any substring that a
-/// static or runtime module edge must contain. Conservative — only a source with
-/// NONE of these can be skipped without a parse.
-fn contains_module_edge_bytes(source: &str) -> bool {
-    source.contains("import") || source.contains("require") || source.contains("from")
-}
-
-/// True if `source` contains a dynamic `import(` CALL (as opposed to only static
-/// `import … from` declarations). A dynamic import call is the token `import`
-/// immediately followed (modulo insignificant whitespace) by `(`. This is a byte
-/// scan, not a parse: it only decides whether the guard-aware rung (c) is needed;
-/// a false positive merely routes the file to the (still-correct) full walk.
-fn has_dynamic_import_call(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    while let Some(pos) = source[i..].find("import") {
-        let start = i + pos;
-        let mut j = start + "import".len();
-        // ASCII whitespace incl. CRLF (`\r`), vertical tab (`\x0b`), form feed
-        // (`\x0c`) — the realistic separators. (Comment / Unicode-space
-        // separators are the documented residual gap.)
-        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
-            j += 1;
-        }
-        if j < bytes.len() && bytes[j] == b'(' {
-            return true;
-        }
-        i = start + "import".len();
-    }
-    false
-}
-
-/// Record a top-level static `import`/`export … from` declaration (rung (b)).
-/// Mirrors the import/re-export arms of [`SpecVisitor::visit_statement`] but does
-/// NOT recurse — the caller iterates `program.body` directly. Every occurrence is
-/// unguarded (`soft: false`) because a static declaration cannot be nested in a
-/// guard.
-fn record_toplevel_static(stmt: &Statement<'_>, out: &mut Vec<Occurrence>) {
-    match stmt {
-        Statement::ImportDeclaration(decl)
-            if !decl.import_kind.is_type() && import_has_value(decl) =>
-        {
-            out.push(Occurrence {
-                spec: decl.source.value.to_string(),
-                soft: false,
-                kind: RefKind::StaticImport,
-            });
-        }
-        Statement::ExportNamedDeclaration(decl) => {
-            if let Some(src) = &decl.source
-                && !decl.export_kind.is_type()
-                && export_named_has_value(decl)
-            {
-                out.push(Occurrence {
-                    spec: src.value.to_string(),
-                    soft: false,
-                    kind: RefKind::ReExport,
-                });
-            }
-        }
-        Statement::ExportAllDeclaration(decl) if !decl.export_kind.is_type() => {
-            out.push(Occurrence {
-                spec: decl.source.value.to_string(),
-                soft: false,
-                kind: RefKind::ReExport,
-            });
-        }
-        _ => {}
-    }
 }
 
 struct SpecVisitor {
@@ -296,14 +161,15 @@ impl<'a> Visit<'a> for SpecVisitor {
 
     fn visit_expression(&mut self, it: &Expression<'a>) {
         match it {
-            // Dynamic `import("x")` — only a string-literal argument is
-            // attributable to a package; template/computed sources are skipped.
+            // Dynamic `import(...)` — attributable when the source is a static
+            // string: a literal, or a no-substitution template (`import(`react`)`).
+            // A substituted template / computed source is skipped.
             Expression::ImportExpression(imp) => {
-                if let Expression::StringLiteral(s) = &imp.source {
-                    self.record(&s.value, RefKind::DynamicImport);
+                if let Some(spec) = static_string(&imp.source) {
+                    self.record(spec, RefKind::DynamicImport);
                 }
             }
-            // `require("x")` / `require.resolve("x")`.
+            // `require("x")` / `require.resolve("x")` / `createRequire(...)("x")`.
             Expression::CallExpression(call) => {
                 if let Some((spec, kind)) = require_call(call) {
                     self.record(spec, kind);
@@ -335,8 +201,9 @@ fn export_named_has_value(decl: &oxc_ast::ast::ExportNamedDeclaration<'_>) -> bo
     decl.specifiers.is_empty() || decl.specifiers.iter().any(|s| !s.export_kind.is_type())
 }
 
-/// If `call` is `require("lit")` or `require.resolve("lit")`, return the literal
-/// specifier and which. Any non-string-literal argument yields `None`.
+/// If `call` is `require("lit")`, `require.resolve("lit")`, or the immediately-
+/// invoked `createRequire(...)("lit")`, return the literal specifier and which.
+/// Any non-string-literal argument yields `None`.
 fn require_call<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option<(&'a str, RefKind)> {
     let kind = match &call.callee {
         Expression::Identifier(id) if id.name == "require" => RefKind::Require,
@@ -346,10 +213,41 @@ fn require_call<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option<(&'a s
             }
             _ => return None,
         },
+        // `createRequire(import.meta.url)("lit")` — the immediately-invoked form:
+        // the callee is itself a `createRequire(...)` call whose result is a
+        // require function, so a string-literal outer argument is a real edge.
+        // ONLY the direct IIFE is handled; a name bound to `createRequire(...)`
+        // and called later needs dataflow and stays skipped (no false positives).
+        Expression::CallExpression(inner) if is_create_require(&inner.callee) => RefKind::Require,
         _ => return None,
     };
     match call.arguments.first() {
         Some(Argument::StringLiteral(s)) => Some((&s.value, kind)),
+        _ => None,
+    }
+}
+
+/// True if `callee` names `createRequire` — bare (`createRequire(...)`) or a
+/// member (`module.createRequire(...)`). The receiver is not checked: only Node's
+/// `createRequire` uses this name, and the outer call's argument must still be a
+/// string literal for anything to be recorded.
+fn is_create_require(callee: &Expression<'_>) -> bool {
+    match callee {
+        Expression::Identifier(id) => id.name == "createRequire",
+        Expression::StaticMemberExpression(m) => m.property.name == "createRequire",
+        _ => false,
+    }
+}
+
+/// The statically-known string value of `expr`: a string literal, or a template
+/// literal with no substitutions (a single quasi with a cooked value). A
+/// substituted template or any computed expression has no attributable value.
+fn static_string<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::StringLiteral(s) => Some(&s.value),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => {
+            t.quasis.first().and_then(|q| q.value.cooked.as_deref())
+        }
         _ => None,
     }
 }
@@ -457,71 +355,43 @@ mod tests {
         assert!(got.is_empty(), "no attributable string literal → skip");
     }
 
-    /// The optimization invariant: `extract_optimized` must record the SAME
-    /// (spec, soft, kind) multiset as the baseline `extract` for every input,
-    /// regardless of which rung it takes. This is what lets the fast rungs stand
-    /// in for the full walk without changing a single phantom verdict.
     #[test]
-    fn optimized_matches_baseline_across_all_shapes() {
-        use super::extract_optimized;
-        // One representative per rung + the tricky guard/type/dynamic cases.
-        let cases: &[(&str, &str)] = &[
-            // rung (a): no module edge at all.
-            ("a.mjs", "const x = 1 + 2; export const y = fromNowhere(x);"),
-            // rung (b): static ESM only (import/export-from, bare, type-mixed).
-            (
-                "b.mts",
-                r#"import a from "aa";
-                   import "side-effect";
-                   export { z } from "zz";
-                   export * from "ss";
-                   import type { T } from "type-pkg";
-                   import { type Only } from "inline-type-pkg";
-                   import { value, type Also } from "mixed-pkg";"#,
-            ),
-            // rung (c): require + require.resolve + guards + dynamic import.
-            (
-                "c.js",
-                r#"const hard = require("hard-dep");
-                   let opt; try { opt = require("soft-dep"); } catch {}
-                   if (typeof p !== "undefined") { require("system"); }
-                   const t = flag ? require("tern") : null;
-                   const a = cond && require("andg");
-                   require.resolve("rr");
-                   const d = await import("dyn-lit");
-                   require("pre" + "fix");
-                   import(`tpl${x}`);"#,
-            ),
-            // rung (c) via a lone dynamic import call, no require present.
-            (
-                "d.mjs",
-                r#"import base from "base-pkg";
-                   const m = await import("dyn-only");
-                   if (cond) { const g = await import("guarded-dyn"); }"#,
-            ),
-            // CRLF + form-feed between `import` and `(` must still route to
-            // rung (c) (regression guard for the has_dynamic_import_call ws set).
-            ("e.mjs", "const x = import\r\n(\"dyn-crlf\");"),
-            ("f.mjs", "const y = import\u{0c}(\"dyn-ff\");"),
-        ];
-        let sorted = |mut v: Vec<(String, bool, RefKind)>| {
-            v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            v
-        };
-        for (path, src) in cases {
-            let base = sorted(
-                extract(path, src)
-                    .into_iter()
-                    .map(|o| (o.spec, o.soft, o.kind))
-                    .collect(),
-            );
-            let opt = sorted(
-                extract_optimized(path, src)
-                    .into_iter()
-                    .map(|o| (o.spec, o.soft, o.kind))
-                    .collect(),
-            );
-            assert_eq!(base, opt, "rung parity mismatch for {path}");
-        }
+    fn createrequire_iife_and_no_substitution_template_are_caught() {
+        // R3: two analyzable dynamic forms previously dropped as false negatives —
+        // both carry a static string target. Guard-aware, like a bare require().
+        let got = specs(
+            r#"
+            const a = createRequire(import.meta.url)("cr-dep");
+            const b = module.createRequire(import.meta.url)("cr-member-dep");
+            const c = await import(`tpl-lit`);
+            let g;
+            if (cond) { g = createRequire(import.meta.url)("cr-guarded"); }
+            "#,
+        );
+        let has = |n: &str| got.iter().any(|(s, _, _)| s == n);
+        assert!(has("cr-dep"), "createRequire(...)('lit') is a require edge");
+        assert!(has("cr-member-dep"), "module.createRequire(...)('lit') too");
+        assert!(
+            has("tpl-lit"),
+            "no-substitution import(`lit`) is analyzable"
+        );
+        let soft = |n: &str| got.iter().find(|(s, _, _)| s == n).unwrap().1;
+        assert!(!soft("cr-dep"), "top-level createRequire require is hard");
+        assert!(soft("cr-guarded"), "createRequire in an if-branch is soft");
+
+        // Boundary — no new false positives: a createRequire result bound to a
+        // name and called later (needs dataflow) and a SUBSTITUTED template both
+        // stay skipped.
+        let neg = specs(
+            r#"
+            const r = createRequire(import.meta.url);
+            r("bound-later");
+            const d = import(`pre-${x}`);
+            "#,
+        );
+        assert!(
+            neg.is_empty(),
+            "bound-then-called createRequire + substituted template stay skipped"
+        );
     }
 }
