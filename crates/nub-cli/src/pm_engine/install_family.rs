@@ -1107,7 +1107,7 @@ pub fn run_install(flags: InstallFlags) -> Result<i32> {
     // Virgin install only: stamp a caret RANGE into `devEngines.packageManager`
     // so the project advertises nub the standard, cross-tool way WITHOUT locking
     // itself to one exact nub version. nub's canonical lockfile is deliberately
-    // NEUTRAL (`lock.yaml`), so — unlike every other PM, whose branded lockfile
+    // NEUTRAL (`nub.lock`), so — unlike every other PM, whose branded lockfile
     // is itself the repo's PM signal — nub leaves no signal downstream tools
     // (turbo, pmd, nypm) can read; the `devEngines.packageManager` object IS that
     // signal, and detectors key on its `name`, so a `^` range is signal-equivalent
@@ -1115,7 +1115,7 @@ pub fn run_install(flags: InstallFlags) -> Result<i32> {
     // NOT the exact `packageManager: nub@<v>` field: that hard, corepack-visible
     // pin freezes the repo at one nub version and stays the OPT-IN gesture of an
     // explicit `nub pm use nub@<exact>`. The write is gated on
-    // `session.truly_fresh`, captured BEFORE the engine wrote `lock.yaml`: `true`
+    // `session.truly_fresh`, captured BEFORE the engine wrote `nub.lock`: `true`
     // ONLY when nub is the FIRST package manager to touch the project (no foreign
     // lockfile, no pre-existing nub lockfile, no `packageManager`/`devEngines`
     // declaration). Any incumbent signal ⇒ `false` ⇒ no write — nub never imposes
@@ -1241,6 +1241,10 @@ pub fn run_ci(flags: CiFlags) -> Result<i32> {
     // ci's frozen node_modules is COPY-relocatable across multi-stage Docker
     // (#241); isolation/phantom-dep protection is preserved.
     let session = super::engine_session_ci(flags.dir.as_deref())?;
+    // `ci` is a frozen, ephemeral install — it NEVER writes the lockfile, so
+    // the writer's `lock.yaml` → `nub.lock` migration (which rides a real
+    // write) never fires. Read-both still lets it install from an existing
+    // `lock.yaml`; it just leaves the file untouched.
     if let Some(err) = pnpm_lockfile_version_preflight(&session) {
         return Err(err);
     }

@@ -128,6 +128,23 @@ pub fn write_lockfile_as(
     };
     let path = project_dir.join(&filename);
 
+    // Pre-rename LEGACY files for nub's OWN canonical lockfile (a filename
+    // transition, e.g. `lock.yaml` → `nub.lock`). Only the canonical (Aube)
+    // kind carries them and the list is EMPTY for standalone aube, so every
+    // branch below is inert there — fork-discipline: the default path is
+    // byte-for-byte unchanged. A present legacy file is nub's not-yet-migrated
+    // lockfile; the migration to `path` rides the first REAL write below.
+    let legacy_present: Vec<PathBuf> = if kind == LockfileKind::Aube {
+        aube_util::embedder()
+            .lockfile_legacy_basenames
+            .iter()
+            .map(|name| project_dir.join(name))
+            .filter(|p| *p != path && p.is_file())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // No-churn write guard (embedder opt-in; default upstream = always
     // write). When the embedder enables it, skip the write if the graph
     // we'd serialize is identical (by engine-agnostic graph-identity
@@ -139,14 +156,41 @@ pub fn write_lockfile_as(
     // the comparison runs ONLY behind the embedder toggle, and any
     // failure to read/parse the existing file falls through to a normal
     // write (the feature is additive, never load-bearing).
-    if aube_util::embedder().no_churn_lockfile_write
-        && lockfile_write_is_noop(&path, kind, graph, manifest)
-    {
-        tracing::debug!(
-            "no-churn: resolved graph matches existing {}; skipping rewrite",
-            filename
-        );
-        return Ok(path);
+    //
+    // The comparison targets the CURRENT-name file when present, else nub's
+    // pre-rename LEGACY file. That legacy fallback is what keeps a no-op op on
+    // a not-yet-migrated project from writing anything: a graph-equal install /
+    // `--force` re-resolve leaves the old lockfile exactly as-is (no rename, no
+    // new file). The rename rides ONLY a real change (the write below).
+    if aube_util::embedder().no_churn_lockfile_write {
+        let compare_against = if path.exists() {
+            Some(path.clone())
+        } else {
+            legacy_present.first().cloned()
+        };
+        if let Some(existing) = compare_against
+            && lockfile_write_is_noop(&existing, kind, graph, manifest)
+        {
+            tracing::debug!(
+                "no-churn: resolved graph matches existing {}; skipping rewrite",
+                existing
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&filename)
+            );
+            // Never leave two canonical lockfiles: when the CURRENT-name file is
+            // the one we matched (it exists), a pre-rename dup beside it is
+            // redundant cruft (reads resolve to the current name) — prune it.
+            // When only the legacy exists, it stays untouched (the no-op
+            // contract: a no-op op on a not-yet-migrated project changes
+            // nothing).
+            if path.exists() {
+                for lp in &legacy_present {
+                    let _ = std::fs::remove_file(lp);
+                }
+            }
+            return Ok(path);
+        }
     }
 
     match kind {
@@ -155,6 +199,14 @@ pub fn write_lockfile_as(
         LockfileKind::Yarn => yarn::write_classic(&path, graph, manifest)?,
         LockfileKind::YarnBerry => yarn::write_berry(&path, graph, manifest)?,
         LockfileKind::Bun => bun::write(&path, graph, manifest)?,
+    }
+
+    // A real canonical write just landed under the CURRENT name; complete the
+    // one-time rename by removing any pre-rename LEGACY file so the project ends
+    // on exactly ONE lockfile. Reached only on a genuine change (the no-churn
+    // guard returned above otherwise), so this never fires on a no-op op.
+    for lp in &legacy_present {
+        let _ = std::fs::remove_file(lp);
     }
     Ok(path)
 }
@@ -273,25 +325,43 @@ fn has_conflict_markers(content: &str) -> bool {
 /// YAML parse + a `git branch --show-current` subprocess just to
 /// recompute a value that can't change mid-process.
 pub fn aube_lock_filename(project_dir: &Path) -> String {
+    let basename = aube_util::embedder().lockfile_basename;
+    match resolved_branch(project_dir) {
+        // basename is "<stem>.<ext>" (e.g. "aube-lock.yaml"); branch lockfiles
+        // splice the branch in as "<stem>.<branch>.<ext>".
+        Some(branch) => {
+            let (stem, ext) = basename.rsplit_once('.').unwrap_or((basename, "yaml"));
+            format!("{stem}.{branch}.{ext}")
+        }
+        None => basename.to_string(),
+    }
+}
+
+/// The slash-encoded current branch when `gitBranchLockfile` is on and the
+/// project is on a branch; `None` otherwise. Memoized per `project_dir` for
+/// the process (an install resolves a lockfile name 3–5 times, and each
+/// resolution would otherwise pay a YAML parse + a `git branch --show-current`
+/// subprocess to recompute a value that can't change mid-process).
+///
+/// This is the single source of the branch suffix shared by
+/// [`aube_lock_filename`] and [`pnpm_lock_filename`] so the two filenames stay
+/// in lockstep WITHOUT one being string-derived from the other — the derivation
+/// must not assume the canonical and pnpm names share an extension (they don't
+/// once an embedder picks a basename like `package.lock`).
+fn resolved_branch(project_dir: &Path) -> Option<String> {
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, String>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, Option<String>>>> =
+        OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     if let Ok(map) = cache.lock()
         && let Some(hit) = map.get(project_dir)
     {
         return hit.clone();
     }
-    let basename = aube_util::embedder().lockfile_basename;
-    // basename is "<stem>.<ext>" (e.g. "aube-lock.yaml"); branch lockfiles
-    // splice the branch in as "<stem>.<branch>.<ext>".
-    let (stem, ext) = basename.rsplit_once('.').unwrap_or((basename, "yaml"));
-    let resolved = if !git_branch_lockfile_enabled(project_dir) {
-        basename.to_string()
+    let resolved = if git_branch_lockfile_enabled(project_dir) {
+        current_git_branch(project_dir).map(|branch| branch.replace('/', "!"))
     } else {
-        match current_git_branch(project_dir) {
-            Some(branch) => format!("{stem}.{}.{ext}", branch.replace('/', "!")),
-            None => basename.to_string(),
-        }
+        None
     };
     if let Ok(mut map) = cache.lock() {
         map.insert(project_dir.to_path_buf(), resolved.clone());
@@ -301,19 +371,16 @@ pub fn aube_lock_filename(project_dir: &Path) -> String {
 
 /// Resolve the pnpm lockfile filename for `project_dir`.
 ///
-/// Mirrors [`aube_lock_filename`] for branch lockfiles, but keeps the
-/// pnpm filename prefix so projects with an existing `pnpm-lock.yaml`
-/// keep writing to pnpm's file.
+/// Mirrors [`aube_lock_filename`] for branch lockfiles, but keeps pnpm's own
+/// `pnpm-lock` stem and `.yaml` extension so a project with an existing
+/// `pnpm-lock.yaml` keeps writing pnpm's file. Computed from the shared
+/// [`resolved_branch`] rather than string-rewriting the canonical name — the
+/// canonical basename's extension may not be `.yaml` (e.g. `package.lock`).
 pub fn pnpm_lock_filename(project_dir: &Path) -> String {
-    let aube_name = aube_lock_filename(project_dir);
-    // `aube_lock_filename` always returns "<stem>.<rest>", so strip_prefix
-    // always succeeds. The fallback is purely defensive.
-    let basename = aube_util::embedder().lockfile_basename;
-    let stem = basename.rsplit_once('.').map_or(basename, |(s, _)| s);
-    aube_name
-        .strip_prefix(&format!("{stem}."))
-        .map(|rest| format!("pnpm-lock.{rest}"))
-        .unwrap_or_else(|| "pnpm-lock.yaml".to_string())
+    match resolved_branch(project_dir) {
+        Some(branch) => format!("pnpm-lock.{branch}.yaml"),
+        None => "pnpm-lock.yaml".to_string(),
+    }
 }
 
 fn git_branch_lockfile_enabled(project_dir: &Path) -> bool {
@@ -424,11 +491,13 @@ pub(crate) fn lockfile_candidates(
     include_aube: bool,
 ) -> Vec<(PathBuf, LockfileKind)> {
     let basename = aube_util::embedder().lockfile_basename;
-    let stem = basename.rsplit_once('.').map_or(basename, |(s, _)| s);
 
     // The canonical (Aube) candidates: the branch-specific lockfile (if
     // `gitBranchLockfile` is on and we resolve a branch) then the plain
     // canonical lockfile, so a freshly-enabled branch still picks up the base.
+    // Then any LEGACY basenames the embedder still honors on read (a rename
+    // transition) — appended after the primary so the current name always wins
+    // when both are present.
     let mut aube_entries: Vec<(PathBuf, LockfileKind)> = Vec::new();
     if include_aube {
         let branch_name = aube_lock_filename(project_dir);
@@ -436,6 +505,9 @@ pub(crate) fn lockfile_candidates(
             aube_entries.push((project_dir.join(&branch_name), LockfileKind::Aube));
         }
         aube_entries.push((project_dir.join(basename), LockfileKind::Aube));
+        for legacy in aube_util::embedder().lockfile_legacy_basenames {
+            aube_entries.push((project_dir.join(legacy), LockfileKind::Aube));
+        }
     }
 
     // The foreign candidates, in their fixed precedence order. Preserve pnpm
@@ -443,13 +515,7 @@ pub(crate) fn lockfile_candidates(
     // mirrors the aube branch naming so a project already on pnpm branch
     // lockfiles keeps writing through that file.
     let mut foreign: Vec<(PathBuf, LockfileKind)> = Vec::new();
-    let pnpm_branch = {
-        let mut s = aube_lock_filename(project_dir);
-        if let Some(rest) = s.strip_prefix(&format!("{stem}.")) {
-            s = format!("pnpm-lock.{rest}");
-        }
-        s
-    };
+    let pnpm_branch = pnpm_lock_filename(project_dir);
     if pnpm_branch != "pnpm-lock.yaml" {
         foreign.push((project_dir.join(&pnpm_branch), LockfileKind::Pnpm));
     }
