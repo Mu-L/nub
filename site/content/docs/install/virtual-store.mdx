@@ -1,0 +1,51 @@
+---
+title: The virtual store
+description: Nub links an isolated, symlinked virtual store by default. Opt into a plain, flat node_modules — npm's layout — for one command or a whole project, and see how each package manager's own layout config maps onto it.
+---
+
+Every install links an **isolated virtual store** by default: direct dependencies sit at the top of `node_modules`, transitive packages link into a per-machine store, and undeclared (phantom) dependencies fail instead of resolving by accident. To get a plain, flat `node_modules` instead — npm's layout, no virtual store — set one line in `.npmrc`:
+
+```ini
+# .npmrc — flat, npm-style node_modules for the whole project
+node-linker=hoisted
+```
+
+The same for a single command, without touching config:
+
+```bash
+nub install --node-linker hoisted
+```
+
+This works under every incumbent — npm, pnpm, Yarn, Bun, and Nub-identity projects alike — because `node-linker` is a neutral key Nub reads from `.npmrc` regardless of which package manager owns the project. Files still materialize from the global content store by reflink or hardlink, so a flat tree costs little extra disk.
+
+<Callout title="node-linker is the layout, not the hoist patterns">
+The `node-linker` setting picks the layout: `isolated` (the default symlink tree) or `hoisted` (flat). It is unrelated to `hoist`, `shamefully-hoist`, and `public-hoist-pattern`, which lift packages to the top level *within* the isolated layout. To flatten the tree, reach for `node-linker` — the hoist patterns leave the virtual store in place.
+</Callout>
+
+## Per package manager
+
+Each package manager has its own flat-layout config. Nub honors the ones that carry real intent, and falls back to the neutral `node-linker` key for the rest:
+
+| Incumbent | Its own flat-layout config | Under Nub |
+|---|---|---|
+| **pnpm** | `node-linker=hoisted` in `.npmrc`, or `nodeLinker: hoisted` in `pnpm-workspace.yaml` | Honored — flat tree, no virtual store |
+| **npm** | `install-strategy=hoisted` | Ignored — it is npm's default, so it carries no signal; set `node-linker=hoisted` |
+| **Yarn** | `nodeLinker: node-modules` in `.yarnrc.yml` | Not read as a layout request; set `node-linker=hoisted` |
+| **Bun** | none — Bun is always flat-materialized | Set `node-linker=hoisted` |
+| **Nub** | `node-linker=hoisted` | Honored — flat tree, no virtual store |
+
+Nub scopes package-manager compatibility to the lockfile and dependency resolution; the install *layout* is its own axis, defaulting to the virtual store. So an incumbent's layout config only turns the virtual store off where it is an explicit, unambiguous choice — pnpm's `node-linker`, set by hand. The neutral `node-linker=hoisted` is the one lever that works everywhere.
+
+## Flat vs project-local
+
+Two settings turn off different halves of the default, for different reasons — pick by what you need:
+
+```ini
+# A flat, npm-style tree — no virtual store at all
+node-linker=hoisted
+
+# Keep the isolated layout, but move the store inside the project
+enableGlobalVirtualStore=false
+```
+
+The `enableGlobalVirtualStore=false` form keeps isolation and its phantom-dependency protection; it only relocates the store from the shared per-machine location to `node_modules/.nub/` inside the project. That makes the tree self-contained — it survives a Docker `COPY --from` into a fresh image, where the shared store would not exist. Nub already does this automatically in CI and under `nub ci`, so you rarely set it by hand. See [store and disk layout](/docs/install#store-and-disk-layout) for the shared-versus-project-local store in full.
