@@ -1189,19 +1189,19 @@ function HypermanagerBand() {
             }
             visual={
               <div className="nub-code-panel rounded-xl border p-6">
-                {/* Source: tests/bench/install/results/warm-t3-20260617-{100017,100453,100743}.json (create-t3-app, Next 16), warm + frozen + offline, node_modules wiped between runs. Bars are arithmetic means across 36 timed runs. */}
+                {/* Source: tests/bench/install/results/warm-tanstack-start-20260706-115125.json (TanStack Start, 313 deps), warm + frozen + offline, node_modules wiped between runs; hyperfine, 12 timed runs. Lowest-contention of 3 back-to-back runs (all committed); ratios are load-robust, absolute wall-clock is contention-affected and understates nub. */}
                 <p className="nub-code-muted mb-5 font-mono text-[0.7rem] uppercase tracking-[0.14em]">
-                  warm frozen install · create-t3-app · 222 deps · macOS
+                  warm frozen install · TanStack Start · 313 deps · macOS
                 </p>
                 <BenchBars
                   accent="pink"
-                  max={4163}
+                  max={5316}
                   unit="ms"
                   rows={[
-                    { cmd: 'nub', ms: 1122, us: true },
-                    { cmd: 'bun', ms: 1444, label: '29% slower' },
-                    { cmd: 'pnpm', ms: 2847, ratio: 2.5 },
-                    { cmd: 'npm', ms: 4163, ratio: 3.7 },
+                    { cmd: 'nub', ms: 171, us: true },
+                    { cmd: 'bun', ms: 686, ratio: 4.0 },
+                    { cmd: 'pnpm', ms: 3193, ratio: 18.7 },
+                    { cmd: 'npm', ms: 5316, ratio: 31.1 },
                   ]}
                 />
                 <a
