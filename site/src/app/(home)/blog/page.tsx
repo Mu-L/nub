@@ -23,12 +23,22 @@ export const metadata: Metadata = {
   },
 };
 
+// Newest first: by date, then by release version so same-day releases (two posts
+// sharing a `date`) still order by version rather than falling back to glob order.
+function versionRank(url: string): number {
+  const m = url.match(/nub-(\d+)-(\d+)-(\d+)/);
+  if (!m) return 0;
+  const [, major, minor, patch] = m;
+  return Number(major) * 1_000_000 + Number(minor) * 1_000 + Number(patch);
+}
+
 export default function BlogIndex() {
-  const posts = [...blog.getPages()].sort(
-    (a, b) =>
+  const posts = [...blog.getPages()].sort((a, b) => {
+    const byDate =
       new Date(b.data.date ?? 0).getTime() -
-      new Date(a.data.date ?? 0).getTime(),
-  );
+      new Date(a.data.date ?? 0).getTime();
+    return byDate !== 0 ? byDate : versionRank(b.url) - versionRank(a.url);
+  });
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-24">
