@@ -1,0 +1,53 @@
+---
+title: "Nub 0.2.0: Web Workers on stock Node"
+description: Nub adds the browser-standard Worker to stock Node — the same constructor and event surface you write for the web, with no Nub-specific API — and hardens package-manager compatibility across pnpm, yarn, and bun.
+author: The Nub Team
+date: 2026-06-24
+---
+
+Nub 0.2.0 ships the browser-standard `Worker` on your installed Node, and hardens the package manager's compatibility with pnpm, yarn, and bun.
+
+## Web Workers
+
+```ts
+const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+
+worker.postMessage({ n: 41 });
+worker.onmessage = (ev) => console.log(ev.data); // → 42
+```
+
+```ts
+// worker.ts — runs directly, no build step
+self.onmessage = (ev) => self.postMessage(ev.data.n + 1);
+```
+
+This is the same `new Worker(...)` constructor, `postMessage`, and event surface you write for the web, running on your installed Node. There is no Nub-specific API: it is the WHATWG Web Workers shape (Cloudflare semantics where there is no formal spec), preloaded as a polyfill over `node:worker_threads` and feature-detected so it installs only when no native global is present. It closes the most-upvoted open issue on the `nodejs/node` repository without waiting for Node to ship it.
+
+What works:
+
+- **TypeScript and JSX worker entries run directly** — Nub transpiles the worker like any other entry, so a `.ts` worker needs no build step.
+- **Inline workers** via `data:` and `blob:` URLs — the WHATWG inline mechanisms, which `node:worker_threads` does not expose through a browser-shape constructor.
+- **Classic and module workers** — `type: "module"` (the default) and `type: "classic"`, the latter exposing synchronous `importScripts(...)`.
+- **Real `MessageEvent` and `ErrorEvent`** — inbound messages arrive as `MessageEvent`s; a thrown worker error surfaces as an `ErrorEvent` with populated `filename`, `lineno`, and `colno`.
+- **Transferables, `MessageChannel` / `MessagePort`, and `BroadcastChannel`** round-trip correctly.
+
+The polyfill is preloaded on Node 18.19 and up. `SharedWorker` and `ServiceWorker` are not part of this release. A WPT-based conformance harness guards the surface in CI. ([#99](https://github.com/nubjs/nub/pull/99), [#119](https://github.com/nubjs/nub/pull/119))
+
+## Package manager
+
+| Area | What changed |
+| --- | --- |
+| yarn | Resolve yarn-berry catalogs instead of erroring ([#130](https://github.com/nubjs/nub/pull/130)) |
+| yarn | Honor `npmMinimalAgeGate`; drop a fabricated bun `trustedDependencies` gate ([#131](https://github.com/nubjs/nub/pull/131)) |
+| pnpm | Write `link:` versions for versionless workspace members in `pnpm-lock.yaml` ([#115](https://github.com/nubjs/nub/pull/115)) |
+| pnpm | Audit against pnpm 11.9.0 — redact inherited credentials, honor multi-version release-age excludes ([#104](https://github.com/nubjs/nub/pull/104)) |
+| general | Fix a `packageManager` URL-form crash and store-open without a home directory ([#116](https://github.com/nubjs/nub/pull/116)) |
+
+## Tooling and distribution
+
+- Official Nub Docker images — `node:26` slim and alpine — with a publish workflow. ([#108](https://github.com/nubjs/nub/pull/108))
+- Homebrew tap formula auto-bumps on release, with a Node-free `brew test`. ([#121](https://github.com/nubjs/nub/pull/121), [#125](https://github.com/nubjs/nub/pull/125))
+
+Thanks to [@jdalton](https://github.com/jdalton) for the dependency trim, build split, and test coverage, and to [@morinokami](https://github.com/morinokami), [@iamnafets](https://github.com/iamnafets), [@innermatrix-cityblock](https://github.com/innermatrix-cityblock), and [@devharshthakur](https://github.com/devharshthakur) for the issue reports that drove the package-manager and install-path fixes.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.0) list every change in this release.

@@ -1,0 +1,18 @@
+---
+title: "Nub 0.1.14"
+description: A Next.js and Turbopack build crash with Tailwind v4 is fixed, and npm's save-prefix is mirrored on add under an npm incumbent.
+author: The Nub Team
+date: 2026-06-24
+---
+
+Two targeted fixes: a Next.js and Turbopack build crash, and npm save-prefix mirroring.
+
+## Next.js and Turbopack with Tailwind v4
+
+On the fast tier (Node 22.15+), Nub's sync resolve hook now recovers when a user async loader is active and Node routes a sync resolution into the async-hooks stub that throws a method-not-implemented error. This unblocks `nub run build` in real Next.js apps using Tailwind v4 with Turbopack, which previously aborted while evaluating `globals.css` and triggered an esbuild deadlock. The recovery branch fires only for the impossible sync-into-async hop; the user's async loader still runs for everything else. ([#98](https://github.com/nubjs/nub/pull/98))
+
+## npm save-prefix mirroring
+
+When the incumbent package manager is npm, `nub add <pkg>` writes the saved specifier with npm's default save-prefix applied (`^1.2.3`), matching real `npm install`. The `save-prefix` and `save-exact` `.npmrc` settings are honored. pnpm, bun, and Nub-identity projects keep literal-preserve, and an explicit range is preserved verbatim on every package manager. ([#97](https://github.com/nubjs/nub/pull/97))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.14) list every change in this release.

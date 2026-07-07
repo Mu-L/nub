@@ -1,0 +1,17 @@
+---
+title: "Nub 0.2.5"
+description: Adds the nub x spelling as a short alias of dlx, and corrects the run-a-package documentation.
+author: The Nub Team
+date: 2026-06-27
+---
+
+A small patch release adding the `nub x` spelling and correcting the run-a-package docs.
+
+## nub x — a short alias of dlx
+
+`nub x <pkg>` now fetches and runs a package, identical to `nub dlx <pkg>` and `nubx <pkg>`. The existing `nub dlx`, `nub exec`, and `nubx` entrypoints are unchanged. The docs now describe the three fetch-and-run spellings — `nubx`, `nub dlx`, and `nub x` — and the local-bin runner, `nub exec`, accurately.
+
+> [!NOTE]
+> `nub dlx` and `nub exec` already shipped in 0.2.4. This release adds the `x` spelling and corrects the documentation; it does not change the behavior of `dlx`, `exec`, or `nubx`.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.5) list every change in this release.

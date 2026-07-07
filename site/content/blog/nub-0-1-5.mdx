@@ -1,0 +1,27 @@
+---
+title: "Nub 0.1.5"
+description: Package-manager fidelity — npm-lockfile round-trips and pnpm injected-dependency migration — with a tsconfig-cache crash fix and an internal Rust cleanup pass.
+author: The Nub Team
+date: 2026-06-19
+---
+
+This release focuses on package-manager fidelity — npm-lockfile round-trips and pnpm injected-dependency migration — alongside a tsconfig-cache crash fix and an internal Rust idiomaticity pass.
+
+## Package manager
+
+| Area | What changed |
+| --- | --- |
+| npm lockfile fidelity | npm's per-package keys — `hasInstallScript`, `hasShrinkwrap`, `inBundle`, `deprecated`, `bundleDependencies` — are now captured and re-emitted, so a Nub-mediated rewrite of a real npm lockfile no longer produces a spurious diff on native-addon packages |
+| Injected dependencies | `nub pm use nub` migrates projects that use pnpm's `dependenciesMeta.injected` instead of refusing them; the install path already materialized injected deps faithfully, so this removes a stale migration refusal |
+
+The three repo-wide inject settings — `injectWorkspacePackages`, `dedupeInjectedDeps`, and `syncInjectedDepsAfterScripts` — still warn and drop on migration.
+
+## Runtime fixes
+
+The tsconfig cache now recovers from a poisoned mutex instead of panicking, so a single earlier transient panic no longer makes every subsequent `loadTsconfig` / `resolveTs` call fail. Thanks to [@nerkoux](https://github.com/nerkoux) for the fix. ([#24](https://github.com/nubjs/nub/pull/24))
+
+## Internals
+
+A behavior-preserving Rust idiomaticity pass ran across Nub's own crates — combinators, helper extraction, and let-chain flattening of nested conditionals — with no runtime behavior changes.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.5) list every change in this release.

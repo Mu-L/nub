@@ -1,0 +1,32 @@
+---
+title: "Nub 0.2.9: isolated node_modules by default"
+description: The default node_modules layout is now isolated for npm, Yarn, and Bun projects, backed by a global virtual store, alongside install-performance and diagnostics work.
+author: The Nub Team
+date: 2026-06-28
+---
+
+This release changes the default `node_modules` layout to isolated for npm, Yarn, and Bun projects, alongside install-performance and diagnostics work.
+
+> [!IMPORTANT]
+> **The default `node_modules` layout is now isolated.** npm, Yarn, Bun, and pnpm incumbents — and fresh projects — now install with the isolated linker backed by a global virtual store, instead of the flat hoisted tree. The first `nub install` after upgrading does a one-time clean reinstall of `node_modules`. To keep the flat npm-style layout, add `node-linker=hoisted` to `.npmrc`, or pass `--node-linker hoisted` for a single command.
+
+## The default layout
+
+Every incumbent now defaults to isolated — npm, Yarn, and Bun join pnpm and Nub-identity projects. Isolated links each package into a global virtual store and symlinks the declared dependency graph into `node_modules`, so only declared dependencies are reachable. A project that relies on phantom (undeclared) dependencies opts into the flat layout with `node-linker=hoisted`. When an undeclared package fails to resolve at runtime, the error names it and points at this opt-out. ([#238](https://github.com/nubjs/nub/pull/238))
+
+`next`, `nuxt`, and `parcel` default to strict isolated with the global virtual store auto-disabled, matching how those toolchains expect `node_modules` to be laid out.
+
+**pnpm compatibility note.** Nub now sets `hoist=false` for pnpm incumbents too, so a pnpm project that depended on packages reachable only through pnpm's hidden hoist tree may hit a phantom-dependency miss it did not see under pnpm. The `.npmrc` opt-out and the runtime hint mitigate it; the change favors correct, declared-only resolution by default.
+
+## Install performance
+
+| Area | What changed |
+| --- | --- |
+| Warm installs | A fully-satisfied, unchanged tree exits "Already up to date" without re-running resolve, fetch, or link, even under the default no-downgrade trust policy ([#234](https://github.com/nubjs/nub/pull/234)) |
+| Isolated installs | The isolated materialize step overlaps with package fetch instead of running after it ([#235](https://github.com/nubjs/nub/pull/235)) |
+
+## Diagnostics
+
+The engine's diagnostics layer is reachable under Nub via `NUB_DIAG_*` environment variables, and install phase debug lines are annotated with work counts and a no-work marker, so a warm no-op install is legible in the phase output. ([#233](https://github.com/nubjs/nub/pull/233), [#236](https://github.com/nubjs/nub/pull/236))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.9) list every change in this release.

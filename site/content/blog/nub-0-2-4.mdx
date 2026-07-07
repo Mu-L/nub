@@ -1,0 +1,37 @@
+---
+title: "Nub 0.2.4: a single self-contained binary"
+description: Nub now ships as a single self-contained binary with its runtime embedded, hardens self-provisioning and the embedded runtime, and quiets the install output.
+author: The Nub Team
+date: 2026-06-26
+---
+
+This release makes Nub a single self-contained binary, hardens self-provisioning and the embedded runtime, and quiets the install output.
+
+> [!IMPORTANT]
+> **Nub now ships as a single self-contained binary.** The runtime is embedded in the executable and extracted into the cache automatically on first run — there is no separate runtime to download or discover. The first invocation after upgrading does this one-time extraction; every run after is unaffected. If the extracted runtime is ever removed or fails its integrity check, Nub re-extracts it, and degrades to un-augmented plain Node rather than failing if it still can't.
+
+## Install and runtime
+
+- Single self-contained binary — the runtime is embedded and extracted on first run. ([#175](https://github.com/nubjs/nub/pull/175))
+- A verify-on-load integrity check and safe-extraction hardening for the embedded runtime. ([#182](https://github.com/nubjs/nub/pull/182))
+- Nub degrades to un-augmented when self-heal leaves no live runtime directory. ([#193](https://github.com/nubjs/nub/pull/193))
+
+## Install output
+
+The install command now respects pnpm's output flags, so its progress can be quieted or made machine-readable.
+
+| Area | What changed |
+| --- | --- |
+| Progress | A single-line in-place TTY progress bar with a clean summary handoff ([#184](https://github.com/nubjs/nub/pull/184)) |
+| Flags | `--reporter`, `--silent`, and `--loglevel` forward to the install engine, and are honored before the verb (`nub --silent install`) ([#183](https://github.com/nubjs/nub/pull/183), [#191](https://github.com/nubjs/nub/pull/191)) |
+| Notices | The unactionable global-virtual-store auto-fallback notice is silenced ([#187](https://github.com/nubjs/nub/pull/187)) |
+
+## Security
+
+Hardening of the self-provisioning and registry-bin paths:
+
+- Registry bin paths that escape the package directory are rejected. ([#180](https://github.com/nubjs/nub/pull/180))
+- Self-provisioning is hardened to engine-parity security across five related findings. ([#190](https://github.com/nubjs/nub/pull/190))
+- The Windows drive-letter store-path escape in provisioning is closed. ([#194](https://github.com/nubjs/nub/pull/194))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.4) list every change in this release.

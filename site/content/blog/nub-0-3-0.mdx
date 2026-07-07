@@ -1,0 +1,97 @@
+---
+title: "Nub 0.3.0"
+description: Undeclared (phantom) dependencies resolve out of the box, a unified nubx runs a file, script, local CLI, or registry package behind a consent-gated fetch, and more frameworks scaffold and run with no config change.
+author: The Nub Team
+date: 2026-07-07
+---
+
+Undeclared (phantom) dependencies now resolve out of the box, and `nubx` becomes a single runner for whatever a name points to.
+
+```console
+$ nubx build.ts             # runs the file
+$ nubx test                 # runs the package.json script
+$ nubx vite                 # runs the local CLI in node_modules/.bin
+$ nubx create-vite my-app   # fetches and runs a package that isn't installed
+```
+
+> [!IMPORTANT]
+> Phantom-eject is on for every install — no opt-in and no config change. Existing warm installs re-link once on the next install to converge to the new layout; there is no manual migration step.
+
+## Phantom dependencies just work
+
+Nub's isolated install layout used to reject a package's undeclared `require`/`import` of a transitive it didn't list — the strict-but-surprising behavior behind a run of real-world breakages.
+
+- **Before:** `@inkjs/ui` importing `react`, or `@crawlee/basic` requiring `@apify/datastructures`, failed with a module-not-found error under the isolated layout even though the package installed fine.
+- **Now:** a per-version scanner detects the undeclared use and materializes the ancestor closure that makes it reachable, matching what pnpm's private-hoist fallback does by default. ([#302](https://github.com/nubjs/nub/pull/302), [#319](https://github.com/nubjs/nub/pull/319), [#321](https://github.com/nubjs/nub/pull/321), [#328](https://github.com/nubjs/nub/pull/328); closes [#280](https://github.com/nubjs/nub/issues/280))
+
+The detector replaces the previous curated static list — it self-maintains across package versions, and a detection improvement re-scans already-cached content instead of going stale. To bypass the virtual store entirely, `install.materialization: disk` materializes every dependency to disk.
+
+## Unified nubx
+
+One command now runs whatever a name points to. A bare `nubx <name>` resolves through four tiers and runs the first match:
+
+- **File** — `nubx build.ts` runs the file, the same as `nub build.ts`.
+- **Script** — `nubx test` runs the `package.json` script.
+- **Local bin** — `nubx vite` runs the CLI already in `node_modules/.bin`.
+- **Registry** — `nubx create-vite my-app` fetches and runs a package that isn't installed.
+
+Scripts beat bins and a file beats both — the same precedence as `nub run`. A local match never touches the network.
+
+The registry tier is consent-gated, so `nubx` never runs remote code silently. On a full local miss in an interactive terminal, `nubx` prompts before the first fetch of a spec and remembers the answer, so a consented tool doesn't re-prompt; in CI or any non-interactive context it fails closed. `-y`/`--yes` is the explicit opt-in for CI and scripts.
+
+`nub dlx` (short alias `nub x`) splits off as the explicit downloader — invoking it is the consent, so it fetches without a prompt and runs in CI. `nub exec` stays the local-bin-only runner. ([#224](https://github.com/nubjs/nub/pull/224), [#275](https://github.com/nubjs/nub/pull/275))
+
+## Framework support
+
+Scaffold-and-run is verified out of the box — install, dev, build, serve — for Vite, Astro, SvelteKit, SolidStart, Qwik, Next.js, React Router 7 / Remix, Angular, Nuxt 4, and Parcel.
+
+- **Vite** dev and build serve correctly under the symlinked layout. ([#318](https://github.com/nubjs/nub/pull/318), closes [#315](https://github.com/nubjs/nub/issues/315))
+- **Parcel** builds under the global virtual store out of the box — `@parcel/core` no longer splits across two store copies, so the worker farm starts cleanly. ([#338](https://github.com/nubjs/nub/pull/338))
+- **Expo / React Native** installs resolve Babel correctly: an auto-installed wildcard peer now binds the already-resolved major instead of the registry-highest, so react-native is no longer pulled onto an incompatible Babel. ([#327](https://github.com/nubjs/nub/pull/327))
+- Ambient `@types/*` resolve under the global virtual store via a pnpm-parity hidden hoist tree. ([#293](https://github.com/nubjs/nub/pull/293), closes [#286](https://github.com/nubjs/nub/issues/286))
+
+## Runtime
+
+- **tsx and ts-node** run under Nub on Node 22.15–24.11.0 — a script that shells out to `tsx` (for example `nub run dev`) previously crashed on that Node range and now runs. ([#340](https://github.com/nubjs/nub/pull/340))
+- **Import Text** — `import contents from "./file.txt" with { type: "text" }`, on any extension. ([#284](https://github.com/nubjs/nub/pull/284))
+- `process.versions.nub` reports the running Nub version. ([#253](https://github.com/nubjs/nub/pull/253))
+- Electron no longer crashes on startup — Nub stopped auto-injecting `--experimental-shadow-realm`. ([#254](https://github.com/nubjs/nub/pull/254), closes [#246](https://github.com/nubjs/nub/issues/246))
+- `Worker` mirrors more of `node:worker_threads`, and an inbound message event's `target` is `self`. ([#256](https://github.com/nubjs/nub/pull/256), [#264](https://github.com/nubjs/nub/pull/264))
+- A `NODE_ENV` set inside a `.env` file is ignored. ([#267](https://github.com/nubjs/nub/pull/267))
+
+## Node provisioning
+
+- Nub auto-provisions Node when a project has no pin and no `node` on `PATH`, so `nub` works on a machine with no Node installed. ([#296](https://github.com/nubjs/nub/pull/296), closes [#294](https://github.com/nubjs/nub/issues/294); [#308](https://github.com/nubjs/nub/pull/308) covers transient `nubx` and bin-exec, closes [#303](https://github.com/nubjs/nub/issues/303))
+- `nub node shim` / `nub node unshim` install or remove a persistent global `node` shim. ([#297](https://github.com/nubjs/nub/pull/297))
+
+## The lockfile is now nub.lock
+
+Nub's own lockfile is now `nub.lock` (previously `lock.yaml`). An existing `lock.yaml` keeps working — Nub reads it — and migrates the next time the lockfile actually changes: on a dependency add, remove, or update, Nub writes `nub.lock` and removes the old `lock.yaml` in the same diff. A routine install with nothing to change never rewrites or renames the lockfile, and `nub ci` never touches a checked-in one. ([#274](https://github.com/nubjs/nub/pull/274))
+
+## Install progress
+
+Install progress no longer looks stuck during linking. The old progress bar held its fill at the end of fetching for the whole linking phase, which could read as hung on a slow or network filesystem; the redesigned view drops the bar for a spinner and a fixed-width phase label. ([#300](https://github.com/nubjs/nub/pull/300))
+
+Three follow-ups refine it: the spinner now animates smoothly ([#337](https://github.com/nubjs/nub/pull/337)); the fetch phase drops its ETA, which printed misleading sub-second estimates on the tail of a few large native binaries ([#339](https://github.com/nubjs/nub/pull/339)); and the progress line now names the package being fetched, updating as the install moves through them ([#343](https://github.com/nubjs/nub/pull/343)).
+
+## Package manager
+
+| Change | PR |
+| --- | --- |
+| `nub pm pin` locks a project to an exact Nub version | [#276](https://github.com/nubjs/nub/pull/276) |
+| Verify dependency freshness before run, exec, file, and nubx | [#278](https://github.com/nubjs/nub/pull/278) |
+| `nub ci` produces a project-local, copy-safe `node_modules` | [#261](https://github.com/nubjs/nub/pull/261) |
+| `prune --prod` keeps hoisted production transitives | [#250](https://github.com/nubjs/nub/pull/250) |
+| Read `.npmrc` and dependency-verification settings correctly under a pnpm 11 incumbent | [#301](https://github.com/nubjs/nub/pull/301), [#289](https://github.com/nubjs/nub/pull/289) |
+| A virgin install writes a `devEngines` caret range and honors a Nub `packageManager` pin | [#266](https://github.com/nubjs/nub/pull/266), [#265](https://github.com/nubjs/nub/pull/265) |
+| The global settings file moved to `nub.jsonc` | [#291](https://github.com/nubjs/nub/pull/291) |
+| A UTF-8 BOM is stripped before parsing `package.json` | [#269](https://github.com/nubjs/nub/pull/269) |
+
+## run and exec fixes
+
+- `node_modules/.bin` is always on the script `PATH`, even when the directory doesn't exist at spawn. ([#283](https://github.com/nubjs/nub/pull/283), closes [#281](https://github.com/nubjs/nub/issues/281))
+- Files with a dot in the name load correctly. ([#245](https://github.com/nubjs/nub/pull/245), closes [#240](https://github.com/nubjs/nub/issues/240) — thanks to [@ctorres-lynxlabs](https://github.com/ctorres-lynxlabs))
+- Args after the entry point pass through verbatim on the `node` hijack path. ([#248](https://github.com/nubjs/nub/pull/248))
+- The cache directory falls back to `%LOCALAPPDATA%` on Windows. ([#268](https://github.com/nubjs/nub/pull/268))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.3.0) list every change in this release.

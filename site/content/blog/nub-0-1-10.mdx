@@ -1,0 +1,29 @@
+---
+title: "Nub 0.1.10"
+description: Package-manager compatibility fixes across bun and npm lockfiles, run and exec refinements, and a new Bun-to-Nub migration guide.
+author: The Nub Team
+date: 2026-06-21
+---
+
+A broad patch across the package manager, the runners, and the docs.
+
+## Package manager
+
+- Three bun.lock writer round-trip defects fixed — registry URL, block order, and bin placement. ([#61](https://github.com/nubjs/nub/pull/61))
+- npm nested-object overrides are flattened into selector keys. ([#42](https://github.com/nubjs/nub/pull/42))
+- Yarn `supportedArchitectures`, mTLS cert/key, and `npmAlwaysAuth` are now honored. ([#48](https://github.com/nubjs/nub/pull/48))
+- The `list` / `outdated` empty-state `--json` output and the no-arg `run` exit code now match pnpm. ([#41](https://github.com/nubjs/nub/pull/41))
+- The brand boundary is locked on the not-a-command front door. ([#39](https://github.com/nubjs/nub/pull/39))
+
+## run and exec
+
+- `-r`/`--filter` dispatch to the PM engine before info verbs. ([#40](https://github.com/nubjs/nub/pull/40))
+- `nub run` honors `npm_config_reporter=silent` and adds `/regex/` script selection. ([#49](https://github.com/nubjs/nub/pull/49))
+
+## Documentation
+
+- A new Bun-to-Nub migration guide. ([#52](https://github.com/nubjs/nub/pull/52))
+- Guides moved to a top-level `/guides` route. ([#59](https://github.com/nubjs/nub/pull/59))
+- Incumbent behavior is documented on the install page, and the compatibility sections were consolidated. ([#50](https://github.com/nubjs/nub/pull/50), [#57](https://github.com/nubjs/nub/pull/57))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.10) list every change in this release.

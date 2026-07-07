@@ -1,0 +1,23 @@
+---
+title: "Nub 0.1.11"
+description: Supply-chain hardening in CI, mechanized code-quality and brand-boundary lints, and a registry-trust fix for home-directory installs.
+author: The Nub Team
+date: 2026-06-22
+---
+
+A small patch focused on CI hardening and a registry-trust fix.
+
+## CI and quality
+
+- All GitHub Actions are SHA-pinned, with a Renovate config to keep them current. ([#68](https://github.com/nubjs/nub/pull/68))
+- Code-quality and brand-boundary rules are now mechanized as lints. ([#69](https://github.com/nubjs/nub/pull/69))
+
+## Package manager
+
+`~/.npmrc` is treated as user-trusted when running from the home directory, so a personal global config is honored rather than distrusted. ([#72](https://github.com/nubjs/nub/pull/72))
+
+## Adoption flow
+
+The adoption flow now offers to add a Nub skill to your coding agent's instructions, so the agent knows how to use Nub in your repo. ([#55](https://github.com/nubjs/nub/pull/55))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.11) list every change in this release.

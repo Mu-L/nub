@@ -1,0 +1,17 @@
+---
+title: "Nub 0.1.13"
+description: A fix for a false positive in the malicious-package check, where a bare, dist-tag, or range install could be wrongly blocked by an advisory on an older version.
+author: The Nub Team
+date: 2026-06-23
+---
+
+A patch release that fixes a false positive in the malicious-package check, where a bare, dist-tag, or range install could be wrongly blocked because an older version of the package carried a malicious advisory.
+
+> [!IMPORTANT]
+> **If an install was wrongly blocked on 0.1.12, upgrade to 0.1.13.** Installs like `nub install axios` are no longer blocked when the resolved version is clean. The security property is unchanged: an install that resolves to a malicious version is still blocked.
+
+## Package manager
+
+The 0.1.12 OSV malicious-package gate matched advisories against the package as a whole, so a bare, dist-tag, or range install of a package whose latest is clean was blocked when an *older* version carried a malicious advisory. Nub now resolves the install to its concrete version first and relies on the version-aware post-resolve gate, so a clean `latest` installs while the actually-malicious version stays blocked. ([#89](https://github.com/nubjs/nub/pull/89), fixes [#88](https://github.com/nubjs/nub/issues/88))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.13) list every change in this release.

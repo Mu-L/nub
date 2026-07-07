@@ -1,0 +1,31 @@
+---
+title: "Nub 0.2.3"
+description: A localStorage compatibility fix, two compat-floor polyfill families, a prebuilt Nix flake, and a startup-path speedup.
+author: The Nub Team
+date: 2026-06-26
+---
+
+A patch release: a `localStorage` compatibility fix, two compat-floor runtime polyfill families, a prebuilt Nix flake, and a startup-path speedup.
+
+## Runtime fixes
+
+**`localStorage` matches vanilla Node on the 22.4–24 web-storage band.** When web storage is unconfigured, Nub previously left `localStorage` present-but-`undefined`; it is now absent, exactly as on plain Node. This fixes test setups (vitest with happy-dom) and isomorphic libraries that feature-detect via an `in` check on the global. `sessionStorage` is unaffected. ([#170](https://github.com/nubjs/nub/pull/170), closes [#166](https://github.com/nubjs/nub/issues/166))
+
+## Runtime polyfills
+
+Two TC39 feature families are now polyfilled where the running Node lacks them natively, complementing Nub's existing down-leveling. ([#174](https://github.com/nubjs/nub/pull/174))
+
+| Feature | What changed | Availability |
+| --- | --- | --- |
+| `Uint8Array` base64/hex | The base64 and hex conversion methods are polyfilled | absent on Node 24 and below, native 25+ |
+| Explicit Resource Management | `DisposableStack`, `AsyncDisposableStack`, and `SuppressedError` are polyfilled | absent on Node 23 and below, native 24+ |
+
+## Distribution
+
+A prebuilt-binary Nix flake ships: install via `nix run github:nubjs/nub` or `nix profile install github:nubjs/nub`. ([#169](https://github.com/nubjs/nub/pull/169), closes [#167](https://github.com/nubjs/nub/issues/167))
+
+## Performance
+
+Redundant work was removed from the startup path. ([#160](https://github.com/nubjs/nub/pull/160))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.3) list every change in this release.

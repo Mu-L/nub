@@ -1,0 +1,33 @@
+---
+title: "Nub 0.1.12"
+description: Package-manager compatibility fixes — pnpm 11 monorepo installs and byte-identical bun lockfiles — an engine sync to 1.23.0, and a transpile-cache correctness fix.
+author: The Nub Team
+date: 2026-06-23
+---
+
+Package-manager compatibility fixes — pnpm 11 monorepo installs, byte-identical bun lockfiles, and a vendored engine sync to 1.23.0 — plus a transpile-cache correctness fix.
+
+> [!IMPORTANT]
+> **The transpile cache re-warms once after upgrading.** The cache key now includes a compile-time build-id, so the first run after upgrading recompiles and re-warms the cache. It is a one-time, expected step — subsequent runs hit the cache as before. ([#85](https://github.com/nubjs/nub/pull/85))
+
+> [!IMPORTANT]
+> **The malicious-package check on exact pins is now version-aware.** With the 1.23.0 engine sync, installing an exact version (`nub add <pkg>@<version>`) runs a version-aware OSV query instead of a name-only one, so an exact pin of a version known to be malicious is caught at add time. ([#84](https://github.com/nubjs/nub/pull/84))
+
+## Package manager
+
+| Area | What changed |
+| --- | --- |
+| pnpm 11 monorepo installs | Workspace `link:` peers and optional auto-installed peers resolve correctly ([#78](https://github.com/nubjs/nub/pull/78)) |
+| Workspace installs | Fixed a spurious global-version-store reinstall in workspace members ([#74](https://github.com/nubjs/nub/pull/74)) |
+| Bun lockfile writer | Byte-identical output for multi-line named catalogs; empty `packages` blocks now collapse ([#82](https://github.com/nubjs/nub/pull/82)) |
+
+## Engine sync to 1.23.0
+
+The vendored package-manager engine synced to upstream 1.23.0 ([#84](https://github.com/nubjs/nub/pull/84)), bringing a version-aware OSV check on exact pins, `NODE_EXTRA_CA_CERTS` support in the registry client, global packages in `outdated`, and `audit` output aligned to pnpm's shape.
+
+## Runtime
+
+- A compile-time build-id is now part of the transpile cache key, so an upgrade no longer risks serving stale transpiled output ([#85](https://github.com/nubjs/nub/pull/85)).
+- `nub node` with no arguments prints the current status, then the help text ([#73](https://github.com/nubjs/nub/pull/73)).
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.12) list every change in this release.

@@ -1,0 +1,28 @@
+---
+title: "Nub 0.1.4"
+description: Lockfile compatibility across bun, yarn, npm, and pnpm — git dependencies, workspace members, and cross-tool conversions round-trip cleanly — plus release-profile performance tuning.
+author: The Nub Team
+date: 2026-06-19
+---
+
+This release focuses on lockfile compatibility. Git dependencies, workspace members, and cross-tool conversions now round-trip cleanly through bun, yarn, npm, and pnpm, and the release build is tuned for speed.
+
+> [!IMPORTANT]
+> **The transpile cache schema bumped from v3 to v4.** Each warm cache re-warms once on the first run after upgrade. This is transparent and needs no action.
+
+## Lockfile compatibility
+
+A batch of round-trip and conversion-fidelity fixes:
+
+| Area | What changed |
+| --- | --- |
+| Git dependencies | Hosted-git deps are written in bun/yarn git form, so bun no longer rejects a Nub-written lockfile with an integrity error |
+| npm workspaces | npm-lockfile workspace members are emitted, so `npm ci` works against a workspace lockfile written by Nub |
+| Workspace conversions | npm-to-pnpm and yarn-source conversions reconstruct every member, fixing pnpm phantom root links and yarn member reconstruction |
+| Bun `minimumReleaseAge` | The bunfig value is converted from seconds to the engine's minutes, instead of being applied 60× too aggressively and silently filtering versions |
+
+## Performance
+
+Release-profile tuning landed in [#17](https://github.com/nubjs/nub/pull/17): thin-LTO, a single codegen unit, and symbol stripping; the mimalloc allocator; FxHashMap on hot-path maps; and the zlib-ng backend for flate2. A benchmark harness ships alongside it.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.4) list every change in this release.

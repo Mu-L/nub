@@ -1,0 +1,26 @@
+---
+title: "Nub 0.1.7"
+description: Global install aliases now work, install-family flags are pnpm-only, and help splits into a curated short form and a full reference.
+author: The Nub Team
+date: 2026-06-20
+---
+
+A CLI-focused patch: global install aliases, pnpm-only install flags, and two-tier help.
+
+## Global install aliases
+
+`nub install -g <pkg>` and `nub i -g <pkg>` previously failed with an unexpected-argument error ([#29](https://github.com/nubjs/nub/issues/29)). Both forms now route to the global-install path. Plain `nub install` is unchanged, and `nub install -- -g` still treats `-g` as a literal argument.
+
+## Install-family flags are pnpm-only
+
+`nub install` and `nub i` route to the engine's `add` path, and the flags accepted there now match what pnpm itself accepts — Nub accepts a flag if and only if real pnpm accepts it. pnpm's lowercase save shorts are translated to the engine's long forms (`-d` to `--save-dev`, `-o` to `--save-optional`, `-e` to `--save-exact`), and `-w` forwards verbatim as pnpm's `--workspace-root` boolean. npm-only flags that pnpm rejects — `--omit`, `--no-save`, `-S`/`--save`, the npm `-w <name>` member selector, `--workspaces` — are no longer translated. A CLI-grammar parity test guards this surface.
+
+## Two-tier help
+
+`nub -h` prints a curated short help; `nub --help` prints the full reference, including the environment-variable section. The help router covers `nub help <cmd>` and leaf `--help`, and `nub --node --help` / `nub --node -v` pass through to Node.
+
+## Build
+
+The macOS N-API addon is now removed before the new one is copied in, avoiding a code-signing inode taint that could kill the process.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.7) list every change in this release.

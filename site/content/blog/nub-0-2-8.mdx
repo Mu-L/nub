@@ -1,0 +1,22 @@
+---
+title: "Nub 0.2.8"
+description: Lockfile and linker fixes in the package-manager engine, a plain-JavaScript transpile fallback, and a trust-validation speedup.
+author: The Nub Team
+date: 2026-06-28
+---
+
+A patch across the package-manager engine and the runtime.
+
+## Package manager
+
+- `bundleDependencies` are honored on the lockfile-restore install path. ([#226](https://github.com/nubjs/nub/pull/226))
+- The linker promotes the most-referenced version to the hoisted root slot, while a direct dependency still wins that slot over a transitive majority. ([#227](https://github.com/nubjs/nub/pull/227), [#231](https://github.com/nubjs/nub/pull/231))
+- Git deps resolve in the yarn-classic reader, fixing a 0.2.7 regression. ([#228](https://github.com/nubjs/nub/pull/228))
+- The no-integrity warm binding is keyed by registry URL in the global store. ([#232](https://github.com/nubjs/nub/pull/232))
+- No-downgrade trust validation now overlaps with the tarball fetch. ([#230](https://github.com/nubjs/nub/pull/230))
+
+## Runtime
+
+When oxc rejects plain JavaScript that V8 tolerates, Nub falls back to the original source instead of failing. ([#229](https://github.com/nubjs/nub/pull/229), closes [#225](https://github.com/nubjs/nub/issues/225))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.8) list every change in this release.

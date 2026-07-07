@@ -1,0 +1,34 @@
+---
+title: "Nub 0.1.1"
+description: The first patch after launch — fresh-project identity on install, broader package-manager config compatibility, offline installs, and a dedicated nubx command grammar.
+author: The Nub Team
+date: 2026-06-18
+---
+
+The first patch after the 0.1.0 launch. It sharpens how Nub identifies a project, widens the package-manager configuration it honors, adds offline installs, and gives `nubx` its own command grammar.
+
+## Fresh-project identity
+
+A truly-fresh project — no lockfile, no `packageManager`/`devEngines` field, and no pnpm-named file anywhere in the tree — now adopts Nub's neutral `lock.yaml` as its identity marker on the first install. Nub does not touch your `package.json`, so the project stays compatible with other package managers. A project that already carries any signal — a lockfile, a `packageManager` field, or a pnpm-named file — is respected untouched and keeps its existing format. To pin Nub explicitly (writing `packageManager` and `devEngines`), run `nub pm use nub`.
+
+## Configuration compatibility
+
+Installs now detect configuration Nub cannot honor. Genuinely unsupported settings — npm `legacy-peer-deps`, `install-strategy=nested`, yarn `supportedArchitectures` — abort with a clear `ERR_NUB_UNSUPPORTED_CONFIG` error and a remedy; softer cases warn and continue. The fatal scan is scoped to the project's own configuration, so a personal `legacy-peer-deps=true` in your global `~/.npmrc` no longer wrongly aborts installs in unrelated projects.
+
+More incumbent configuration is honored directly: the dependency axis from npm `omit`/`include` and bun `production`, frozen-install settings from bun and yarn, yarn `enableScripts:false`, and bun `minimumReleaseAge`.
+
+## Offline installs
+
+Yarn's network configuration is now respected: `enableNetwork:false` and Berry's `--offline` put installs into offline mode, serving cached packages only and erroring on a cache miss. When offline mode is active but a configured offline-mirror cannot be honored, the install fails loudly with an explicit error and remedy rather than silently falling back.
+
+## nubx
+
+`nubx` now has its own command grammar with npx flag parity: `-p`/`--package` to fetch and run a named bin, `--no-install` to refuse fetching a missing tool (exit 127), `-q`/`--quiet` for text-mode output, and `-y`/`--yes`. The existing workspace fan-out flags are preserved.
+
+## Fixes
+
+- The curated default-trust floor is restored, so trusted package builds run as expected.
+- Approve-builds now works correctly under npm, bun, and yarn incumbents.
+- The vendored install engine records `patchedDependencies` in the lockfile.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.1) list every change in this release.

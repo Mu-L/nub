@@ -1,0 +1,22 @@
+---
+title: "Nub 0.2.10"
+description: An unhandled worker failure is now fatal, matching Node's worker threads; a brand-boundary leak in package-manager config resolution is closed; and the post-target argument separator stays verbatim across every runner verb.
+author: The Nub Team
+date: 2026-06-30
+---
+
+This release makes an unhandled worker failure fatal, matching `node:worker_threads`, closes a brand-boundary leak in the package manager's config-file resolution, and keeps the post-target argument separator verbatim across every runner verb.
+
+## Runtime
+
+A `Worker` created with no error listener that failed to load or threw at top level previously exited 0 in silence — Nub's browser-shape `Worker` is an `EventTarget`, which drops an event with no listener. It now mirrors `node:worker_threads.Worker`: an unhandled error is re-thrown on the main thread (uncaught exception, exit 1, stack printed), still interceptable via `process.on('uncaughtException')`. The listener-present path is unchanged. ([#244](https://github.com/nubjs/nub/pull/244))
+
+## Package manager
+
+The embedded engine no longer reads or writes a brand-specific user or project config file under Nub, closing a brand-boundary leak in settings resolution. A Nub project's config surface stays `.npmrc` plus the sanctioned `NUB_*` env knobs. ([#242](https://github.com/nubjs/nub/pull/242))
+
+## CLI
+
+`nub watch` now keeps the post-target `--` verbatim, matching `nub <file>`, `run`, and `exec`. The target token ends runner parsing and everything after it forwards byte-for-byte, as in `node` and pnpm 10 — `--` is neither required nor special-cased. ([#239](https://github.com/nubjs/nub/pull/239))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.10) list every change in this release.

@@ -1,0 +1,26 @@
+---
+title: "Nub 0.2.6: reading legacy npm lockfiles"
+description: Nub reads the legacy npm lockfile formats it previously refused, with three smaller lockfile-compatibility fixes and a Homebrew install-path fix.
+author: The Nub Team
+date: 2026-06-27
+---
+
+A patch release focused on lockfile compatibility — most notably reading legacy npm lockfiles — plus a Homebrew install-path fix.
+
+## Legacy npm lockfiles
+
+Nub now reads the legacy npm lockfile formats it previously refused: `package-lock.json` with `lockfileVersion: 1` (npm 5 and 6), and pre-2017 `npm-shrinkwrap.json` (a nested `dependencies` tree with no `lockfileVersion` field). The legacy nested tree is lifted into the same install-path scheme Nub uses for v2 and v3, so registry dependencies resolve and install; the first mutating operation — `nub add`, `nub remove` — rewrites the lock as v3, the same in-place upgrade npm 7+ performs. Two edges remain out of scope: git and `file:` deps a v1 lock encodes in `version` rather than `resolved`, and fully-hoisted pre-npm-5 shrinkwraps with no requires edges — Nub installs what it can and warns about the rest. ([#212](https://github.com/nubjs/nub/pull/212))
+
+Three smaller compatibility fixes ship alongside it:
+
+| Area | What changed |
+| --- | --- |
+| Bun lockfile | The Bun reader accepts `lockfileVersion: 2`, forward-compat for the unreleased Bun 1.4; released Bun still writes v1 ([#210](https://github.com/nubjs/nub/pull/210)) |
+| Lockfile ambiguity | The multiple-lockfiles ambiguity guard no longer trips on global-scope read commands ([#199](https://github.com/nubjs/nub/pull/199)) |
+| Config migration | The `nub pm use nub` config-migration precedence is now pnpm-major-aware ([#211](https://github.com/nubjs/nub/pull/211)) |
+
+## Distribution
+
+The Homebrew formula installs `nub` and `nubx` from the stripped working directory instead of a `bin/` subpath. ([#209](https://github.com/nubjs/nub/pull/209), closes [#208](https://github.com/nubjs/nub/issues/208))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.6) list every change in this release.

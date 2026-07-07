@@ -1,0 +1,32 @@
+---
+title: "Nub 0.2.7"
+description: Restores the upgrade path for sidecar-era 0.1.x installs, with warm-install store reuse, a lockfile-compatibility guard, and a watch-mode env-file fix.
+author: The Nub Team
+date: 2026-06-28
+---
+
+This release restores the `nub upgrade` path for sidecar-era 0.1.x installs, with warm-install store reuse, a lockfile-compatibility guard, and a runtime fix alongside.
+
+> [!IMPORTANT]
+> **`nub upgrade` from a sidecar-era 0.1.x now works.** Older 0.1.x builds shipped a separate runtime directory and their upgrader swaps it on every upgrade; the bin-only archives 0.2.x publishes no longer carried that directory, so `nub upgrade` hard-failed. The 0.2.7 archives now include a vestigial empty runtime directory so the old upgrader's swap completes — the 0.2.x binary ignores it, since its runtime is embedded. If you are on a sidecar-era 0.1.x, `nub upgrade` to 0.2.7 or later now succeeds. ([#223](https://github.com/nubjs/nub/pull/223))
+
+## Performance
+
+Warm installs reuse the content-addressed store more reliably, and the hoisted layout links faster.
+
+| Area | What changed |
+| --- | --- |
+| Hoisted linker | Whole-directory clonefile plus parallel fill for the hoisted layout ([#222](https://github.com/nubjs/nub/pull/222)) |
+| Store reuse | A root-key index for no-integrity packages so warm installs reuse the store ([#220](https://github.com/nubjs/nub/pull/220), [#221](https://github.com/nubjs/nub/pull/221)) |
+
+## Package manager and runtime
+
+- `nub install` aborts with a clear error on unresolvable `yarn.lock` sources and Yarn Plug'n'Play projects, rather than producing an incorrect install. ([#217](https://github.com/nubjs/nub/pull/217))
+- `nub watch` re-reads `.env` across restarts, so edits to environment files take effect on the next restart. ([#214](https://github.com/nubjs/nub/pull/214), closes [#207](https://github.com/nubjs/nub/issues/207))
+
+## CLI and distribution
+
+- Git-style external subcommand dispatch — `nub <verb>` resolves a `nub-<verb>` executable on `PATH`. ([#200](https://github.com/nubjs/nub/pull/200))
+- A winget manifest, with release-time submission to winget-pkgs. ([#213](https://github.com/nubjs/nub/pull/213))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.7) list every change in this release.

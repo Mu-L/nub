@@ -1,0 +1,23 @@
+---
+title: "Nub 0.1.6"
+description: Two reported correctness divergences fixed — duplicate SIGINT delivery on Ctrl-C, and a pnpm-generated patch that was wrongly rejected — plus output-prefix cleanup and site polish.
+author: The Nub Team
+date: 2026-06-20
+---
+
+This release fixes two reported correctness divergences from Node and pnpm — duplicate SIGINT delivery on Ctrl-C, and patch application that rejected a pnpm-generated patch — alongside output-prefix cleanup and site polish.
+
+## Fixes
+
+**Patch application now matches pnpm.** `nub install` applies pnpm-generated patches that pnpm and GNU `patch` apply cleanly. The applier was reimplemented as a faithful port of pnpm's lenient line-array algorithm — replacing the prior strict, git-apply-style applier — closing five fidelity divergences: the missing no-newline-at-end-of-file marker case, trailing-whitespace tolerance on context and deleted lines, and a fuzz cap that now matches pnpm's ±20 lines. Reported by [@AlexGodard](https://github.com/AlexGodard). ([#25](https://github.com/nubjs/nub/issues/25))
+
+**SIGINT fires once on Ctrl-C.** `process.on('SIGINT')` previously fired twice on a single Ctrl-C; it now fires once, matching Node. The file-run child runs in its own process group, so the controlling TTY signals only Nub's group and the forwarder's single relay is the lone delivery. Reported by [@dmitri-gb](https://github.com/dmitri-gb). ([#26](https://github.com/nubjs/nub/issues/26))
+
+> [!NOTE]
+> The pnpm-patch port also means Nub now rejects a patch whose context has drifted beyond ±20 lines — it previously applied it — matching pnpm's fuzz limit.
+
+## CLI and site
+
+The status-prefix was dropped from `nub upgrade`, `nub pm shim`, and `nub pm unshim` informational output, so the status lines read clean. On the site, light-mode accent colors were darkened to clear WCAG AA contrast, and a GitHub repo link now appears under the table of contents on every docs page.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.6) list every change in this release.

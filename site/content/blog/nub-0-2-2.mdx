@@ -1,0 +1,25 @@
+---
+title: "Nub 0.2.2"
+description: Project-source plain JavaScript is transpiled, the navigator global and Web Locks land on the compat floor, and the WPT slice expands.
+author: The Nub Team
+date: 2026-06-26
+---
+
+A runtime and package-manager patch.
+
+## Runtime
+
+- **Project-source plain JavaScript is transpiled.** `.js`, `.mjs`, and `.cjs` project source now goes through the same transpile path as TypeScript. ([#152](https://github.com/nubjs/nub/pull/152))
+- **The navigator global is backfilled on Node below 21, and Web Locks is spec-faithful.** ([#164](https://github.com/nubjs/nub/pull/164))
+- The WPT slice expands to cover URLPattern, Web Locks, and `reportError`. ([#158](https://github.com/nubjs/nub/pull/158))
+
+## Package manager
+
+- Bare `pnpm_config_*` registry env vars are honored under a pnpm 11+ incumbent. ([#153](https://github.com/nubjs/nub/pull/153))
+- Yarn workspace members are linked into the consumer's `node_modules`. ([#154](https://github.com/nubjs/nub/pull/154))
+- Dist-tag specs are re-read live when the primer served the pick. ([#155](https://github.com/nubjs/nub/pull/155))
+- `directories.bin` is linked as a fallback when a top-level `bin` is absent. ([#156](https://github.com/nubjs/nub/pull/156))
+
+Thanks to [@jdalton](https://github.com/jdalton) for sharing recursive-run chunk members via a shared reference instead of a per-worker clone, and for trimming redundant work on the JavaScript transpile path. ([#148](https://github.com/nubjs/nub/pull/148), [#159](https://github.com/nubjs/nub/pull/159))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.2) list every change in this release.

@@ -1,0 +1,29 @@
+---
+title: "Nub 0.2.1"
+description: Installs are resilient on resource-constrained CI and containers, and repeated work is shaved off the install and warm-cache paths.
+author: The Nub Team
+date: 2026-06-25
+---
+
+This release makes `nub install` resilient on resource-constrained CI and containers, and shaves repeated work off the install and warm-cache paths.
+
+> [!IMPORTANT]
+> **Installs no longer abort under thread, PID, or CPU-quota pressure.** On constrained CI runners, `nub ci` could exit 101 at the install tail when an OS thread spawn failed — with the abort-on-panic build, that crashed the whole install instead of degrading. Spawns are now guarded, and the install's CPU-bound pools size to the cgroup CPU quota rather than the host core count. If you saw intermittent exit-101 installs in a container, this release fixes them.
+
+## Install resilience and performance
+
+| Area | What changed |
+| --- | --- |
+| Install | Every thread spawn is guarded, with a cgroup-aware concurrency cap, so install degrades gracefully instead of aborting under thread or PID exhaustion ([#136](https://github.com/nubjs/nub/pull/136)) |
+| Pool sizing | The CPU-bound install pools size to the box's cgroup CPU quota instead of the over-reported host core count, avoiding over-subscription and the throttle latency cliff ([#140](https://github.com/nubjs/nub/pull/140)) |
+| File descriptors | The soft file-descriptor limit is raised on engine startup, fixing intermittent "Too many open files" on large dependency trees on macOS ([#143](https://github.com/nubjs/nub/pull/143)) |
+| Config reads | Each config file is read and parsed once per command via an mtime-validated cache, dropping repeated reads from 3× to 1× with byte-identical output ([#137](https://github.com/nubjs/nub/pull/137)) |
+| Transpile cache | Warm transpile-cache hits collapse from three body copies to one, reusing the read buffer in place ([#139](https://github.com/nubjs/nub/pull/139)) |
+
+CPU-quota auto-detection stays wired in, with no public CPU knob in any namespace. ([#150](https://github.com/nubjs/nub/pull/150))
+
+## nub run
+
+`nub run <script> <args>` already forwarded args to the underlying command, but the echoed command preamble showed only the script body. It now includes the forwarded args, shell-quoted exactly as they run, so the displayed command matches what executes. ([#147](https://github.com/nubjs/nub/pull/147))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.2.1) list every change in this release.

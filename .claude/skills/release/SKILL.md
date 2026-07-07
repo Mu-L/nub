@@ -134,6 +134,17 @@ gh release view v<ver> --repo nubjs/nub --json body -q .body   # verify it rende
 
 The v0.1.4 and v0.1.3 release bodies are the reference exemplars of this structure.
 
+## Step 4b — Publish the notes as a blog post (MANDATORY — every release)
+
+Every release also ships as a blog post under `site/content/blog/`. This is a standard release step, done on every version — the same content/presentation-to-`main` exception as docs (commit directly to `main`, no PR). Before writing, invoke the `prose-writing` skill and follow PROSE.md (blog copy: routine patch notes stay factual, neutral, unsigned, scannable — no hype, no personality; a milestone version gets a fuller treatment but the same neutral bar).
+
+- **File:** `site/content/blog/nub-<major>-<minor>-<patch>.mdx` (e.g. `nub-0-2-10.mdx`) — the filename is the URL slug (`/blog/nub-0-2-10`); fumadocs auto-globs `content/blog/*.mdx`, so no index/meta wiring is needed.
+- **Frontmatter** (schema from `source.config.ts` — all four required): `title: "Nub <ver>"` (add a `: <theme>` subtitle only for a milestone/single-theme release), `description:` a plain sentence stating the theme **with NO inline code/backticks** (the field renders raw — de-emphasize code tokens to plain words), `author: The Nub Team`, `date: <YYYY-MM-DD>` **back-dated to the release's `publishedAt`** so the blog timeline stays chronological.
+- **Body:** a short lede (the dominant theme), then the release's themed sections adapted to blog prose — NOT the raw "Commits in this release" changelog dump. Carry over the heads-up `> [!IMPORTANT]` / `> [!NOTE]` callouts and the per-theme tables; keep the PR/issue links that matter. Close with a link to the full release notes: `The [full release notes](https://github.com/nubjs/nub/releases/tag/v<ver>) list every change in this release.`
+- **Scale to the release:** a small patch gets a short post (a few sections); a milestone (a minor bump, a headline feature) gets a fuller one that opens with the thing working (a code block within a sentence or two of the heading, per the blog rules).
+
+Reference exemplars: any `site/content/blog/nub-0-2-*.mdx` post (`nub-0-2-0.mdx` for a milestone, `nub-0-2-5.mdx` for a small patch).
+
 ## Step 5 — Close the loop on issues + PRs (MANDATORY — always, no matter what)
 
 Comment a brief factual note carrying **the version and a link to the release** on **EVERY closed issue and EVERY merged PR that shipped in this release** — not just the headline fixes. This is mandatory maintainer hygiene (AGENTS.md "Git & GitHub maintainer hygiene"); do it on every release without exception. Users see "fixed" the moment an issue closes, but the fix is not on the released binary until the tag publishes — this comment closes that credibility gap and gives the reporter a link to the exact release.
@@ -188,6 +199,7 @@ A complete release has: the 10 npm packages published (`@nubjs/nub`, `@nubjs/nub
 | Bump | `make version V=<ver>` → `make version-check` |
 | Cut | `git commit -m "v<ver>"` → `git tag v<ver>` → `git push origin main --tags` |
 | Notes | `gh release edit v<ver> --notes-file notes.md` |
+| Blog | `site/content/blog/nub-<x>-<y>-<z>.mdx` — publish the notes as a post, back-dated to `publishedAt` (direct to `main`) |
 | Loop | `gh issue comment <n> --body "Fixed in v<ver>: <release URL>"` (every closed issue + merged PR — mandatory) |
 | Verify | `npm view @nubjs/nub@<ver> version` · `gh release view v<ver> --json assets` |
 

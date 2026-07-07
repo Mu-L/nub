@@ -1,0 +1,24 @@
+---
+title: "Nub 0.1.2"
+description: Package-manager, runtime, and installer fixes — lifecycle Node-version discovery, workspace resolution, and env-file parsing.
+author: The Nub Team
+date: 2026-06-18
+---
+
+A patch release with package-manager, runtime, installer, and documentation fixes.
+
+## Bug fixes
+
+- A dependency's lifecycle script no longer crashes when the dependency ships its own `.nvmrc` or `.node-version` file. Node-version discovery now ignores pin files found under `node_modules`, so lifecycle Node re-entry resolves the project's pin instead of a dependency's. ([#7](https://github.com/nubjs/nub/issues/7))
+- Installs eligible for the global virtual store keep a hidden-hoisted dependency project-local, fixing a case where a dependency's bare `import` could resolve to a stale older version. ([#6](https://github.com/nubjs/nub/issues/6))
+- A workspace member's dependency is no longer installed below its declared semver range when reading an npm `lockfileVersion 3` lockfile; workspace peer dependencies and npm member paths resolve correctly. ([#14](https://github.com/nubjs/nub/issues/14))
+
+## Runtime
+
+Env-file values that contain unquoted JSON are now preserved as-is rather than being altered during parsing.
+
+## Installer
+
+The install script runs on bash 3 without requiring a GitHub token.
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.2) list every change in this release.

@@ -1,0 +1,32 @@
+---
+title: "Nub 0.1.8"
+description: A Node augmentation batch — an interactive-TUI hang fix, native-addon ESM imports, WebAssembly and ShadowRealm unflagging, and a tree-wide compatibility opt-out.
+author: The Nub Team
+date: 2026-06-21
+---
+
+A Node augmentation batch: an interactive-TUI hang fix, native-addon ESM imports, WebAssembly and ShadowRealm unflagging, and the `NODE_COMPAT` tree-wide opt-out.
+
+## Terminal foreground handoff
+
+Interactive full-screen TUIs — Nx, Turbo — hung unkillably under `nub run`, with Ctrl-C unreachable. Since 0.1.6 the child runs in its own process group, but that group was never handed the terminal foreground, so any raw-mode terminal read raised SIGTTIN and stopped the process while Ctrl-C went to Nub instead of the child.
+
+On the interactive path, Nub now hands the terminal foreground to the child's process group after spawn, and a guard restores Nub's foreground on child exit. While the child owns the terminal, the redundant SIGINT forward is suppressed — the kernel already delivers Ctrl-C to the foreground group directly — and the 0.1.6 single-SIGINT guarantee is preserved. ([#32](https://github.com/nubjs/nub/pull/32), fixes [#27](https://github.com/nubjs/nub/issues/27))
+
+## Expanded feature matrix
+
+Three experimental Node features are now auto-injected on the Node versions that require the flag, consistent with Nub's existing posture of backfilling a feature where it was flagged. `--node` opts out.
+
+| Feature | Flag | Bands injected |
+| --- | --- | --- |
+| Native-addon ESM imports | `--experimental-addon-modules` | Node 22.20–23.0 and 23.6+ |
+| WebAssembly modules | `--experimental-wasm-modules` | Node 18.19–22.19 and 23.0–24.5 |
+| ShadowRealm | `--experimental-shadow-realm` | Node 18.19+ |
+
+Worker `execArgv` filtering also strips `--harmony-*` and `--experimental-shadow-realm` from child Worker threads to avoid bad-option startup aborts on Node versions where those flags are absent. ([#31](https://github.com/nubjs/nub/pull/31), [#33](https://github.com/nubjs/nub/pull/33))
+
+## Tree-wide compatibility opt-out
+
+Setting `NODE_COMPAT=1` (or `true`/`yes`, case-insensitive) forces zero-augmentation mode tree-wide — the persistent, inheritable form of `--node`. Because env vars propagate to descendants, one export in your shell, `.envrc`, or CI config covers the entire process tree. Version resolution and Node provisioning stay active; only runtime augmentation is disabled. It composes with `--node` — either one forces compatibility mode. ([#34](https://github.com/nubjs/nub/pull/34))
+
+The [full release notes](https://github.com/nubjs/nub/releases/tag/v0.1.8) list every change in this release.
