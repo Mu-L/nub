@@ -31,7 +31,7 @@ A Bun-like DX on top of stock `node`, written in Rust.
 nub index.ts             # TypeScript-first Node.js runtime
 nub run dev              # 24× faster pnpm run
 nubx prisma generate     # 19× faster npx
-nub install              # 5× faster pnpm install
+nub install              # 18× faster pnpm install
 nub watch src/server.ts  # native watch mode
 nub pm shim              # built-in Corepack-style shims
 nub node install 26      # Node version manager
