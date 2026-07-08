@@ -105,7 +105,7 @@ Declared imports resolve perfectly; a phantom import finds *nothing*. This is wh
 
 Nub found a way to eliminate that breakage — and ships the symlinked machine-global store as its default layout. Here's how.
 
-## De-phantoming the virtual store
+## De-phantoming node_modules
 
 To solve the phantom problem, Nub inspects every package's actual code. Nub is uniquely positioned to do this: it already contains [Oxc](https://oxc.rs), a production-grade JavaScript parser and transpiler.
 
@@ -200,12 +200,7 @@ The global store also switches off wherever it can't work or isn't wanted:
 
 - **CI (`CI=1` in the environment), and `nub ci` anywhere** — real directories and relative links, a `node_modules` that survives a Docker `COPY --from` into a fresh image where the machine store wouldn't exist.
 - **Injected workspace dependencies** (`dependenciesMeta.*.injected`) — these exist to give each consumer its own copy, so the store stays in the project.
-- **Manual opt-out** — one line, same isolated layout, same phantom protection, with the virtual store back inside the project:
-
-  ```ini
-  # .npmrc
-  enableGlobalVirtualStore=false
-  ```
+- **Manual opt-out** — a single setting moves the virtual store back inside the project: same isolated layout, same phantom protection, no cross-project sharing.
 
 The default, though, is the global store, with the scanner, the Vite compat, and the framework fallback closing the gaps.
 
