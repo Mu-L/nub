@@ -29,9 +29,18 @@ nub app.ts        # augmented, on stock Node
 vp node app.ts    # plain Node
 ```
 
-Running a file with Nub adds tsx-style TypeScript, `tsconfig`-aware resolution, JSX, decorators, automatic `.env` loading, YAML and TOML imports, and polyfilled or unflagged APIs like `Worker` — the batteries-included feel of a runtime like Bun, still executing on the stock `node` binary. Vite+ runs files through `vp node`, but that path is unaugmented: it defers to Node's own native type-stripping, with no `tsconfig`-aware resolution and none of those loaders or polyfills.
+Running a file with Nub augments it — the batteries-included feel of a runtime like Bun, still on the stock `node` binary:
 
-This is transpilation, not type-checking. Nub supports the full TypeScript syntax surface — `tsconfig` paths, decorators, enums, parameter properties, extensionless imports — but it does not type-check. For that, bring your own type checker.
+- **TypeScript** — the full syntax surface: enums, decorators, parameter properties, `import =`, and extensionless imports
+- **JSX** — `.jsx` and `.tsx` run directly, with the runtime resolved from your `tsconfig`
+- **Module resolution** — `paths`, `baseUrl`, and `extends` from `tsconfig`, applied at runtime
+- **Env files** — `.env` and `.env.[mode]` loaded automatically
+- **Data imports** — YAML, TOML, JSON5, JSONC, and text files load like JSON
+- **Polyfilled APIs** — `Worker`, web storage, `Temporal`, `URLPattern`, and other newer globals
+
+Vite+ runs files through `vp node`, but that path is unaugmented: it defers to Node's own native type-stripping, with no `tsconfig`-aware resolution and none of those loaders or polyfills.
+
+This is transpilation, not type-checking — Nub runs the TypeScript above but never type-checks it. For that, bring your own type checker.
 
 ## Package management
 
