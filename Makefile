@@ -78,14 +78,14 @@ verify:
 		echo "make verify requires installed JS dependencies; run: pnpm install --frozen-lockfile" >&2; \
 		exit 1; \
 	}
-	NUB_SHARED_TARGET="$(CURDIR)/target" $(RUST_BUILD) fmt --check
+	NUB_SHARED_TARGET="$(CURDIR)/target" "$(RUST_BUILD)" fmt --check
 	(cd crates/nub-native && NUB_SHARED_TARGET="$(CURDIR)/target" "$(RUST_BUILD)" fmt --check)
-	$(MAKE) --no-print-directory PROFILE=debug CARGO="env NUB_SHARED_TARGET=$(CURDIR)/target $(RUST_BUILD)" addon
+	$(MAKE) --no-print-directory PROFILE=debug CARGO="env NUB_SHARED_TARGET='$(CURDIR)/target' '$(RUST_BUILD)'" addon
 	@test -s runtime/addons/nub-native.node
-	NUB_SHARED_TARGET="$(CURDIR)/target" $(RUST_BUILD) clippy --all-targets --all-features -- -D warnings
+	NUB_SHARED_TARGET="$(CURDIR)/target" "$(RUST_BUILD)" clippy --all-targets --all-features -- -D warnings
 	(cd crates/nub-native && NUB_SHARED_TARGET="$(CURDIR)/target" "$(RUST_BUILD)" clippy --all-features -- -D warnings)
 	tests/brand-lint/check-env-reads.sh
-	NUB_SHARED_TARGET="$(CURDIR)/target" $(RUST_BUILD) test
+	NUB_SHARED_TARGET="$(CURDIR)/target" "$(RUST_BUILD)" test
 
 # Run the integration suite across a Node version matrix (18.19 floor → 22.15
 # fast-path floor) — the local mirror of ci.yml's `test` job. Locates or
