@@ -12,7 +12,6 @@ A fast-read index of the load-bearing rules a doing-agent must not miss. Each li
 - **The repo is PUBLIC — never commit internal/competitive discussion** (strategy, benchmark-framing, private attributions) to any tracked file or commit message. (See [The repo is PUBLIC](#the-repo-is-public--never-commit-internal-discussion-high-priority).)
 - **Brand boundary (public surfaces only):** no public `globalThis.nub`, no `nub:*` import namespace, no `@nub/*` scope, no `"nub"` user-authored config field, no documented `NUB_*` user knob. Internals are exempt. (See [The brand boundary](#the-brand-boundary--public-surfaces-only-internals-are-exempt).)
 - **`vendor/aube` changes follow fork-discipline:** default-preserving (standalone aube byte-for-byte unchanged on the default path; the embedder opts in) OR a justified latent-bug-fix jdx would accept. (See [The aube vendoring + upstreaming](#the-aube-vendoring--upstreaming--memorize-this-forgotten-twice-ground-every-aube-claim-here-not-memory).)
-- **Control complexity:** separate the demonstrated requirement from the proposed mechanism, use the smallest complete design, and stop for design review before material architecture expansion. (See [Complexity control](#complexity-control).)
 - **No agent co-author trailers in commits** — the commit-msg hook strips them; don't add them. (See [Git & GitHub maintainer hygiene](#git--github-maintainer-hygiene-high-priority).)
 
 ## Core design positions — ALWAYS HOLD THESE IN CONTEXT (read before any CLI/PM/runtime change)
@@ -214,16 +213,7 @@ Feature-specific harnesses that encode this loop live under `tests/<feature>/` �
 
 **Quality over velocity. Always.** Don't move fast, check boxes, and ship stubs as complete implementations. The specific failure modes:
 
-### Complexity control
-
-- **Separate requirement from mechanism.** A real bug proves an invariant needs protection; it does not validate the first or most defensive proposed fix.
-- **Use the smallest complete mechanism at the actual product scale.** Prefer existing OS/runtime primitives and established prior art before custom coordination infrastructure.
-- **Stop for explicit design review before material architecture expansion.** New subsystems, supervisors/daemons, cross-process protocols, global coordinators/registries, invasive OS automation, or similarly broad changes need prior approval.
-- **Keep speculation out of production.** Do not promote a harness artifact, future API, or theoretical interleaving without ordinary-user or threat-model relevance.
-- **Triage review findings.** Reviewers advise; they do not create automatic implementation mandates. Fix demonstrated defects, redesign flawed mechanisms, and explicitly defer or close low-value theoretical cases.
-- **Bound hardening campaigns.** Define acceptance criteria and a stop condition first. Once proportionate tests and fresh review cover the bounded requirements, stop instead of searching indefinitely for zero theoretical risk.
-- **Run a simplification checkpoint when the implementation materially outgrows the approved plan.** Inspect the whole diff, restate non-goals, compare prior art, and cut or defer before continuing.
-- **Keep future slices separate.** Do not solve future public-API, nesting, or lifecycle requirements in a current foundation slice.
+- **Do not overengineer.** Solve the demonstrated problem at its actual scale. Do not introduce generalized infrastructure, extra abstraction, speculative hardening, or adjacent cleanup without evidence that the added complexity earns its cost; when evaluating recommendations, "not worth doing" is a valid and preferred verdict.
 - **Treat native sub-agent completion and input notifications as authoritative.** After dispatch, the root continues useful non-overlapping work or yields. Before yielding while sub-agents remain active, state their count and give each lane a one-line description. Wait only when that agent's return is the dependency barrier and no useful coordination work remains; never use repeated waits as a heartbeat or busy-polling loop.
 - **Never mark a task `[x]` without verifying the behavior end-to-end.** Running `cargo test` is necessary but not sufficient. If the task says "implement per-line stream prefixing matching pnpm," you must run `nub -r --stream run build` on a real fixture and compare the output to `pnpm -r --stream run build`. A green test suite with a stubbed implementation is worse than an unchecked task.
 - **Never claim "parity" without evidence.** "Complete workspace parity with pnpm" means every flag, every edge case, every output format. If you haven't tested a flag, don't mark it done. If the implementation is a simplified version, say so explicitly in the task note — don't use language like "implemented" for something that's "scaffolded."
