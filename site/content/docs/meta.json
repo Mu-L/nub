@@ -8,12 +8,11 @@
     "install",
     "node",
     "pm",
+    "deployment",
     "pm-shim",
     "plugins",
     "faq",
     "---",
-    "[Guides](/guides)",
-    "---",
-    "deployment"
+    "[Guides](/guides)"
   ]
 }

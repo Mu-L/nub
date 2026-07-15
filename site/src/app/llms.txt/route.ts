@@ -1,4 +1,5 @@
 import { source, guidesSource, blog } from '@/lib/source';
+import { groupPackageMetaManager } from '@/lib/docs-tree';
 
 // Static at build time — the content set only changes on rebuild.
 export const dynamic = 'force-static';
@@ -54,7 +55,7 @@ function orderedDocPages(): DocPage[] {
     }
   };
 
-  visit(source.pageTree.children);
+  visit(groupPackageMetaManager(source.pageTree.children));
 
   // Append any page the tree didn't surface, so the index stays complete.
   for (const page of source.getPages()) {

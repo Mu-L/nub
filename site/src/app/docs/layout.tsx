@@ -3,6 +3,10 @@ import type { ReactNode } from 'react';
 import type { Node as TreeNode, Root as TreeRoot } from 'fumadocs-core/page-tree';
 import { baseOptions } from '@/lib/layout.shared';
 import { source } from '@/lib/source';
+import {
+  explicitIndexChild,
+  groupPackageMetaManager,
+} from '@/lib/docs-tree';
 
 /* Pages that map to a concrete command get a subtle, right-aligned mono chip
    in the sidebar — descriptive label on the left, the command on the right. */
@@ -31,15 +35,13 @@ function LabelWithChip({ label, command }: { label: ReactNode; command: string }
 
 function styleNode(node: TreeNode): TreeNode {
   if (node.type === 'folder') {
-    // The folder header renders a clickable link to its index page; give it the
-    // same command chip that index page would get. When the folder has no
-    // `index` (a meta whose `pages` lists "index" explicitly rather than "..."),
-    // the index instead appears as a regular child page — find it so the chip
-    // still attaches, and drop that duplicate child below so the header isn't
-    // stuttered by an identical row beneath it.
-    const indexChild = node.children.find(
-      (c): c is Extract<TreeNode, { type: 'page' }> => c.type === 'page' && c.url in COMMAND_BY_URL,
-    );
+    // The folder header renders a clickable link to its index page. When the
+    // folder has no `index` (a meta whose `pages` lists "index" explicitly
+    // rather than "..."), the index instead appears as a regular child page —
+    // find it by its source file, promote it to the header, and drop that
+    // duplicate child so the folder name isn't repeated beneath itself. A
+    // command chip is added below when the promoted page maps to a command.
+    const indexChild = explicitIndexChild(node);
     const folderUrl = node.index?.url ?? indexChild?.url;
     const isDuplicateIndex = (c: TreeNode) =>
       !node.index && c.type === 'page' && c.url === folderUrl;
@@ -84,7 +86,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   const tree: TreeRoot = {
     ...source.pageTree,
-    children: source.pageTree.children.map(styleNode),
+    children: groupPackageMetaManager(source.pageTree.children).map(styleNode),
   };
 
   return (
