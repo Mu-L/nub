@@ -27,13 +27,51 @@ next: nub index.ts
 
 ## nub init
 
-The scaffold installs `typescript@^7`, `@types/node@^26`, and `@nubjs/types` as devDependencies, so the editor and `tsc --noEmit` work immediately. Nub transpiles at run time, so the tsconfig is `noEmit` and the project has zero runtime dependencies. The tsconfig targets Node's own TypeScript semantics — `nodenext` resolution, `verbatimModuleSyntax`, `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, targeting `es2024`.
+- **TypeScript 7 by default.** The scaffold pins `typescript@^7` — the native compiler — alongside `@types/node@^26` and `@nubjs/types`. Nub transpiles at run time, so `tsc` exists purely to typecheck (`noEmit`) and the project has zero runtime dependencies.
+- **Node types without `"dom"`.** `lib` stays `["es2024"]`; the globals Nub polyfills (`Worker`, …) are typed by `@nubjs/types`, so `window` and `document` never leak into a Node project.
+- **Real `.ts` imports.** `verbatimModuleSyntax` and `allowImportingTsExtensions`: import specifiers say `./thing.ts` and resolve exactly as Node and Nub do.
+- **Strict from the first file.** `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, `nodenext` resolution, `es2024` target.
+
+<details>
+<summary>The generated tsconfig.json</summary>
+
+```json
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2024",
+    "lib": ["es2024"],
+    "types": ["node", "@nubjs/types"],
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true
+  }
+}
+```
+
+</details>
 
 In a terminal, init asks three questions — name, TypeScript or JavaScript, git — each with a sensible default; `-y` skips them, non-interactive environments auto-default, and existing files are never overwritten without `--force`. The [init docs](/docs/init) have the full surface.
 
-## Create templates that answer with Nub commands
+## nub create
 
-For framework templates, `nub create` runs the ecosystem's `create-*` scaffolders (`vue` → `create-vue`), and scaffolders that detect the invoking package manager now answer in kind:
+`nub create <template>` resolves the ecosystem's `create-*` convention (`vue` → `create-vue`) and runs the scaffolder. As of this release the scaffolder can tell Nub is calling — [#529](https://github.com/nubjs/nub/pull/529) exports the `npm_config_user_agent` these tools read — so scaffolders with Nub detection respond with Nub commands. Working today:
+
+```sh
+nub create vue my-app
+nub create vite my-app
+nub create nuxt my-app
+```
 
 ```console
 $ nub create vue my-app --default
@@ -45,7 +83,7 @@ $ nub create vue my-app --default
    nub run dev
 ```
 
-Detection has landed in create-vue ([vuejs/create-vue#1066](https://github.com/vuejs/create-vue/pull/1066)) and Nuxt ([nuxt/cli#1360](https://github.com/nuxt/cli/pull/1360)), with PRs open across the ecosystem. On Nub's side, `nub create` and `nub dlx` children now see the `npm_config_user_agent` these scaffolders sniff ([#529](https://github.com/nubjs/nub/pull/529)).
+Detection PRs are open across the ecosystem — track them to see your framework land: [create-next-app](https://github.com/vercel/next.js/pull/95331), [create-hono](https://github.com/honojs/create-hono/pull/124), [create-t3-app](https://github.com/t3-oss/create-t3-app/pull/2237), [create-payload-app](https://github.com/payloadcms/payload/pull/17163), [create-strapi-app](https://github.com/strapi/strapi/pull/26864), [create-medusa-app](https://github.com/medusajs/medusa/pull/15898), [create-qwik](https://github.com/QwikDev/qwik/pull/8786), and [std-env](https://github.com/unjs/std-env/pull/197). Already merged upstream: [create-vue](https://github.com/vuejs/create-vue/pull/1066), [Nuxt](https://github.com/nuxt/cli/pull/1360), [solid-cli](https://github.com/solidjs-community/solid-cli/pull/77), [react-router](https://github.com/remix-run/react-router/pull/15276), [create-cloudflare](https://github.com/cloudflare/workers-sdk/pull/14499), and [package-manager-detector](https://github.com/antfu-collective/package-manager-detector/pull/72). create-vite needs no patch — it reads the user agent directly.
 
 ## nubx returns to npx parity
 
