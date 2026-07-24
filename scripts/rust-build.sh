@@ -103,5 +103,9 @@ printf 'rust-build: %s\n  CARGO_TARGET_DIR=%s jobs=%s qos=%s\n' \
 # NUB_* vars are routing input for this wrapper, not part of the command's
 # environment. In particular, tests must not expose them to spawned user code.
 unset NUB_SHARED_TARGET NUB_BUILD_JOBS NUB_BUILD_FG
+# RUSTC_WRAPPER= disables the machine-global rustc-qos wrapper (make qos-global)
+# for this invocation: QoS is already applied at the cargo level here, and with
+# NUB_BUILD_FG unset above, a foreground (NUB_BUILD_FG=1) build would otherwise
+# be re-clamped at the rustc level. Cargo treats the empty value as "no wrapper".
 # $qos word-splits deliberately (empty, or "taskpolicy -c utility").
-exec env CARGO_TARGET_DIR="$target" $qos cargo "$@"
+exec env CARGO_TARGET_DIR="$target" RUSTC_WRAPPER= $qos cargo "$@"
