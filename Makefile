@@ -1,4 +1,12 @@
-CARGO   ?= cargo
+# Clamp make-driven cargo to utility QoS on darwin so fleet builds never starve
+# interactive work — same contention control as scripts/rust-build.sh (which
+# covers `make verify` already). NUB_BUILD_FG=1 opts out; no-op off macOS.
+ifeq ($(NUB_BUILD_FG),1)
+  QOS =
+else
+  QOS = $(shell command -v taskpolicy >/dev/null 2>&1 && echo taskpolicy -c utility)
+endif
+CARGO   ?= $(QOS) cargo
 PROFILE ?= release
 BIN_DIR ?= /usr/local/bin
 RUST_BUILD = $(CURDIR)/scripts/rust-build.sh
