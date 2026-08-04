@@ -98,6 +98,30 @@ gcloud compute instances create nub-win-tmp \
 - **Read the serial console to confirm the script ran** — `get-serial-port-output … | grep windows-startup-script-ps1` shows each line's output, including `processed file: C:\ProgramData\ssh\administrators_authorized_keys`.
 - A firewall rule is NOT the problem: `default-allow-ssh` is `0.0.0.0/0 tcp:22` with **no target tags**, so it already covers every instance. Don't go hunting network tags.
 
+### Running a LONG job (a cargo build) on a Windows box — use a scheduled task, and scp the script
+
+A cold `cargo build --release -p nub-cli` is ~30-45 min, far past any single SSH call. Four approaches were tried on `nub-win3`; three failed, and the failure MODES are the useful part because two of them are SILENT:
+
+| approach | what happened |
+| --- | --- |
+| `Start-Process … -WindowStyle Hidden` | ran, then **died after the dependency downloads with NO error line**. The SSH session's job object closes and takes the child with it. A vanished process with an empty log is this, not a build error. |
+| multi-line PowerShell piped to `powershell -Command -` over SSH stdin | the script silently **never materialised** (`if exist … NO_BAT`). Quoting dies somewhere between zsh, ssh and PowerShell. |
+| scheduled task running as **SYSTEM**, cargo via `~/.cargo/bin/cargo.exe` | `error: rustup could not choose a version of cargo to run` → `EXIT=1`. **rustup's default toolchain is per-USER**, and SYSTEM has none. |
+| **scp the `.bat`, then run it as a scheduled task, calling the toolchain binary directly** | works |
+
+```sh
+# Write the .bat LOCALLY with CRLF and scp it — do NOT try to author it over SSH stdin.
+printf '@echo off\r\ncd /d C:\\nub\r\nset RUSTUP_HOME=C:\\Users\\nub\\.rustup\r\nset CARGO_HOME=C:\\Users\\nub\\.cargo\r\n"C:\\Users\\nub\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin\\cargo.exe" build --release -p nub-cli > C:\\nub\\build.log 2>&1\r\necho EXIT=%%ERRORLEVEL%% >> C:\\nub\\build.log\r\n' > /tmp/dobuild.bat
+scp -i ~/.ssh/nub-vm /tmp/dobuild.bat nub@"$IP":C:/nub/dobuild.bat
+ssh -i ~/.ssh/nub-vm nub@"$IP" 'cmd /c "schtasks /Create /TN nubbuild /TR C:\nub\dobuild.bat /SC ONCE /ST 00:00 /RL HIGHEST /RU SYSTEM /F & schtasks /Run /TN nubbuild"'
+# then POLL: (Get-Process cargo,rustc).Count, plus the tail of build.log
+```
+
+- **Call the TOOLCHAIN binary, not the rustup shim** (`.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\cargo.exe`) so it does not matter which user rustup was configured for.
+- **The scheduled task is what makes failure VISIBLE** — it redirects to a log and records `EXIT=<n>`, where the detached-process approach just disappears.
+- **Toolchain prerequisites, ~15 min before any build:** VS Build Tools (`--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended`) then `rustup-init.exe -y --default-toolchain stable --profile minimal`. Verify by running `cargo --version` from its absolute path, not by trusting the installer's exit.
+- **Node/git come from vendor installers**, silently: node `.msi` via `msiexec /qn`, Git-for-Windows `.exe` via `/VERYSILENT /NORESTART`. Neither is on `PATH` for an existing SSH session — read `[Environment]::GetEnvironmentVariable("Path","Machine")` or use absolute paths (`C:\Program Files\Git\cmd\git.exe`).
+
 **Delete an ephemeral box when done** — a created VM keeps billing its disk even when stopped:
 
 ```sh
