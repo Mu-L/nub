@@ -113,10 +113,18 @@ A cold `cargo build --release -p nub-cli` is ~30-45 min, far past any single SSH
 # Write the .bat LOCALLY with CRLF and scp it — do NOT try to author it over SSH stdin.
 printf '@echo off\r\ncd /d C:\\nub\r\nset RUSTUP_HOME=C:\\Users\\nub\\.rustup\r\nset CARGO_HOME=C:\\Users\\nub\\.cargo\r\n"C:\\Users\\nub\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin\\cargo.exe" build --release -p nub-cli > C:\\nub\\build.log 2>&1\r\necho EXIT=%%ERRORLEVEL%% >> C:\\nub\\build.log\r\n' > /tmp/dobuild.bat
 scp -i ~/.ssh/nub-vm /tmp/dobuild.bat nub@"$IP":C:/nub/dobuild.bat
+# /RU SYSTEM is fine HERE because a build only needs a toolchain — never reuse this line for a measurement.
 ssh -i ~/.ssh/nub-vm nub@"$IP" 'cmd /c "schtasks /Create /TN nubbuild /TR C:\nub\dobuild.bat /SC ONCE /ST 00:00 /RL HIGHEST /RU SYSTEM /F & schtasks /Run /TN nubbuild"'
 # then POLL: (Get-Process cargo,rustc).Count, plus the tail of build.log
 ```
 
+⛔⛔ **USE THIS FOR BUILDS ONLY — NEVER FOR A MEASUREMENT. A scheduled task runs as `SYSTEM`, and `SYSTEM` IS NOT A NORMAL USER.** For a build that costs a `PATH` fix (the rustup row above). For anything that MEASURES OS-enforced behaviour it silently changes the answer, because `SYSTEM` holds privileges an ordinary account does not — `SeCreateSymbolicLinkPrivilege` above all — and `os.homedir()` becomes `C:\Windows\system32\config\systemprofile`.
+
+Measured 2026-08-04, and the verdict did not give it away: a build-jail package whose real failure is a refused symlink was re-measured under a SYSTEM task, produced **exactly the expected grant** with a clean control, and was reported as a validated reproduction. The artifact refuted it — the per-cell log was 1,476 bytes containing only a catalog warning naming the `systemprofile` path, and the symlink error appeared in **3 of 54** logs where the real-user CI run shows **51 of 54**. Running as `SYSTEM` had bypassed the very mechanism under test while landing on the same answer by another route.
+
+- **`whoami` is the cheap guard.** Print it as the first line of any script whose result you will believe, and assert on it: `nub-win3\nub` good, `nt authority\system` void.
+- **Get the right context by running through SSH itself, not a task** — an SSH session already runs as `nub`. Wrap the call in a harness-tracked background command (`run_in_background`) rather than a scheduled task: the session stays alive for hours, so the ~10-minute foreground cap that pushed you toward `schtasks` never applies. Detaching *within* the session (`Start-Process`, `nohup`-alikes) still dies to the job object — the point is that the SSH call itself is the long-lived process.
+- **`schtasks /RU <user> /RP <password>` also works but needs a password you probably do not have** — the `nub` account is created with a throwaway GUID password, and `net user nub <new>` fails `The user name or password is incorrect` from a non-elevated SSH token. Prefer the SSH route.
 - **Call the TOOLCHAIN binary, not the rustup shim** (`.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\cargo.exe`) so it does not matter which user rustup was configured for.
 - **The scheduled task is what makes failure VISIBLE** — it redirects to a log and records `EXIT=<n>`, where the detached-process approach just disappears.
 - **Toolchain prerequisites, ~15 min before any build:** VS Build Tools (`--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended`) then `rustup-init.exe -y --default-toolchain stable --profile minimal`. Verify by running `cargo --version` from its absolute path, not by trusting the installer's exit.
