@@ -527,7 +527,7 @@ Beyond the packages you approve explicitly, a curated set of well-known packages
 | **Advisory vetting** | An OSV `MAL-*` advisory check ran against this graph, *or* the graph was inherited from an already-checked lockfile (a frozen install, `nub ci`, a teammate's clone). | Not built |
 | **Cooling window** | The resolved version's publish time is older than `minimumReleaseAge` (default 24 hours). | Not built — fails closed on unknown publish time |
 
-Explicit decisions outrank the floor in both directions. A package you approve — through the incumbent's allow-list (`pnpm.onlyBuiltDependencies` / `pnpm.allowBuilds` under pnpm, `trustedDependencies` under Bun), the neutral `allowBuilds` field, or `nub approve-builds` — builds regardless; an explicit denial (`allowBuilds: { pkg: false }`, `neverBuiltDependencies`) always wins.
+Explicit decisions outrank the floor in both directions: a package you approve builds regardless of the gates, and an explicit denial still wins.
 
 A fresh resolve, or a lockfile Nub itself wrote (which carries the `time:` block), gives the floor everything it needs, so curated packages like `esbuild` build automatically:
 
