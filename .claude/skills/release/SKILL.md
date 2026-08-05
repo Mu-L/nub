@@ -60,12 +60,20 @@ make version-check        # MUST pass: cross-package consistency + @oxc-project/
 The release commit is a deliberate exception to the PR-default flow — direct to `main`.
 
 ```bash
-git add -A
-git status                # SANITY: commit ONLY the version-bump files. If unrelated WIP is in the
-                          # tree, stage just the touched version files.
-git commit -m "v<ver>"
+git status                # The shared tree usually carries another agent's WIP, so `git add -A`
+                          # would sweep it into the release commit. Path-scope instead:
+git commit -m "v<ver>" -- Cargo.lock Cargo.toml \
+  crates/nub-native/Cargo.lock crates/nub-native/Cargo.toml \
+  npm/*/package.json runtime/version.mjs
+git show --stat HEAD      # SANITY: 15 files, all version bumps, nothing else.
+
+# TWO pushes, never `git push origin main --tags`. This clone has ~155 local tags against
+# ~84 on the remote — v1.x leftovers from the Node fork this repo began as — and `--tags`
+# offers every one of them. The remote rejects them AND the whole push dies with them, so
+# `main` does not land either and the release silently does not start.
+git push origin main
 git tag v<ver>
-git push origin main --tags
+git push origin v<ver>    # the single tag: THIS is what triggers the publish
 ```
 
 Then fast-forward the shared tree: `git -C <shared-tree> fetch origin && git -C <shared-tree> merge --ff-only origin/main` (never `pull --ff-only` — it aborts on the shared tree's ever-present WIP).
@@ -220,7 +228,7 @@ A complete release has the 10 npm packages published (`@nubjs/nub`, `@nubjs/nub-
 | --- | --- |
 | Changeset | `git log $(git describe --tags --abbrev=0)..HEAD --oneline` |
 | Bump | `make version V=<ver>` → `make version-check` |
-| Cut | `git commit -m "v<ver>"` → `git tag v<ver>` → `git push origin main --tags` |
+| Cut | `git commit -m "v<ver>" -- <version files>` → `git push origin main` → `git tag v<ver>` → `git push origin v<ver>` (never `--tags`) |
 | Notes | `gh release edit v<ver> --notes-file notes.md` |
 | Blog | `site/content/blog/nub-<x>-<y>-<z>.mdx` — back-dated to `publishedAt` (direct to `main`) |
 | Tap | automatic via `bump-homebrew-tap`; verify with `gh api repos/nubjs/homebrew-tap/contents/Formula/nub.rb --jq .content \| base64 -d \| head -5` |
