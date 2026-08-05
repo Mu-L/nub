@@ -175,7 +175,7 @@ The installer is optional. Keep running `npm`, `pnpm`, `yarn`, or `bun` exactly 
 
 What Nub mirrors from the incumbent is **resolution** — which version of which package ends up in the graph, read from its lockfile, manifest fields, and config. What it does not mirror is **layout**: how those packages are then arranged on disk. Nub installs its own isolated tree regardless, so a branded layout setting in another manager's config file is read for nothing. The rest of that file — registries, auth, resolution settings, overrides — is read normally.
 
-| Incumbent | Layout settings it may carry | Under Nub |
+| Package manager | Layout settings it may carry | Under Nub |
 |---|---|---|
 | **npm** | `install-strategy`, `global-style`, `legacy-bundling` | No effect — except `install-strategy=nested`, which aborts rather than install a graph that resolves differently |
 | **pnpm** | `nodeLinker`, `hoist`, `hoistPattern`, `publicHoistPattern`, `shamefullyHoist`, `hoistWorkspacePackages`, `hoistingLimits`, `modulesDir`, `virtualStoreDir` | Honored — from `pnpm-workspace.yaml` under pnpm 11+, from `.npmrc` under pnpm 10 and below. Only `symlink=false` has no effect |
