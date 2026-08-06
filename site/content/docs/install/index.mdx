@@ -173,17 +173,31 @@ The installer is optional. Keep running `npm`, `pnpm`, `yarn`, or `bun` exactly 
 
 ### Resolution, not layout
 
-What Nub mirrors from the incumbent is **resolution** — which version of which package ends up in the graph, read from its lockfile, manifest fields, and config. What it does not mirror is **layout**: how those packages are then arranged on disk. Nub installs its own isolated tree regardless, so a branded layout setting in another manager's config file is read for nothing. The rest of that file — registries, auth, resolution settings, overrides — is read normally.
+What Nub mirrors from the incumbent is **resolution** — which version of which package ends up in the graph, read from its lockfile, manifest fields, and config. What it does not mirror is **layout**: how those packages are then arranged on disk. Layout is Nub's own axis, so you set it on a neutral surface rather than in another tool's config file.
 
-| Package manager | Layout settings it may carry | Under Nub |
+```ini
+# .npmrc — works under every incumbent except pnpm 11+
+node-linker=hoisted
+hoist-pattern=lodash
+public-hoist-pattern=@types/*
+shamefully-hoist=true
+hoist-workspace-packages=false
+hoisting-limits=workspaces
+modules-dir=vendor_modules
+virtual-store-dir=.store
+```
+
+The `--node-linker` flag does the same for one command. A branded layout setting in the incumbent's own config file is read for nothing; the rest of that file — registries, auth, resolution settings, overrides — is read normally.
+
+| Package manager | Its own layout settings | Under Nub |
 |---|---|---|
-| **npm** | `install-strategy`, `global-style`, `legacy-bundling` | No effect — except `install-strategy=nested`, which aborts rather than install a graph that resolves differently |
-| **pnpm** | `nodeLinker`, `hoist`, `hoistPattern`, `publicHoistPattern`, `shamefullyHoist`, `hoistWorkspacePackages`, `hoistingLimits`, `modulesDir`, `virtualStoreDir` | Honored — from `pnpm-workspace.yaml` under pnpm 11+, from `.npmrc` under pnpm 10 and below. Only `symlink=false` has no effect |
-| **Yarn** | `nodeLinker`, `nmHoistingLimits`, `nmMode` | No effect. Plug'n'Play is refused outright, before any write — there is no `node_modules` tree for Nub to install into |
-| **Bun** | `linker`, under `[install]` in `bunfig.toml` | No effect |
-| **Nub** | `install.linker`, `install.publicHoist` in `nub.jsonc` | Honored |
+| **npm** | `install-strategy`, `global-style`, `legacy-bundling` | Not read — except `install-strategy=nested`, which aborts rather than install a graph that resolves differently |
+| **pnpm** | the keys above, plus `hoist` and `symlink` | Read, because they already live on the neutral surface. Under pnpm 11+ Nub follows pnpm's own move to `pnpm-workspace.yaml`, since pnpm 11 stopped reading them from `.npmrc`. Only `symlink=false` has no effect |
+| **Yarn** | `nodeLinker`, `nmHoistingLimits`, `nmMode` | Not read. Plug'n'Play is refused outright, before any write — there is no `node_modules` tree for Nub to install into |
+| **Bun** | `linker`, under `[install]` in `bunfig.toml` | Not read |
+| **Nub** | `install.linker`, `install.publicHoist` in `nub.jsonc` | Read |
 
-Under Nub's own identity, layout is a `nub.jsonc` field:
+Under Nub's own identity, layout is a `nub.jsonc` field instead:
 
 ```jsonc title="nub.jsonc"
 {
@@ -198,7 +212,7 @@ Under Nub's own identity, layout is a `nub.jsonc` field:
 
 Both fields take an object form too — see [`install.linker`](/docs/config#installlinker) and [`install.publicHoist`](/docs/config#installpublichoist) for the strategies and their knobs.
 
-Where the incumbent's own setting has no effect — npm, Yarn, Bun — the neutral `node-linker` key in `.npmrc` and the `--node-linker` flag pick the layout instead. See [the flat opt-out](/docs/install/virtual-store#the-flat-opt-out).
+See [the flat opt-out](/docs/install/virtual-store#the-flat-opt-out) for choosing between the layouts.
 
 ### Nub identity
 
@@ -624,7 +638,7 @@ Some packages and tools break when a dependency's real path sits outside the pro
 Detection scans each package's published code rather than a curated list, so nothing needs maintaining. Add a bundler of your own in `.npmrc`:
 
 ```ini
-disableGlobalVirtualStoreForPackages[]=my-bundler
+disableGlobalVirtualStoreForPackages=my-bundler   # comma-separated
 ```
 
 ### Offline installs
