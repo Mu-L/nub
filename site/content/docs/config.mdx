@@ -3,133 +3,86 @@ title: Config reference
 description: The project file that configures Nub's runtime, dependency installs, and temporary package runs.
 ---
 
-Put `nub.jsonc` at the project root. Nub finds the nearest file by walking up from the command's working directory. The file uses JSON with comments and trailing commas, and an unknown key or invalid value in it stops the command with an error.
+Put `nub.jsonc` at the project root. Every field it takes, with its full value set:
+
+```jsonc title="nub.jsonc" full
+{
+  "$schema": "https://nubjs.com/schema/latest.json",
+
+  // ── runtime — file runs, scripts, and watch mode ──
+  "preload": ["./setup.ts", "tsx/esm"],    // paths or bare specifiers, in order
+  "nodeOptions": ["--enable-source-maps"], // any flag NODE_OPTIONS accepts
+  "v8Flags": ["--stack-size=2000"],        // the full V8 set, via the command line
+  "nodeCompat": false,                     // true = disable all Nub augmentation
+  "envFile": [".env", ".env.local"],       // true = cascade | false = none | path(s)
+
+  // text | jsonc | json5 | toml | yaml | ts | tsx | jsx
+  "loader": { ".graphql": "text" },
+  "conditions": ["development"],           // additional; matched before "default"
+  "tsconfig": "./tsconfig.runtime.json",   // JSX, decorators, paths — not type checking
+  "verifyDeps": "warn",                    // warn | error | true | false
+
+  // ── installs — Nub-identity projects only ──
+  "install": {
+    "linker": "global-virtual-store",      // global-virtual-store | isolated | hoisted
+    "publicHoist": ["@types/*"],           // name patterns; ["*"] for all
+    "minimumReleaseAge": "3d",             // <int><s|m|h|d|w>; default 24h, "0s" off
+    "minimumReleaseAgeExclude": ["@company/*"]
+  },
+
+  // ── temporary package runs — global file only ──
+  "dlx": { "consent": "prompt" }           // prompt | never
+}
+```
+
+Nub finds the nearest file by walking up from the command's working directory. The file uses JSON with comments and trailing commas, and an unknown key or invalid value stops the command with an error. Each field has its own section below, and paths resolve from the directory containing `nub.jsonc` rather than the shell's working directory.
+
+### Setting a field
+
+Every field is addressable by its dotted path. Writes go to the project file, and `--location user` sends them to your global one instead.
+
+```bash
+nub config set install.linker hoisted                  # ./nub.jsonc
+nub config set --location user install.linker hoisted  # ~/.config/nub/nub.jsonc
+```
+
+The full command surface is under [`nub config`](#nub-config) at the end of this page.
+
+### Precedence
 
 Every setting resolves through the same chain, most specific first:
 
 - **Command-line option** — `nub --node app.ts`
 - **Environment variable** — `NODE_COMPAT=1`
-- **Project `nub.jsonc`** — `"nodeCompat": true`, from the nearest file walking up
-- **Global `nub.jsonc`** — the same field, for personal defaults everywhere. This file is treated leniently, because it applies to every project on your machine: an unrecognized top-level section is ignored outright, and a bad value is reported and the whole file skipped rather than failing the command — so a key left behind by a newer Nub never takes the rest of your defaults down with it, and a typo in your own defaults never blocks someone else's project. The strict behavior above applies to the project file, which is checked in and shared. Read from the first of:
-  - `$XDG_CONFIG_HOME/nub/nub.jsonc`, on any platform, when that variable is set
-  - `~/.config/nub/nub.jsonc` on every platform, including Windows, where it resolves under your user profile. Windows service and `SYSTEM` accounts, whose profile lives under the system root, fall back to `%APPDATA%\nub\nub.jsonc`
-- **Built-in default** — `false`
+- **Project `nub.jsonc`** — the nearest file walking up
+- **Global `nub.jsonc`** — the same field, for personal defaults everywhere
+- **Built-in default**
 
-Run `nub config path` to print the global file Nub will actually read.
+Both files take the same fields, except [`dlx`](#dlx), which is global-only. Run `nub config path` to print the global file Nub will actually read; it comes from the first of `$XDG_CONFIG_HOME/nub/nub.jsonc` when that variable is set, then `~/.config/nub/nub.jsonc` on every platform including Windows. Windows service and `SYSTEM` accounts, whose profile lives under the system root, fall back to `%APPDATA%\nub\nub.jsonc`.
 
-Both files take the same fields, except [`dlx`](#dlx), which is global-only.
+The global file is treated leniently, because it applies to every project on your machine: an unrecognized section is ignored and a bad value skips the whole file rather than failing the command. A key left behind by a newer Nub never takes the rest of your defaults down with it. The strict behavior above applies to the project file, which is checked in and shared.
 
-## Editing from the command line
+## JSON Schema
 
-Read and write any field with `nub config`, which validates the value and rewrites the file in place.
+Nub publishes a JSON Schema for `nub.jsonc`. The same document describes the project file and your global config, so either file can point at it for editor completion and validation.
 
-```bash
-nub config set nodeCompat true                # writes ./nub.jsonc
-nub config get install.linker                 # hoisted
-nub config delete install.minimumReleaseAge
-nub config path                               # the global file's location
-```
-
-Fields are addressed by their dotted path, and each is written whole. Pass arrays and objects as one shell-quoted JSON argument, with JSON keys and strings in double quotes.
-
-```bash
-nub config set preload '["./setup.ts","tsx/esm"]'
-nub config set loader '{".graphql":"text",".rules":"yaml"}'
-```
-
-Scalar values need no JSON quoting. A union field uses JSON only for its array or object form.
-
-```bash
-nub config set install.linker '{"strategy":"isolated","hoist":["@types/*"]}'
-```
-
-Values are checked against the same rules that read the file, so a rejected write leaves it untouched.
-
-```text
-$ nub config set install.minimumReleaseAge 3
-nub: `install.minimumReleaseAge` in /app/nub.jsonc: invalid duration `3` — expected an integer followed by a unit s|m|h|d|w (e.g. "3d")
-```
-
-Comments, blank lines, and key order survive an edit, so a hand-annotated file stays readable.
-
-Writes go to the project file, and `--location user` sends them to the global one instead. Fields under [`dlx`](#dlx) always go there, with or without the flag.
-
-```bash
-nub config set --location user envFile false   # personal default, everywhere
-nub config set dlx.consent never               # global; the flag is redundant
-```
-
-Reads take the project file first and fall back to the global one. Structured values print as compact JSON so they can be passed back to `set`; scalar strings print without JSON quotes. An unset field prints `undefined`, and `--json` prints the exact stored value.
-
-```bash
-nub config get --local nodeCompat   # project file only
-nub config get preload --json       # ["./setup.ts","tsx/esm"]
-```
-
-Keys that are not fields of this file keep their existing meaning: they read and write `.npmrc`, unchanged.
-
-## Reference
-
-Every field, with its full value set. Each has its own section below. Paths are resolved from the directory containing `nub.jsonc`, not the shell's current directory.
-
-```jsonc title="~/.config/nub/nub.jsonc"
+```jsonc title="nub.jsonc"
 {
   "$schema": "https://nubjs.com/schema/latest.json",
-
-  // ── runtime — file runs, scripts, and watch mode ──
-
-  // relative paths or bare specifiers, loaded in order
-  "preload": ["./setup.ts", "tsx/esm"],
-
-  // any flag your Node accepts in NODE_OPTIONS
-  "nodeOptions": ["--enable-source-maps"],
-
-  // passed on the command line, so the full V8 set
-  "v8Flags": ["--expose-gc"],
-
-  // true = disable every Nub augmentation, keeping the version pin
-  "nodeCompat": false,
-
-  // true = the default .env cascade
-  // false = load nothing
-  // a path or an array of paths to load
-  // "envFile": ".env.${APP_ENV}",
-  "envFile": [".env", ".env.local"],
-
-  // text | jsonc | json5 | toml | yaml | ts | tsx | jsx
-  "loader": { ".graphql": "text" },
-
-  "conditions": ["development"],   // matched ahead of "default"
-
-  // read for JSX, decorators, and path mapping — not type checking
-  "tsconfig": "./tsconfig.runtime.json",
-
-  // warn | error | true | false; true is warn
-  "verifyDeps": "warn",
-
-  // ── installs — Nub-identity projects only ──
-  "install": {
-    // "global-virtual-store" (default) | "isolated" | "hoisted" | "pnp"
-    // "pnp" is rejected on install; the object form adds one knob:
-    //   global-virtual-store → "eject": string[]
-    //   isolated → "hoist": boolean | string[]
-    "linker": { "strategy": "global-virtual-store", "eject": ["electron"] },
-
-    "publicHoist": ["@types/*"],     // name patterns; ["*"] for all; any layout
-
-    // <integer><s|m|h|d|w>; a bare number is rejected
-    "minimumReleaseAge": "3d",
-    "minimumReleaseAgeExclude": ["@company/*"]
-  },
-
-  // ── temporary package runs — global file only ──
-  // reaching the registry is a decision about your machine, not one
-  // checkout, so a project nub.jsonc carrying this is an error.
-  "dlx": {
-    "consent": "prompt"            // prompt | never
-  }
+  // ...
 }
 ```
+
+Schemas are served from `https://nubjs.com/schema/`:
+
+| URL | Role |
+| --- | --- |
+| [`latest.json`](https://nubjs.com/schema/latest.json) | Rolling — always matches the newest release; new fields show up in the schema as they ship |
+| `https://nubjs.com/schema/v0.7.json` | Pinned to the `0.7` minor series — use when you want the schema to stop drifting under a checkout |
+
+Each minor series gets one file (`v0.6.json`, `v0.7.json`, …). On every release bump Nub snapshots the rolling schema into that series' file; patch releases within `0.7.x` keep rewriting `v0.7.json` only when the published field surface changes. Older series stay published for long-lived branches. The [schema index](/schema) lists every file on disk.
+
+Nub does not read `$schema` when it runs your code — the key is for editors only, and a wrong or missing URL does not change CLI parsing.
 
 ## Runtime
 
@@ -321,7 +274,7 @@ An entry may also point an extension Nub already knows at something else — `".
 
 ### `conditions`
 
-Add package export conditions.
+Add **additional** package export conditions. Nub passes each entry to Node as `--conditions` (same as `-C` on the command line). Node always keeps its built-in conditions (`node`, `import`, `require`, `default`); your names are extra, and on an `exports` map they are matched before `default`.
 
 ```jsonc title="nub.jsonc"
 {
@@ -573,3 +526,52 @@ Disable implicit registry fetches.
 ```
 
 Explicit `nub dlx` runs still work because the command itself supplies consent.
+
+## `nub config`
+
+Read and write any field with `nub config`, which validates the value and rewrites the file in place.
+
+```bash
+nub config set nodeCompat true                # writes ./nub.jsonc
+nub config get install.linker                 # hoisted
+nub config delete install.minimumReleaseAge
+nub config path                               # the global file's location
+```
+
+Fields are addressed by their dotted path, and each is written whole. Pass arrays and objects as one shell-quoted JSON argument, with JSON keys and strings in double quotes.
+
+```bash
+nub config set preload '["./setup.ts","tsx/esm"]'
+nub config set loader '{".graphql":"text",".rules":"yaml"}'
+```
+
+Scalar values need no JSON quoting. A union field uses JSON only for its array or object form.
+
+```bash
+nub config set install.linker '{"strategy":"isolated","hoist":["@types/*"]}'
+```
+
+Values are checked against the same rules that read the file, so a rejected write leaves it untouched.
+
+```text
+$ nub config set install.minimumReleaseAge 3
+nub: `install.minimumReleaseAge` in /app/nub.jsonc: invalid duration `3` — expected an integer followed by a unit s|m|h|d|w (e.g. "3d")
+```
+
+Comments, blank lines, and key order survive an edit, so a hand-annotated file stays readable.
+
+Writes go to the project file, and `--location user` sends them to the global one instead. Fields under [`dlx`](#dlx) always go there, with or without the flag.
+
+```bash
+nub config set --location user envFile false   # personal default, everywhere
+nub config set dlx.consent never               # global; the flag is redundant
+```
+
+Reads take the project file first and fall back to the global one. Structured values print as compact JSON so they can be passed back to `set`; scalar strings print without JSON quotes. An unset field prints `undefined`, and `--json` prints the exact stored value.
+
+```bash
+nub config get --local nodeCompat   # project file only
+nub config get preload --json       # ["./setup.ts","tsx/esm"]
+```
+
+Keys that are not fields of this file keep their existing meaning: they read and write `.npmrc`, unchanged.

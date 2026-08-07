@@ -68,6 +68,19 @@ export default defineConfig({
         transformerConsole(),
         transformerDiff(),
       ],
+      // Promote a bare `full` in the fence meta to a real attribute, so a block can
+      // opt out of fumadocs' 600px viewport cap — see `pre` in mdx-components.tsx.
+      // fumadocs only promotes `title` and `tab`; everything else lands in `__raw`,
+      // which React drops before it reaches the component. Strip our token first,
+      // then delegate so `title` and `lineNumbers` parse exactly as they did.
+      parseMetaString(meta, node, tree) {
+        const full = /(^|\s)full(\s|$)/.test(meta);
+        const rest = full ? meta.replace(/(^|\s)full(?=\s|$)/, ' ').trim() : meta;
+        const data =
+          rehypeCodeDefaultOptions.parseMetaString?.(rest, node, tree) ?? {};
+        if (full) data['data-full'] = true;
+        return data;
+      },
     },
   },
 });
