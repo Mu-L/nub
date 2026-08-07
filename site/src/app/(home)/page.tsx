@@ -201,7 +201,7 @@ const heroLines = (major: string) => [
 function HeroPill() {
   return (
     <Link
-      href="/blog/introducing-nub"
+      href="/blog/nub-0-7-0"
       className="group inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-card/50 py-1 pl-1 pr-3 text-sm leading-none text-fd-muted-foreground hover:border-ember/50"
     >
       {/* flex items-center centers all three optically (verified to <0.25px against the
@@ -209,7 +209,7 @@ function HeroPill() {
       <span className="rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
         New
       </span>
-      <span className="text-fd-foreground">Introducing Nub</span>
+      <span className="text-fd-foreground">Nub v0.7</span>
       <span
         aria-hidden
         className="text-fd-muted-foreground transition-transform group-hover:translate-x-0.5"
