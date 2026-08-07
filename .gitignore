@@ -153,3 +153,7 @@ internal
 
 # Maintainer-local fray worker norms (names private orchestration tooling).
 FRAY.md
+
+# Local-only catalog snapshots taken before schema migrations. Never tracked.
+catalog-backups/
+catalog-legacy/
