@@ -209,7 +209,9 @@ function HeroPill() {
       <span className="rounded-full bg-ember px-2.5 py-0.5 font-mono text-[0.7rem] font-medium uppercase tracking-wider text-[#fffdf8] dark:text-[#160c08]">
         New
       </span>
-      <span className="text-fd-foreground">Nub v0.7</span>
+      <span className="text-fd-foreground">
+        Nub v0.7 — nub.jsonc, Varlock support, Promise.allKeyed, and more
+      </span>
       <span
         aria-hidden
         className="text-fd-muted-foreground transition-transform group-hover:translate-x-0.5"
