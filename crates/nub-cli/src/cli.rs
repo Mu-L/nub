@@ -3620,9 +3620,10 @@ fn runtime_child_env(
     if no_env_file() {
         return Ok(HashMap::new());
     }
-    // An external loader owning env displaces nub's DEFAULT discovery only. An
-    // explicit `envFile` in nub.jsonc, like an explicit `--env-file`, is a
-    // deliberate instruction and still wins.
+    // An external loader owning env displaces every source, not just the default
+    // cascade: an explicit `--env-file` or `envFile` alongside a hand-over is
+    // refused up front, and anything that still reaches here owned came from the
+    // inherited config snapshot inside the loader, where refusing is too late.
     let owner = env_owner.filter(|owner| owner.suppresses_env_files());
     let base = if compat_mode {
         HashMap::new()
@@ -3636,7 +3637,16 @@ fn runtime_child_env(
                     .map(nub_core::workspace::env::load_env_files)
                     .unwrap_or_default(),
             },
-            RuntimeEnvFile::Sources(paths) => load_runtime_env_sources(paths)?,
+            // Consults `owner` for the same reason the arm above does, and this is
+            // the arm that MUST: the outer process refuses an explicit source
+            // alongside a hand-over, so the only way to arrive here owned is from
+            // INSIDE the loader — where `--no-env-file` did not survive the spawn
+            // but the config snapshot did, leaving these paths to load with nothing
+            // left to suppress them.
+            RuntimeEnvFile::Sources(paths) => match owner {
+                Some(_) => HashMap::new(),
+                None => load_runtime_env_sources(paths)?,
+            },
             RuntimeEnvFile::Default | RuntimeEnvFile::Disabled => HashMap::new(),
         }
     };
@@ -3656,20 +3666,38 @@ fn runtime_child_env(
     Ok(result)
 }
 
-/// Warn once when a project carries an `@env-spec` schema that nothing can read.
+/// Every env-owner diagnostic nub raises, in the order they can fire.
 ///
-/// This is nub's ONLY env-owner diagnostic. When the loader IS installed nub says
-/// nothing at all: it stands down, puts the loader in front of Node, and the
-/// loader owns everything from there — including its own errors.
-/// Report an `@env-spec` schema nub cannot act on — fatally when the project
-/// asked for the loader and it is missing.
+/// 1. A CONFLICT — the project both hands the environment over and names files for
+///    nub to load. Refused, because whichever nub picked, the other would vanish
+///    with nothing printed to say so.
+/// 2. A schema nub cannot act on — fatal when the project declared the loader and
+///    it will not resolve, a warning when it never declared one at all.
 ///
 /// Falling back to `.env*` is right for a project that never declared the loader
 /// and wrong for one that did. In the second case the tree is broken (a pruned
 /// `--prod` install, a partial `node_modules`), and running anyway would hand the
 /// program an environment it never asked for: no defaults, no validation, no
 /// providers, and for a schema-only project with no committed `.env`, nothing.
-fn check_schema_usable(env_owner: Option<&crate::env_owner::EnvOwner>) -> Result<()> {
+///
+/// When the loader IS installed and nothing conflicts, nub says nothing at all: it
+/// stands down, puts the loader in front of Node, and the loader owns everything
+/// from there — including its own errors.
+fn check_schema_usable(
+    env_owner: Option<&crate::env_owner::EnvOwner>,
+    runtime: &crate::project_config::RuntimeConfig,
+) -> Result<()> {
+    // Gated on `spawn_target`, not `suppresses_env_files`: the conflict is with the
+    // process that is about to HAND OVER. A nested nub already inside the loader
+    // also suppresses, but the user's flags do not live there — the outer
+    // invocation is where they were typed, and it has already refused.
+    if env_owner
+        .and_then(crate::env_owner::EnvOwner::spawn_target)
+        .is_some()
+        && let Some(source) = explicit_env_file_source(runtime)
+    {
+        bail!(crate::env_owner::explicit_env_file_conflict(source));
+    }
     let Some(problem) = env_owner.and_then(crate::env_owner::EnvOwner::schema_problem) else {
         return Ok(());
     };
@@ -3678,6 +3706,38 @@ fn check_schema_usable(env_owner: Option<&crate::env_owner::EnvOwner>) -> Result
     }
     warn_once(&format!("nub: {}", problem.message()));
     Ok(())
+}
+
+/// The explicit env-file instruction in play, named as the user spelled it.
+///
+/// Only LOAD instructions count. `--no-env-file` and `envFile: false` ask nub to
+/// load nothing, which is what standing down for an external owner already does, so
+/// neither contradicts a hand-over.
+fn explicit_env_file_source(
+    runtime: &crate::project_config::RuntimeConfig,
+) -> Option<&'static str> {
+    if no_env_file() {
+        return None;
+    }
+    if env_file_flag_present() {
+        // Both spellings set the same presence flag, so recover which one the user
+        // actually typed from the recorded flavors — naming a flag they never used
+        // sends them looking for it. Mixed spellings name the plain form, which is
+        // the one that errors on a missing file and so the stronger instruction.
+        let if_exists_only = ENV_FILE_PATHS.get().is_some_and(|paths| {
+            !paths.is_empty() && paths.iter().all(|(_, if_exists)| *if_exists)
+        });
+        return Some(if if_exists_only {
+            "`--env-file-if-exists`"
+        } else {
+            "`--env-file`"
+        });
+    }
+    matches!(
+        &runtime.env_file,
+        crate::project_config::RuntimeEnvFile::Sources(_)
+    )
+    .then_some("`envFile` in nub.jsonc")
 }
 
 /// Emit a startup notice at most once per process. Several launchers can resolve
@@ -3766,8 +3826,8 @@ fn run_file_in_dir(args: &[String], compat_mode: bool, cwd: &Path, exec_ua: bool
             })
         })
         .flatten();
+    check_schema_usable(env_owner.as_ref(), &runtime)?;
     let mut env_vars = runtime_child_env(&runtime, project_root, compat_mode, env_owner.as_ref())?;
-    check_schema_usable(env_owner.as_ref())?;
     if let Some((_, schema_dir)) = env_owner
         .as_ref()
         .and_then(crate::env_owner::EnvOwner::spawn_target)
@@ -4872,7 +4932,7 @@ fn build_script_command(
     let env_owner = (!compat_mode)
         .then(|| crate::env_owner::detect(&project.root, project.workspace_root.as_deref()))
         .flatten();
-    check_schema_usable(env_owner.as_ref())?;
+    check_schema_usable(env_owner.as_ref(), &runtime)?;
     let runtime_node_options = if compat_mode {
         Vec::new()
     } else {
@@ -5831,6 +5891,7 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
                 .and_then(|p| crate::env_owner::detect(&p.root, p.workspace_root.as_deref()))
         })
         .flatten();
+    check_schema_usable(env_owner.as_ref(), &runtime)?;
     let env_owner_suppresses = env_owner
         .as_ref()
         .is_some_and(crate::env_owner::EnvOwner::suppresses_env_files);
@@ -5844,6 +5905,12 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
                 .as_ref()
                 .map(|p| nub_core::workspace::env::discover_env_files(&p.root))
                 .unwrap_or_default(),
+            // Gated for the same reason as the run path's `Sources` arm, and
+            // reachable the same way: an explicit source alongside a hand-over is
+            // refused up front, so arriving here owned means this watcher is itself
+            // running INSIDE the loader — where the flag that would have suppressed
+            // these paths did not survive the spawn but the config snapshot did.
+            RuntimeEnvFile::Sources(_) if env_owner_suppresses => Vec::new(),
             RuntimeEnvFile::Sources(paths) => paths.clone(),
             RuntimeEnvFile::Default | RuntimeEnvFile::Disabled => Vec::new(),
         }
@@ -5969,6 +6036,7 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
                 .as_ref()
                 .map(|p| nub_core::workspace::env::load_env_files_raw_warning(&p.root))
                 .unwrap_or_default(),
+            RuntimeEnvFile::Sources(_) if env_owner_suppresses => HashMap::new(),
             RuntimeEnvFile::Sources(paths) => load_runtime_env_sources_raw(paths)?,
             RuntimeEnvFile::Default | RuntimeEnvFile::Disabled => HashMap::new(),
         }
