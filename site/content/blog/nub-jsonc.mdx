@@ -49,34 +49,21 @@ nub node install 26      # pin and provision Node
 
 In v0.7, Nub introduced its config file `nub.jsonc`. It's the config file for Node.js you've always wanted, with the current runtime fields in one place:
 
-```jsonc
+```jsonc title="nub.jsonc"
 {
   "$schema": "https://nubjs.com/schema/latest.json",
 
-  // Nub configs
-  "envFile": [".env", ".env.local"],          // disable with false
-  "loader": { ".graphql": "text" },           // text|jsonc|json5|toml|yaml|ts|tsx|jsx
-  "conditions": ["development"],              // additional export conditions to respect
-  "tsconfig": "./tsconfig.runtime.json",      // JSX, decorators, paths/baseURL
-  "verifyDeps": "error",                      // check node_modules freshness before runs
-  "preload": [                                // for telemetry, hardening, etc.
+  "envFile": [".env", ".env.local"],        // disable with false
+  "loader": { ".graphql": "text" },         // map exts <-> loaders
+  "tsconfig": "./tsconfig.runtime.json",    // JSX, decorators, paths/baseURL
+  "verifyDeps": "error",                    // pre-run node_modules freshness
+  "conditions": ["development"],            // custom export conditions
+  "preload": [                              // telemetry, hardening, etc.
     "./instrumentation.ts",
     "dd-trace/initialize.mjs"
   ],
-  "nodeCompat": false,                        // disables Nub augmentations
-
-  // Node.js/v8 configs
-  "v8Flags": [
-    "--stack-size=2000",
-    "--prof",
-    "--allow-natives-syntax",
-    "--trace-deopt"
-  ],                                          // not supported in node.config.json
-  "nodeOptions": [                            // passed as NODE_OPTIONS
-    "--stack-trace-limit=50",
-    "--max-old-space-size=8192",
-    "--frozen-intrinsics"
-  ]
+  "nodeOptions": ["--stack-trace-limit=50", "--max-old-space-size=8192"],
+  "v8Flags": ["--stack-size=2000", "--prof", "--allow-natives-syntax"],
 }
 ```
 

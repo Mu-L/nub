@@ -234,12 +234,12 @@ Paths expand `${VAR}` and `$VAR` against the environment, which a config file ne
 ```jsonc title="nub.jsonc"
 {
   // ...
-  "envFile": ".env.${APP_ENV}"
+  "envFile": [".env", ".env.${APP_ENV}"]
 }
 ```
 
 ```bash
-APP_ENV=staging nub app.ts   # reads .env.staging
+APP_ENV=staging nub app.ts   # reads .env and .env.staging
 ```
 
 Naming files here while [Varlock](/docs/runtime/varlock) owns the environment is a contradiction, and Nub refuses rather than picking a winner. Setting `false` is fine — it asks Nub to load nothing, which is what handing over already does.
