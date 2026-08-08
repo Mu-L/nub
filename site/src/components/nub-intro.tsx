@@ -12,7 +12,7 @@ export function NubIntro({ children }: { children?: ReactNode }) {
   return (
     <blockquote>
       <p>
-        Nub is a Rust toolkit for Node.js. The <code>nub</code> command is flag-for-flag compatible with <code>node</code>, while adding full support for TypeScript, JSX, <code>tsconfig.json</code>, <code>.env</code> loading, and modern Web and ECMAScript APIs. It also includes a fast script runner (<code>nub run</code>), package runner (<code>nubx</code>), Node version manager (<code>nub node</code>), and <code>pnpm</code>-compatible package manager.
+        Nub is an all-in-one toolkit for Node.js written in Rust. The <code>nub</code> command is flag-for-flag compatible with <code>node</code>, while adding full support for TypeScript, JSX, <code>tsconfig.json</code>, <code>.env</code> loading, and modern Web and ECMAScript APIs. It also includes a fast script runner (<code>nub run</code>), package runner (<code>nubx</code>), Node version manager (<code>nub node</code>), and <code>pnpm</code>-compatible package manager.
       </p>
       {children}
     </blockquote>
