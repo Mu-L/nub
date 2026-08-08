@@ -1,6 +1,6 @@
 ---
 title: Package manager
-description: Nub's install engine — the neutral package.json fields and config keys that shape dependency resolution, plus lockfile compatibility with npm, pnpm, Bun, and Yarn.
+description: Nub's install engine — the package.json fields and config keys that shape dependency resolution, plus lockfile compatibility with npm, pnpm, Bun, and Yarn.
 ---
 
 Nub has its own install engine: it resolves the dependency graph, writes the lockfile, and links `node_modules`. The CLI is pnpm-shaped, so the verbs and flags are the ones you already type.
@@ -16,106 +16,182 @@ The lockfile is `nub.lock`. Every field Nub reads to build the graph is one npm,
 
 ## Resolution
 
-Resolution decides which version of which package ends up in the graph. These are the `package.json` fields that shape it:
+Resolution decides which version of which package ends up in the graph. Every field below lives in `package.json`, and every one is a field npm, pnpm, Yarn, or Bun already reads — each links out to its canonical documentation.
 
-| Field | What it does |
-|---|---|
-| `overrides` | Force one version of a package everywhere in the graph, whoever asked for it |
-| `resolutions` | The same, in Yarn's spelling — both are read, and `overrides` wins a conflict |
-| `packageExtensions` | Fix dependency metadata a published package got wrong, at resolve time |
-| `patchedDependencies` | Apply a patch file to a package's contents, keyed by name and version. Written for you by `nub patch` |
-| `allowUnusedPatches`, `allowNonAppliedPatches` | Downgrade a patch that matched nothing from an error to a warning |
-| `workspaces` | Monorepo member globs. Members resolve to each other through `workspace:` specifiers |
-| `workspaces.catalog`, `workspaces.catalogs` | Named version sets that `catalog:` specifiers resolve against |
-| `allowBuilds` | Which dependencies may run install scripts — see [lifecycle scripts](#lifecycle-scripts) |
-| `dependenciesMeta` | Per-dependency flags: `injected` hard-copies a workspace dependency instead of linking it, `built: false` denies its scripts |
-| `peerDependenciesMeta` | Mark one of your own peer dependencies optional, so a missing peer is not an error |
-| `allowedDeprecatedVersions` | Which deprecated versions may resolve without a warning |
-| `engines` | The Node and package-manager versions the project requires |
+### `overrides`
 
-### Overrides
+Force one version of a package everywhere in the graph, whoever asked for it. A selector is a bare name, a name carrying a range to match, a path scoping the pin to one parent, or `$name` to reuse your own dependency's range. Documented by [npm](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides).
 
-An override forces a version regardless of what any package in the graph asked for. The selector is a package name on its own, a name with a range to match, or a path that scopes the pin to one parent:
-
-```json
-// package.json
+```json title="package.json"
 {
   "overrides": {
-    "is-number": "7.0.0",              // everywhere in the graph
-    "is-number@^6.0.0": "7.0.0",       // only where the request matches ^6.0.0
-    "is-odd>is-number": "7.0.0",       // only under is-odd
-    "semver": "$semver"                // match this project's own dependency range
+    "is-number": "7.0.0",
+    "is-number@^6.0.0": "7.0.0",
+    "is-odd>is-number": "7.0.0",
+    "semver": "$semver"
   }
 }
 ```
 
-Yarn's `resolutions` field takes the same selectors and is read the same way. Declaring a pin in both is fine and common in a repo that several tools install — Nub applies `overrides` on a conflict and stays quiet when the two agree.
+### `resolutions`
 
-### Package extensions
+The same pins in Yarn's spelling, taking the same selectors. Both fields are read, and `overrides` wins a conflict — so a repo that declares a pin in both for portability stays silent. Documented by [Yarn](https://yarnpkg.com/configuration/manifest#resolutions).
 
-A published package sometimes declares a peer dependency it doesn't actually need, or is missing one it does — and its `package.json` isn't yours to edit. A package extension patches a dependency's manifest at resolve time, adding to its `dependencies`, `optionalDependencies`, `peerDependencies`, or `peerDependenciesMeta`. The selector is a package name, optionally pinned to a version range:
+```json title="package.json"
+{
+  "resolutions": {
+    "is-odd>is-number": "7.0.0"
+  }
+}
+```
 
-```json
-// package.json
+### `packageExtensions`
+
+Patch a dependency's own manifest at resolve time, adding to its `dependencies`, `optionalDependencies`, `peerDependencies`, or `peerDependenciesMeta`. Use it when a published package declares a peer it doesn't need, or omits one it does. An extension only adds what is missing; it never overrides a range the package already declares. Documented by [pnpm](https://pnpm.io/settings/dependency-resolution#packageextensions).
+
+```json title="package.json"
 {
   "packageExtensions": {
     "react-server-dom-webpack@19.2.7": {
       "peerDependenciesMeta": {
-        "react": { "optional": true }   // relax a peer the package over-declares
+        "react": { "optional": true }
       }
     }
   }
 }
 ```
 
-An extension only *adds* what's missing — it never overrides a range the package already declares. To change the version of a dependency a package does declare, use an override instead. The semantics match pnpm's `packageExtensions`.
+### `patchedDependencies`
 
-### Catalogs
+Apply a patch file to a package's contents, keyed by name and version. Running `nub patch <pkg>` writes both the patch and this entry for you. A key matching no installed package fails the install unless `allowUnusedPatches` downgrades it to a warning. Documented by pnpm: [patchedDependencies](https://pnpm.io/cli/patch#patcheddependencies), [allowUnusedPatches](https://pnpm.io/cli/patch#allowunusedpatches).
 
-A catalog names a version once and lets every package in a monorepo reference it, so a bump is a one-line edit. Definitions live beside the workspace globs, and members refer to them with a `catalog:` specifier:
+```json title="package.json"
+{
+  "patchedDependencies": {
+    "is-odd@3.0.1": "patches/is-odd@3.0.1.patch"
+  },
+  "allowUnusedPatches": true
+}
+```
 
-```json
-// package.json — the workspace root
+### `workspaces`
+
+Monorepo member globs. Members resolve to each other through a `workspace:` specifier instead of the registry. Documented by [npm](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#workspaces).
+
+```json title="package.json"
+{
+  "workspaces": ["packages/*"]
+}
+```
+
+### `workspaces.catalog`
+
+Name a version once and let every member reference it, so a bump is a one-line edit. The default catalog is `catalog:`; named catalogs are `catalog:<name>`. A reference naming no defined entry is an error rather than a fallback, so a typo fails the install. Documented by [Bun](https://bun.com/docs/install/catalogs).
+
+```json title="package.json"
 {
   "workspaces": {
     "packages": ["packages/*"],
-    "catalog": { "react": "19.2.0" },              // the default catalog
-    "catalogs": { "testing": { "vitest": "3.2.4" } }  // named catalogs
+    "catalog": { "react": "19.2.0" },
+    "catalogs": { "testing": { "vitest": "3.2.4" } }
   }
 }
 ```
 
-```json
-// packages/app/package.json
+```json title="packages/app/package.json"
 {
-  "dependencies": { "react": "catalog:" },       // the default catalog
+  "dependencies": { "react": "catalog:" },
   "devDependencies": { "vitest": "catalog:testing" }
 }
 ```
 
-A `catalog:` reference that names no defined entry is an error rather than a fallback, so a typo fails the install instead of silently resolving to something else. Adding a dependency straight into the catalog is `nub add --save-catalog <pkg>`.
+### `allowBuilds`
+
+Which dependencies may run install scripts — see [lifecycle scripts](#lifecycle-scripts) for the deny-by-default posture around it. A registry dependency is keyed by name, anything else by its full specifier, and an explicit `false` always wins. Documented by [pnpm](https://pnpm.io/settings/build#allowbuilds).
+
+```json title="package.json"
+{
+  "allowBuilds": {
+    "esbuild": true,
+    "sharp": false
+  }
+}
+```
+
+### `dependenciesMeta`
+
+Per-dependency flags. Setting `injected` hard-copies a workspace dependency instead of linking it, and `built: false` denies that package's install scripts. Documented by [pnpm](https://pnpm.io/package_json#dependenciesmeta).
+
+```json title="package.json"
+{
+  "dependenciesMeta": {
+    "ui": { "injected": true },
+    "esbuild": { "built": false }
+  }
+}
+```
+
+### `peerDependenciesMeta`
+
+Mark one of your own peer dependencies optional, so a consumer that doesn't install it is not an error. Documented by [npm](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#peerdependenciesmeta).
+
+```json title="package.json"
+{
+  "peerDependencies": { "react": "^19.0.0" },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
+  }
+}
+```
+
+### `allowedDeprecatedVersions`
+
+Which deprecated versions may resolve without a warning, by package and range. Documented by [pnpm](https://pnpm.io/settings/dependency-resolution#alloweddeprecatedversions).
+
+```json title="package.json"
+{
+  "allowedDeprecatedVersions": {
+    "request": "*",
+    "lodash": "<4.0.0"
+  }
+}
+```
+
+### `engines`
+
+The Node and package-manager versions the project requires. Nub provisions the Node named here, and `engineStrict` decides whether a mismatch warns or fails. Documented by [npm](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#engines).
+
+```json title="package.json"
+{
+  "engines": {
+    "node": ">=22.15"
+  }
+}
+```
 
 ### Config keys
 
 Registries, auth, peer-dependency behavior, and save behavior come from the `.npmrc` cascade, which Nub reads in every project no matter which tool owns it, along with `npm_config_*` in the environment. Setting names are pnpm's:
 
-```ini
-# .npmrc
-resolutionMode=highest              # or lowest-direct
-autoInstallPeers=true
-strictPeerDependencies=false
-dedupePeerDependents=true
-resolvePeersFromWorkspaceRoot=true
-linkWorkspacePackages=true          # prefer a local member over the registry
-saveWorkspaceProtocol=rolling
-savePrefix=^
-saveExact=false
-supportedArchitectures.os=linux     # which optional-dependency variants to install
-engineStrict=false
-```
+| Key | Reference |
+|---|---|
+| `resolutionMode` | [pnpm](https://pnpm.io/settings/other#resolutionmode) |
+| `autoInstallPeers` | [pnpm](https://pnpm.io/settings/peer-dependencies#autoinstallpeers) |
+| `strictPeerDependencies` | [pnpm](https://pnpm.io/settings/peer-dependencies#strictpeerdependencies) |
+| `dedupePeerDependents` | [pnpm](https://pnpm.io/settings/peer-dependencies#dedupepeerdependents) |
+| `resolvePeersFromWorkspaceRoot` | [pnpm](https://pnpm.io/settings/peer-dependencies#resolvepeersfromworkspaceroot) |
+| `linkWorkspacePackages` | [pnpm](https://pnpm.io/workspaces#linkworkspacepackages) |
+| `saveWorkspaceProtocol` | [pnpm](https://pnpm.io/workspaces#saveworkspaceprotocol) |
+| `savePrefix` | [pnpm](https://pnpm.io/settings/other#saveprefix) |
+| `saveExact` | [npm](https://docs.npmjs.com/cli/v11/using-npm/config#save-exact) |
+| `supportedArchitectures` | [pnpm](https://pnpm.io/settings/dependency-resolution#supportedarchitectures) |
+| `ignoredOptionalDependencies` | [pnpm](https://pnpm.io/settings/dependency-resolution#ignoredoptionaldependencies) |
+| `minimumReleaseAge` | [pnpm](https://pnpm.io/settings/dependency-resolution#minimumreleaseage) |
+| `minimumReleaseAgeExclude` | [pnpm](https://pnpm.io/settings/dependency-resolution#minimumreleaseageexclude) |
+| `engineStrict` | [pnpm](https://pnpm.io/settings/cli#enginestrict) |
+| `registry`, `@scope:registry` | [npm](https://docs.npmjs.com/cli/v11/using-npm/config#registry) |
 
 Four further install fields live in `nub.jsonc`, Nub's own config file. Two set the [cooling window](#cooling-window) — `minimumReleaseAge` and `minimumReleaseAgeExclude` — and two set [layout](#layout), `linker` and `publicHoist`. That is the entire block; see the [config reference](/docs/config#install) for each field's shape.
-
 ## Layout
 
 Resolution decides *which* packages you get; layout decides how they are arranged on disk. Set it in `.npmrc`:
