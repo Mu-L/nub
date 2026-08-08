@@ -25,7 +25,7 @@
 //!   concern; reporting them here would make `get` disagree with the file `set`
 //!   just wrote.
 //! - **Scope follows the field.** Writes land in the project file by default and
-//!   in the global file under `--location user|global`. The `dlx` section is
+//!   in the global file under `--global` (or `nub global config`). The `dlx` section is
 //!   global-only (a checkout must not widen a consent decision about the
 //!   machine), so it ignores the default and refuses an explicit project scope.
 
@@ -321,8 +321,7 @@ fn write_target(field: &Field, scope: Scope) -> anyhow::Result<PathBuf> {
     }
     Ok(match scope {
         Scope::Global => global_file(field)?,
-        // Writes default to the project file: `--location`'s engine-side default
-        // is `user`, which nub overrides to project for every config write.
+        // Writes default to the project file; `--global` selects the user file.
         Scope::Auto | Scope::Project => project_file(),
     })
 }
@@ -330,7 +329,7 @@ fn write_target(field: &Field, scope: Scope) -> anyhow::Result<PathBuf> {
 /// The project file a write lands in: the one discovery would read, else a new
 /// file at the project root so a `set` from a subdirectory does not create a
 /// second `nub.jsonc` that shadows nothing.
-fn project_file() -> PathBuf {
+pub(crate) fn project_file() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if let Some(found) = project_config::discover_project_config(&cwd) {
         return found;
