@@ -34,15 +34,15 @@ node --experimental-default-config-file index.ts
 
 This is the kind of ergonomic issue in Node.js that Nub is perfectly equipped to solve.
 
-> Nub is an all-in-one Rust toolkit for Node.js. The `nub` CLI is flag-for-flag compatible with `node`, while adding a TypeScript-first runtime, script and package runners, a pnpm-compatible package manager, and Node version management—all on stock Node.
->
-> ```bash
-> nub index.ts             # supports TypeScript, JSX, Worker, latest ECMAScript syntax
-> nub run dev              # run package.json scripts
-> nub install              # install using your existing lockfile
-> nubx prisma generate     # run package CLIs
-> nub node install 26      # pin and provision Node
-> ```
+<NubIntro>
+```bash
+nub index.ts             # supports TypeScript, JSX, Worker, latest ECMAScript syntax
+nub run dev              # run package.json scripts
+nub install              # install using your existing lockfile
+nubx prisma generate     # run package CLIs
+nub node install 26      # pin and provision Node
+```
+</NubIntro>
 
 
 ## Introducing `nub.jsonc`

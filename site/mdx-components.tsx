@@ -13,6 +13,7 @@ import { CompatTable } from '@/components/compat-table';
 import { PmSupport } from '@/components/pm-support-table';
 import { InstallTabs } from '@/components/install-tabs';
 import { TypesSetup } from '@/components/types-setup';
+import { NubIntro } from '@/components/nub-intro';
 import { SectionHeading } from '@/components/section-heading';
 
 // Neutral info glyph (lucide "info" path) drawn with currentColor so it inherits a
@@ -106,6 +107,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     PmSupport,
     InstallTabs,
     TypesSetup,
+    NubIntro,
     ...components,
   };
 }
