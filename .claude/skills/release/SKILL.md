@@ -161,9 +161,12 @@ Same content-to-`main` exception as docs (commit directly, no PR). Invoke the `p
 - **File:** `site/content/blog/nub-<major>-<minor>-<patch>.mdx` (e.g. `nub-0-2-10.mdx`) — the filename is the URL slug; fumadocs auto-globs `content/blog/*.mdx`, so no index/meta wiring is needed.
 - **Frontmatter** (schema from `source.config.ts`, all four required): `title: "Nub <ver>"` (add a `: <theme>` subtitle only for a milestone), `description:` a plain sentence with **no inline code/backticks** (the field renders raw), `author: The Nub Team`, `date: <YYYY-MM-DD>` **back-dated to the release's `publishedAt`** so the timeline stays chronological.
 - **Body:** a short lede, then the release's themed sections adapted to blog prose — not a raw changelog dump. Carry over the callouts and per-theme tables. Close with `The [full release notes](https://github.com/nubjs/nub/releases/tag/v<ver>) list every change in this release.`
+- **Structure a feature-carrying release around its features:** one top-level `##` per major new feature, then `## Breaking changes`, then `## Bug fixes`. A batch of independent fixes goes in a table whose FIRST column is the PR link — `.blog-prose td:not(:last-child)` is `width:1%` + `nowrap` by design, so a prose column anywhere but last blows the table past the 720px article column.
+- **End every post with the get-started block** — a final `## Get started` heading followed by `<GetStarted />`, which renders the install tabs plus the pointer at the agent adoption prompt. Every existing post carries it; a new one without it is the odd one out.
+- **Catch up a cold reader with `<NubIntro />`** near the top when the post leads with feature news rather than an introduction. Both components live in `site/src/components/` and are registered globally in `site/mdx-components.tsx`; their copy is maintainer-authored, so edit the component, never a single `.mdx`.
 - **Scale to the release:** a small patch gets a short post; a milestone opens with the thing working.
 
-Exemplars: `site/content/blog/nub-0-2-0.mdx` (milestone), `nub-0-2-5.mdx` (small patch).
+Exemplars: `site/content/blog/nub-0-7-0.mdx` (feature-carrying, full structure), `nub-0-2-0.mdx` (milestone), `nub-0-2-5.mdx` (small patch).
 
 ## Step 5 — Close the loop on issues + PRs (mandatory, every release)
 
