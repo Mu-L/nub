@@ -12,14 +12,14 @@ type Tab = { id: TabId; label: string; command: string };
 const UNIX_TABS: Tab[] = [
   { id: 'unix', label: 'curl', command: 'curl -fsSL https://nubjs.com/install.sh | bash' },
   { id: 'brew', label: 'Homebrew', command: 'brew install nubjs/tap/nub' },
-  { id: 'mise', label: 'mise', command: 'mise use -g nub' },
   { id: 'npm', label: 'npm', command: 'npm install -g @nubjs/nub' },
+  { id: 'mise', label: 'mise', command: 'mise use -g nub' },
 ];
 
 const WINDOWS_TABS: Tab[] = [
   { id: 'windows', label: 'PowerShell', command: 'powershell -c "irm https://nubjs.com/install.ps1 | iex"' },
-  { id: 'mise', label: 'mise', command: 'mise use -g nub' },
   { id: 'npm', label: 'npm', command: 'npm install -g @nubjs/nub' },
+  { id: 'mise', label: 'mise', command: 'mise use -g nub' },
 ];
 
 export function InstallTabs({ className = '' }: { className?: string }) {
