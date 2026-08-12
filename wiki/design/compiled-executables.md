@@ -1,8 +1,6 @@
 # Compiled executables
 
-`nub compile` turns an entry file into a single executable that runs with no Node installed and no `node_modules` on the target machine.
-
-This document covers how the artifact is put together and why: what goes inside it, what deliberately stays as ordinary files, and how the two are told apart.
+The `nub compile` command turns an entry file into a single executable that runs with no Node installed and no `node_modules` on the target machine. This document covers how the artifact is put together: what goes inside it, what deliberately stays as ordinary files, and how the two are told apart.
 
 ## Self-extracting, not virtual
 
@@ -87,9 +85,9 @@ nub compile app.ts --unbundled some-package   # ship it, but do not bundle it
 nub compile app.ts --bundled some-package     # bundle it after all
 ```
 
-`--unbundled` is for a package that loads a file by a path it builds at run time and is not yet recognised. `--bundled` is for the reverse — a package needlessly ejected, which costs startup and size while failing nothing.
+Use `--unbundled` for a package that loads a file by a path it builds at run time and is not yet recognised. Use `--bundled` for the reverse — a package needlessly ejected, which costs startup and size while failing nothing.
 
-Neither is `--external`, which leaves a package out of the binary entirely to be resolved on the machine that runs it.
+Neither is `--external`, which leaves a package out of the binary entirely, to be resolved on the machine that runs it.
 
 ## Cross-compilation
 
@@ -100,13 +98,9 @@ Building for another platform is bounded by one fact: **an installed dependency 
 
 Both halves matter. Rejecting every foreign addon fails ordinary packages, since a package carrying a Windows prebuild beside a macOS one is perfectly healthy. Skipping every foreign addon ships a package with nothing loadable and defers the failure to the user's machine.
 
-Verified by building on macOS and running the result on Linux. A package shipping prebuilts for
-eight platforms contributed the two matching an arm64 Linux target, and the artifact ran there
-unmodified.
+Verified by building on macOS and running the result on Linux. A package shipping prebuilts for eight platforms contributed the two matching an arm64 Linux target, and the artifact ran there unmodified.
 
-One caveat applies to the finished binary rather than the build: on Linux the embedded Node links
-`libatomic`, so a minimal container image without it fails at exec with
-`libatomic.so.1: cannot open shared object file`. Installing `libatomic1` resolves it.
+One caveat applies to the finished binary rather than the build: on Linux the embedded Node links `libatomic`, so a minimal container image without it fails at exec with `libatomic.so.1: cannot open shared object file`. Installing `libatomic1` resolves it.
 
 ## Verification
 
@@ -118,7 +112,7 @@ $ cd /tmp && ./app
 ok
 ```
 
-`sharp` is the demanding case. Its addon lives in one package and the shared library it links against lives in another, so it only works if both are present at the paths they were installed to — which is what shipping packages in place provides.
+The demanding case is `sharp`. Its addon lives in one package and the shared library it links against lives in another, so it works only if both sit at the paths they were installed to — which is what shipping packages in place provides.
 
 ## Startup
 
