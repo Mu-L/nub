@@ -128,12 +128,20 @@ pub fn register() {
     if !enabled() {
         return;
     }
-    let Some(dir) = phantom_cache_dir() else {
-        return;
-    };
     // Extract-time scan: overlap per-version analysis with the fetch phase.
+    // The sidecar dir resolves on FIRST FIRE, not here — registration precedes
+    // the engine session's `--dir` chdir, so resolving now would read the wrong
+    // project. Memoizing that first answer is safe only because
+    // [`store_v1_dir`] anchors at the walked-up project/workspace root: the
+    // recursive verbs (`update -r`, `remove -r`, `rebuild -r`) `retarget_cwd`
+    // per member mid-process, and every member of one workspace walks up to the
+    // SAME root, so the memo cannot go stale between members. Anchoring on the
+    // raw cwd instead would freeze member A's answer for member B.
+    let dir: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     aube_store::set_extract_hook(Box::new(move |index: &PackageIndex| {
-        scan_and_cache(&dir, index);
+        if let Some(dir) = dir.get_or_init(phantom_cache_dir) {
+            scan_and_cache(dir, index);
+        }
     }));
 }
 
@@ -261,16 +269,25 @@ fn write_sidecar_atomic(sidecar: &Path, fingerprint: &str, result: &ScanResult) 
     }
 }
 
-/// Nub's CAS store schema dir: `<nub-data>/store/v1/`, the parent of the CAS
-/// `files/` and `index/` tiers and the `phantom/` sidecar tier. Derives from the
-/// SAME [`crate::pm_engine::nub_data_dir`] nub configures its `storeDir` setting
-/// from (`nub_data_dir()/store`), plus aube's `v1/` schema suffix — so the store
-/// handle and the sidecar dir share ONE base with the real store and cannot drift
-/// (the XDG resolution is not re-implemented here). `None` when no data home
-/// resolves. `pub(crate)` so the sidecar CONSUMER
-/// ([`crate::pm_engine::phantom_closure`]) derives its store handle from the same
-/// base this producer uses.
+/// Nub's CAS store schema dir: `<store-root>/v1/`, the parent of the CAS
+/// `files/` and `index/` tiers and the `phantom/` sidecar tier. Resolves through
+/// [`aube::commands::resolved_project_store_dir`], the engine's own `storeDir`
+/// resolution anchored at the walked-up project/workspace root — so a configured
+/// `store-dir` override moves the sidecar tier WITH the store it indexes (#643).
+/// The ANCHOR is the load-bearing half: `.npmrc` and `pnpm-workspace.yaml`
+/// discovery does not walk up, and the install pipeline anchors at
+/// `workspace_or_project_root()`, so resolving against the raw process cwd
+/// instead would miss the override for every command run from inside a workspace
+/// member and silently return the default store. Falls back to nub's
+/// [`crate::pm_engine::nub_data_dir`] — the same base its `storeDir` embedder
+/// default is built from — when no project root resolves at all. `None` when no
+/// data home resolves either. `pub(crate)` so the sidecar CONSUMER
+/// ([`crate::pm_engine::phantom_closure`]) derives its store handle from the
+/// same base this producer uses.
 pub(crate) fn store_v1_dir() -> Option<PathBuf> {
+    if let Some(custom) = aube::commands::resolved_project_store_dir() {
+        return Some(custom.join("v1"));
+    }
     Some(crate::pm_engine::nub_data_dir()?.join("store/v1"))
 }
 
