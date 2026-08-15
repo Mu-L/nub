@@ -821,6 +821,7 @@ fn a_global_env_file_does_not_displace_a_project_schema() {
     );
 }
 
+// @lat: [[compat-mode-tests#Compat mode#Compat mode never puts the loader in front of Node]]
 #[cfg(unix)]
 #[test]
 fn compat_mode_does_no_owner_handling_at_all() {

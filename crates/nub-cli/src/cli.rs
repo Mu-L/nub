@@ -575,7 +575,7 @@ pub enum Argv0 {
     Node,
     /// Invoked as `npm`/`npx`/`pnpm`/`pnpx`/`yarn`/`yarnpkg` via a
     /// `~/.nub/shims` hardlink (`nub pm shim`) — the PM-shim dispatch
-    /// ([`run_pm_shim`]). Spec: wiki/research/package-manager-shims.md.
+    /// ([`run_pm_shim`]). Spec: `package-manager-shims` (no such document).
     PmShim(nub_core::pm::shim::ShimName),
 }
 
@@ -1022,7 +1022,7 @@ pub enum Command {
 
     // nub's own project init, not the engine's npm-style manifest write —
     // deliberately excluded from ENGINE_VERBS; design record in
-    // wiki/commands/init.md. (The doc comment below is user-facing `--help`
+    // internal/commands/init.md. (The doc comment below is user-facing `--help`
     // text: no internal references.)
     /// Scaffold a new TypeScript-first project.
     Init {
@@ -1250,7 +1250,7 @@ pub enum Command {
     },
 }
 
-/// The `nub node` version-management verbs. Spec: `wiki/commands/node-versions.md`.
+/// The `nub node` version-management verbs. Spec: `internal/commands/node-versions.md`.
 /// Every verb wraps existing `nub-core` machinery (resolver / cache / downloader)
 /// — no new runtime engine.
 #[derive(Subcommand, Debug)]
@@ -1368,7 +1368,11 @@ pub fn run() -> Result<i32> {
     }
 }
 
-/// Workspace execution options extracted from clap flags.
+/// Workspace execution options extracted from clap flags. The field set is
+/// pnpm's recursive-execution surface, not a nub invention — selector parsing,
+/// graph traversal, topological chunking and the flag interactions between
+/// `--parallel` / `--no-sort` / `--workspace-concurrency` all mirror it.
+// @lat: [[research/pnpm-filter-grammar]]
 struct WorkspaceOpts {
     recursive: bool,
     /// Union of `--filter`/`-F` selectors and the `--workspace <name>` aliases
@@ -1538,7 +1542,7 @@ fn install_to_add_args(rest: &[String]) -> Option<Vec<String>> {
 
 /// PM-management verbs nub recognizes only to redirect. The pure-passthrough
 /// frontend (A2) was disabled 2026-06-09 in favor of the normalized standard
-/// surface (wiki/research/package-manager-normalized-surface.md):
+/// surface (`package-manager-normalized-surface` (no such document)):
 /// `install`/`i`/`ci` graduated into SUBCOMMANDS (live engine dispatch), and
 /// the rest of the aube verb surface graduated into the engine verb registry
 /// (`pm_engine::ENGINE_VERBS` — stubs today, family fill-ins next). What's
@@ -1675,7 +1679,7 @@ fn run_nub() -> Result<i32> {
     let mut loglevel_val: Option<String> = None;
     // Top-level `--node`: provision the project's Node (version management stays
     // on) but run with zero augmentation — the compat escape hatch. Routed to
-    // `run_file_with_compat(_, true)`. See wiki/commands/node.md.
+    // `run_file_with_compat(_, true)`. See internal/commands/node.md.
     let mut compat = false;
     let mut rest: Vec<String> = Vec::new();
     let mut subcommand_found = false;
@@ -1703,7 +1707,7 @@ fn run_nub() -> Result<i32> {
         // positional flags to the script/bin. Without this, `nub exec tsc
         // --version` would print Nub's version instead of tsc's, and
         // `nub run build --watch` would steal `--watch` from the script (the
-        // three-position rule — see wiki/commands/run.md).
+        // three-position rule — see internal/commands/run.md).
         if subcommand_found {
             rest.push(arg.clone());
             i += 1;
@@ -2356,7 +2360,7 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
     let subcommand = rest[0].clone();
 
     // `node` is a non-forwarding command group with bespoke bare-usage + invalid-
-    // positional messages (spec: wiki/commands/node-versions.md). Handle it with a
+    // positional messages (spec: internal/commands/node-versions.md). Handle it with a
     // manual sub-verb match rather than clap's generic "invalid subcommand" error,
     // so `nub node script.ts` yields the exact "use 'nub <file>'" guidance and bare
     // `nub node` prints the verb list instead of a clap usage error.
@@ -3888,7 +3892,7 @@ fn run_file_in_dir(args: &[String], compat_mode: bool, cwd: &Path, exec_ua: bool
         nub_core::node::discovery::check_min_version(&node)?;
     }
 
-    // .env loading: eager for all non-compat invocations per wiki/runtime/env-loading.md —
+    // .env loading: eager for all non-compat invocations per internal/runtime/env-loading.md —
     // UNLESS the user passed `--env-file`, which suppresses auto-discovery entirely
     // (only the named file(s) load; the maintainer, 2026-06-15), OR `--no-env-file`,
     // which suppresses everything. `merge_child_env` applies the gate. --env-file
@@ -5014,7 +5018,7 @@ fn build_script_command(
     // right `.env.[NODE_ENV]` after an inline `NODE_ENV=…` is set, instead of the
     // outer load freezing the wrong file's values into the process. The explicit
     // `--env-file` FLAG is a distinct, user-set surface and still flows process-
-    // wide (overlay below) — it's not auto-discovery. See wiki/runtime/env-loading.md.
+    // wide (overlay below) — it's not auto-discovery. See internal/runtime/env-loading.md.
     let mut env_vars: HashMap<String, String> = HashMap::new();
     // The explicit `--env-file` FLAG (a user-set surface, captured at startup)
     // still flows process-wide — it is not auto-`.env` discovery and applies in
@@ -6736,6 +6740,7 @@ fn bin_launcher(path: &Path, args: &[String]) -> std::process::Command {
 /// hardcoded format. `nub/<v> npm/? …` under nub identity / fresh, incumbent-
 /// first (`pnpm/<pin> nub/<v> …`) in a compat project. `node_version` is the
 /// caller's already-resolved Node so this does not re-discover it.
+// @lat: [[research/npm-config-user-agent#Nub — code + empirical#The exec-path gap — three routes, not one]]
 fn exec_user_agent(cwd: &Path, node_version: &str) -> String {
     let product = crate::pm_engine::run_lifecycle_ua_product(cwd, node_version);
     nub_core::workspace::scripts::user_agent_string(&product)
@@ -8481,7 +8486,7 @@ fn discover_node_for_status(cwd: &Path) -> Result<nub_core::node::discovery::Res
 /// `nub node …` — the version-management command group (install / ls / uninstall
 /// / pin). Non-forwarding; manual sub-verb match so the bare-usage and the
 /// `nub node <file>` error read exactly as the spec specifies.
-/// Spec: `wiki/commands/node-versions.md`.
+/// Spec: `internal/commands/node-versions.md`.
 fn run_node(args: &[String]) -> Result<i32> {
     let cwd = env::current_dir()?;
     let store = nub_core::node::discovery::node_store_dir().ok_or_else(|| {
@@ -8743,7 +8748,7 @@ fn provision_pm_humanized(
 /// (`use` / `update`) write, both through the shared resolve → provision →
 /// write-the-declaration flow ([`resolve_provision_declare`]). Eager
 /// auto-pinning is deliberately NOT wired anywhere: explicit `use`/`update` IS
-/// the v0 policy (wiki/commands/pm/identity-policy.md, Axiom 3).
+/// the v0 policy (`identity-policy` (no such document), Axiom 3).
 fn run_pm(args: &[String]) -> Result<i32> {
     use nub_core::pm::Pm;
     use nub_core::pm::resolve::{self, PmTarget};
@@ -8854,7 +8859,7 @@ fn run_pm(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         // `nub pm use <pm>[@<spec>]` — THE identity-setting verb (spec:
-        // wiki/commands/pm/identity-policy.md §`nub pm use`). Declarative
+        // `identity-policy` (no such document) §`nub pm use`). Declarative
         // contract: after it runs, the project's identity is <pm> and the
         // artifacts agree — `packageManager` written (the field's only
         // sanctioned writer), `devEngines.packageManager` maintained beside
@@ -8978,7 +8983,7 @@ fn run_pm(args: &[String]) -> Result<i32> {
         // pnpm-workspace.yaml, settings) is `use nub`'s job. Symmetric with
         // `nub node pin <version>`.
         "pin" => run_pm_pin(args.get(1).map(String::as_str), &cwd),
-        // Install / remove the PM shims (spec: wiki/research/package-manager-shims.md).
+        // Install / remove the PM shims (spec: `package-manager-shims` (no such document)).
         "shim" => run_pm_shim_install(),
         "unshim" => run_pm_unshim(),
         // `switch` (the old cross-PM, declaration-only verb) was replaced by
@@ -9011,7 +9016,7 @@ fn berry_no_yarn_path_msg() -> String {
 /// they already did — instead, point at `yarn set version`, the tool that
 /// actually manages the committed release nub defers to. The refusal itself
 /// stands in both cases: nub doesn't provision Berry, so it can't compute an
-/// honest `+sha512` for the pin (wiki/research/package-manager-provisioning.md
+/// honest `+sha512` for the pin (`package-manager-provisioning` (no such document)
 /// §What pin writes).
 fn berry_pin_refusal(cwd: &Path) -> String {
     match nub_core::pm::resolve::committed_yarn_path(cwd) {
@@ -9071,7 +9076,7 @@ fn split_pm_arg(arg: &str) -> Result<(&str, Option<&str>)> {
 
 /// The shared resolve → provision → write-the-declaration body of `use` /
 /// `update` (the ratified pin flow, 2026-06-09, re-ratified under the identity
-/// policy 2026-06-10 — wiki/commands/pm/identity-policy.md §`nub pm use`):
+/// policy 2026-06-10 — `identity-policy` (no such document) §`nub pm use`):
 ///
 ///   1. resolve the raw spec (exact / range / dist-tag) against the registry to
 ///      a concrete version — never a range into `packageManager`;
@@ -9578,7 +9583,7 @@ fn list_pm_cache(pm_cache: &Path) -> Vec<String> {
 
 // ── PM shims (`nub pm shim` / `unshim` + the argv0 dispatch) ──────────
 //
-// Spec: wiki/research/package-manager-shims.md (mechanism + strict-by-default
+// Spec: `package-manager-shims` (no such document) (mechanism + strict-by-default
 // agreement check, ratified 2026-06-09). The library core — shim dir, profile
 // block, decision matrix, PATH scan — lives in `nub_core::pm::shim`; this
 // section owns argv handling, the messages, and the final exec.
