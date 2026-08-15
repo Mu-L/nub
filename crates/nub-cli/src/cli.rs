@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "compile")]
+use clap::ArgAction;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// Stable, branded error codes for nub-cli's own (non-engine) failure paths.
@@ -737,6 +739,12 @@ pub struct Cli {
     pub args: Vec<String>,
 }
 
+// One of these is built once per process, straight from argv, and matched
+// immediately — it is never held in a collection, moved in a hot loop, or sent
+// across a channel, so the size gap between the largest variant and the rest buys
+// nothing to fix. Boxing a clap `Subcommand` variant would also put an indirection
+// in front of every field the parser writes and every match arm reads.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Run a package.json script (workspace-aware).
@@ -1024,6 +1032,179 @@ pub enum Command {
     // deliberately excluded from ENGINE_VERBS; design record in
     // internal/commands/init.md. (The doc comment below is user-facing `--help`
     // text: no internal references.)
+    /// Compile a file to a standalone executable.
+    ///
+    /// Bundles the entry (Rolldown, in-process), embeds a Node for the target
+    /// (default shape), and emits one self-contained binary. `--smol` embeds no
+    /// Node — it discovers or provisions one at first run.
+    ///
+    /// Gated behind the `compile` cargo feature: release builds enable it, while
+    /// feature-off development builds expose no `compile` verb rather than one
+    /// that can only error.
+    #[cfg(feature = "compile")]
+    Compile {
+        /// Entry file (TS/JS) to bundle and compile.
+        entry: String,
+
+        /// Output path. Default: ./<entry-stem> (plus `.exe` for a Windows target).
+        #[arg(long, value_name = "PATH")]
+        out: Option<String>,
+
+        /// No embedded Node: discover or provision one at runtime.
+        #[arg(long)]
+        smol: bool,
+
+        /// Node version to target (overrides the project's pin chain). Accepts a
+        /// concrete version, a major, a range, or an alias (`lts`/`latest`).
+        /// Omitted → inferred from `.node-version` / `engines.node` / etc.
+        #[arg(long, value_name = "VERSION")]
+        target: Option<String>,
+
+        /// Target platform. Default: the host. One of `darwin-arm64`,
+        /// `darwin-x64`, `linux-arm64`, `linux-arm64-musl`, `linux-x64`,
+        /// `linux-x64-musl`, `win32-arm64`, `win32-x64`. A foreign platform's
+        /// launcher is fetched from this release and cached.
+        #[arg(long, value_name = "PLATFORM")]
+        platform: Option<String>,
+
+        /// Disable minification (default: minify on).
+        #[arg(long = "no-minify")]
+        no_minify: bool,
+
+        /// Where the source map goes: `none` (default), `linked`, `inline`, or
+        /// `external`. Written `--sourcemap=<MODE>`; bare `--sourcemap` is inline.
+        #[arg(
+            long,
+            value_name = "MODE",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "inline"
+        )]
+        sourcemap: Option<SourcemapArg>,
+
+        /// Replace an expression at build time, repeatable. Values are JavaScript
+        /// expressions, so a string needs its own quotes:
+        /// `--define 'API="https://example.com"'`.
+        #[arg(long, value_name = "KEY=VALUE", action = ArgAction::Append)]
+        define: Vec<String>,
+
+        /// Replace an expression at build time with a file's contents, repeatable.
+        /// The file holds the JavaScript expression `--define` would take, for a
+        /// value too big for a command line:
+        /// `--define-file MODELS=./models.json`.
+        #[arg(long = "define-file", value_name = "KEY=PATH", action = ArgAction::Append)]
+        define_file: Vec<String>,
+
+        /// Embed a file or directory in the executable, byte for byte, repeatable.
+        /// Accepts globs. Embedded files are extracted beside the compiled entry,
+        /// keeping the layout they had in your source tree, so the app reads them
+        /// through the same relative paths it always did.
+        #[arg(long, value_name = "PATH", action = ArgAction::Append)]
+        include: Vec<String>,
+
+        /// Leave a path out of what `--include` embeds, repeatable. Accepts globs.
+        /// A pattern that matches nothing is ignored.
+        #[arg(long, value_name = "PATH", action = ArgAction::Append)]
+        exclude: Vec<String>,
+
+        /// Start the binary's Node with these options, spelled like the
+        /// `NODE_OPTIONS` environment variable and repeatable. For a program
+        /// that only works behind a flag, which the person running your binary
+        /// cannot supply for you:
+        /// `--node-options "--experimental-vm-modules --max-old-space-size=4096"`.
+        /// Whoever runs the binary can still set `NODE_OPTIONS` themselves; the
+        /// two are additive.
+        #[arg(
+            long = "node-options",
+            value_name = "OPTIONS",
+            action = ArgAction::Append,
+            allow_hyphen_values = true
+        )]
+        node_options: Vec<String>,
+
+        /// Icon to show on a Windows executable, as a `.ico` file. Works when
+        /// cross-compiling, so a Windows binary built on macOS or Linux gets its
+        /// icon too. Windows carries the icon inside the executable; macOS and
+        /// Linux read one from a bundle or desktop entry, so the flag is refused
+        /// for those targets rather than silently ignored.
+        #[arg(long = "icon", value_name = "FILE")]
+        icon: Option<PathBuf>,
+
+        /// Custom message the compiled binary shows on a terminal while it sets
+        /// itself up on first run. Default: `Initializing...`.
+        #[arg(long, value_name = "TEXT")]
+        install_message: Option<String>,
+
+        /// Let minification rename functions and classes. Names are preserved by
+        /// default: minified class names break frameworks that key on them
+        /// (dependency injection, ORM entities, class registries).
+        #[arg(long = "no-keep-names", help_heading = COMPILE_ADVANCED)]
+        no_keep_names: bool,
+
+        /// Keep every module's side effects, for a dependency that declares
+        /// itself pure and is not. Tree-shaking is on by default.
+        #[arg(long = "no-treeshake", help_heading = COMPILE_ADVANCED)]
+        no_treeshake: bool,
+
+        /// Ignore `/*@__PURE__*/` annotations while tree-shaking.
+        #[arg(long = "ignore-annotations", help_heading = COMPILE_ADVANCED)]
+        ignore_annotations: bool,
+
+        /// Resolve one specifier as another, repeatable: `--alias lodash=lodash-es`.
+        #[arg(long, value_name = "FROM=TO", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        alias: Vec<String>,
+
+        /// Choose what importing a file extension evaluates to, repeatable:
+        /// `--loader .html=file`. Types: `file` (embeds the file and yields its
+        /// path), `text`, `json`, `base64`, `dataurl`, `binary`, `empty`.
+        #[arg(long, value_name = "EXT=TYPE", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        loader: Vec<String>,
+
+        /// Extra `exports` condition to honor, repeatable. Added to the
+        /// defaults rather than replacing them.
+        #[arg(long, value_name = "NAME", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        conditions: Vec<String>,
+
+        /// Leave a package out of the bundle and resolve it at run time from the
+        /// directory the binary is run in, repeatable. Covers the package and
+        /// its subpaths. The package must be installed on the target machine.
+        #[arg(long, value_name = "PKG", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        external: Vec<String>,
+
+        /// Ship a package unbundled INSIDE the binary, in its own installed
+        /// layout, repeatable. For a package that loads a file by a path it
+        /// computes at run time — a worker script, a data file, an addon that
+        /// detection did not recognise.
+        ///
+        /// Distinct from `--external`, which leaves the package OUT of the binary
+        /// to be resolved on the target machine. This one still carries it.
+        #[arg(long, value_name = "PKG", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        unbundled: Vec<String>,
+
+        /// Bundle a package that would otherwise ship unbundled, repeatable.
+        ///
+        /// The escape hatch for detection firing on a package that does not need
+        /// it — a false positive costs that package its tree-shaking, and waiting
+        /// on a nub release to correct it is worse than a flag.
+        #[arg(long, value_name = "PKG", action = ArgAction::Append, help_heading = COMPILE_ADVANCED)]
+        bundled: Vec<String>,
+
+        /// Keep a dynamic `import()` whose specifier the program computes at run
+        /// time — a plugin loader, a config module. Such an import is refused by
+        /// default: the binary resolves it from the directory it is run in, so
+        /// what it loads depends on the machine you ship to.
+        #[arg(long = "allow-dynamic-import", help_heading = COMPILE_ADVANCED)]
+        allow_dynamic_import: bool,
+
+        /// Use this tsconfig.json instead of the one discovered from the entry.
+        #[arg(long, value_name = "PATH", help_heading = COMPILE_ADVANCED)]
+        tsconfig: Option<String>,
+
+        /// Exclude the original source text from the source map.
+        #[arg(long = "sourcemap-exclude-sources", help_heading = COMPILE_ADVANCED)]
+        sourcemap_exclude_sources: bool,
+    },
+
     /// Scaffold a new TypeScript-first project.
     Init {
         /// Non-interactive: skip all prompts and take the defaults.
@@ -1283,25 +1464,53 @@ pub enum ColorWhen {
     Never,
 }
 
+/// `nub compile`'s power set. Grouping it under its own `--help` heading (the
+/// shape esbuild uses) is what keeps the common six flags readable while the
+/// bundler knobs stay discoverable.
+#[cfg(feature = "compile")]
+const COMPILE_ADVANCED: &str = "Advanced options";
+
+#[cfg(feature = "compile")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SourcemapArg {
+    /// A `.map` shipped inside the executable, referenced by the bundle.
+    Linked,
+    /// A base64 data URI in the bundle itself.
+    Inline,
+    /// A `.map` written beside the executable and not shipped.
+    External,
+    None,
+}
+
 /// Top-level entry point. Returns the process exit code.
 pub fn run() -> Result<i32> {
-    // The macOS parent-death watcher (#480) re-invokes `current_exe()` with this
-    // hidden verb — and `current_exe()` is whatever NAME nub is running under,
-    // which for any workload spawned through nub's own PATH shim is `node`, not
-    // `nub`. Dispatching it here, BEFORE `Argv0::detect()`, is what makes the
-    // verb argv0-independent. Routing it through the argv0 match instead let
-    // `Argv0::Node` treat `__pdeath-watch` as a SCRIPT to run, which spawned a
-    // workload — and therefore another watcher — per level, an unbounded
-    // self-replicating chain that exhausted the process table (regression from #504).
+    // The macOS parent-death watcher (#480) re-invokes `current_exe()` under
+    // the private launcher mode, with its `<child-pgid> <read-fd>` payload as
+    // ordinary arguments. `current_exe()` is whatever NAME nub is running
+    // under — `node` for workloads spawned through nub's PATH shim — so this
+    // must dispatch before `Argv0::detect()`. Otherwise `Argv0::Node` would
+    // treat the payload as an application script, spawning another watcher per
+    // level (regression from #504).
     //
+    // The legacy `__pdeath-watch` hidden token remains accepted for already
+    // built callers, but new watchers select the mode through the internal env
+    // channel so no application argument is reserved. Both forms require the
+    // exact two-item watcher payload before they bypass normal CLI dispatch.
     // Landing above the guards below is also deliberate: the watcher must not
     // reclaim or reap PATH shim dirs, which belong to the nub that spawned it.
     #[cfg(unix)]
     {
-        let mut args = env::args().skip(1);
-        if args.next().as_deref() == Some("__pdeath-watch") {
-            let rest: Vec<String> = args.collect();
-            return Ok(nub_core::node::spawn::run_pdeath_watch(&rest));
+        let args: Vec<String> = env::args().skip(1).collect();
+        let env_mode = env::var("__NUB_COMPILED_LAUNCHER_MODE").ok();
+        let pdeath_args = if env_mode.as_deref() == Some("pdeath-watch") && args.len() == 2 {
+            Some(args.as_slice())
+        } else if args.first().map(String::as_str) == Some("__pdeath-watch") && args.len() == 3 {
+            Some(&args[1..])
+        } else {
+            None
+        };
+        if let Some(pdeath_args) = pdeath_args {
+            return Ok(nub_core::node::spawn::run_pdeath_watch(pdeath_args));
         }
     }
 
@@ -1417,8 +1626,23 @@ struct ScriptExecOpts<'a> {
 /// Known subcommand names that clap should handle. `install`/`i`/`ci` route
 /// to the embedded aube install engine (src/pm_engine/).
 const SUBCOMMANDS: &[&str] = &[
-    "run", "watch", "exec", "upgrade", "help", "node", "pm", "agent", "global", "install", "i",
-    "ci", "init",
+    "run",
+    "watch",
+    "exec",
+    "upgrade",
+    "help",
+    "node",
+    "pm",
+    "agent",
+    "global",
+    "install",
+    "i",
+    "ci",
+    "init",
+    // Only a real verb in a `--features compile` build; the variant and handler
+    // are gated the same way so feature-off development builds reject it cleanly.
+    #[cfg(feature = "compile")]
+    "compile",
 ];
 
 /// `pnpm install <pkg>` (and the `i` alias) is the add-to-dependencies form —
@@ -2737,6 +2961,87 @@ fn dispatch_subcommand(rest: Vec<String>) -> Result<i32> {
                 run_exec_with_dlx(&bin, node, &args, Some(&dlx_flags))
             }
         }
+        #[cfg(feature = "compile")]
+        Some(Command::Compile {
+            entry,
+            out,
+            smol,
+            target,
+            platform,
+            no_minify,
+            sourcemap,
+            define,
+            define_file,
+            include,
+            exclude,
+            install_message,
+            node_options,
+            icon,
+            no_keep_names,
+            no_treeshake,
+            ignore_annotations,
+            alias,
+            loader,
+            conditions,
+            external,
+            unbundled,
+            bundled,
+            allow_dynamic_import,
+            tsconfig,
+            sourcemap_exclude_sources,
+        }) => crate::compile::run(crate::compile::CompileOptions {
+            entry,
+            out,
+            smol,
+            target,
+            platform,
+            include,
+            exclude,
+            install_message,
+            define_file,
+            node_options,
+            icon,
+            bundle: crate::compile::BundleOptions {
+                minify: !no_minify,
+                keep_names: !no_keep_names,
+                // Off by default: a compiled artifact is something you SHIP, and a
+                // map is source. Inline was the old default and cost 81% of the
+                // bundle's bytes (1.04 MB of 1.29 MB on a hello world); `linked`
+                // removed the load-time parse but still shipped 780 KB of map into
+                // every binary. Neither belongs in a distributed executable unless
+                // the publisher asks for it.
+                //
+                // The tradeoff, stated plainly because it is real: with no map an
+                // uncaught error in a compiled TypeScript program points into
+                // minified JS. `--sourcemap=linked` restores exact original-source
+                // traces (verified: a throwing fixture reports `throw.ts:2` with the
+                // TypeScript source line) at ~0 startup cost, so it is the setting to
+                // reach for when debugging a shipped binary matters.
+                sourcemap: match sourcemap.unwrap_or(SourcemapArg::None) {
+                    SourcemapArg::Linked => crate::compile::SourcemapMode::Linked,
+                    SourcemapArg::Inline => crate::compile::SourcemapMode::Inline,
+                    SourcemapArg::External => crate::compile::SourcemapMode::External,
+                    SourcemapArg::None => crate::compile::SourcemapMode::None,
+                },
+                sources_content: !sourcemap_exclude_sources,
+                define,
+                auto_define: Vec::new(),
+                tree_shake: !no_treeshake,
+                ignore_annotations,
+                alias,
+                conditions,
+                external,
+                unbundled,
+                bundled,
+                allow_dynamic_import,
+                tsconfig: tsconfig.map(PathBuf::from),
+                loaders: loader,
+                native_target: None,
+                // Filled in by `compile()` once the pin chain resolves the exact
+                // target Node; the CLI layer does not know it yet.
+                target_node: None,
+            },
+        }),
         Some(Command::Init {
             yes,
             js,
@@ -5662,6 +5967,7 @@ impl PipeReaders {
 /// Non-Unix has no `poll` here; it falls back to sequential draining, accepting
 /// the rare large-output deadlock window (the abort this replaces was Linux-only,
 /// and Windows never exhibited the thread-exhaustion bug).
+#[cfg(unix)]
 fn drain_both_inline(
     out: std::process::ChildStdout,
     out_policy: DrainPolicy,
@@ -6931,7 +7237,7 @@ const RELEASE_LATEST_API_ENV: &str = "NUB_RELEASE_LATEST_URL";
 /// lives at `<base>/canary/nub-<target>.<ext>` with no `v` prefix (bun's exact
 /// layout). npm carries the same builds under the `canary` dist-tag; Homebrew
 /// and winget carry only stable releases.
-const CANARY_TAG: &str = "canary";
+pub(crate) const CANARY_TAG: &str = "canary";
 
 /// Internal, test-only override for the canary release-by-tag endpoint
 /// (default: GitHub's `…/releases/tags/canary`). Serves the JSON whose `name`
@@ -6941,8 +7247,10 @@ const RELEASE_CANARY_API_ENV: &str = "NUB_RELEASE_CANARY_URL";
 
 /// The releases-download base URL — the test seam's override if set, else the
 /// canonical github.com path. Centralized so the override is read in exactly one
-/// place and the default is the single source of truth.
-fn release_download_base() -> String {
+/// place and the default is the single source of truth. Shared with
+/// `compile::launcher`, which pulls per-target launcher templates from the same
+/// release, so one seam redirects both channels.
+pub(crate) fn release_download_base() -> String {
     std::env::var(RELEASE_DOWNLOAD_BASE_ENV)
         .unwrap_or_else(|_| format!("https://github.com/{RELEASE_REPO}/releases/download"))
 }
@@ -6967,7 +7275,7 @@ fn release_canary_api() -> String {
 /// set-version.mjs step), so the marker rides CARGO_PKG_VERSION. bun-mirror: a
 /// canary build's bare `nub upgrade` stays on the canary channel (see
 /// [`choose_release_channel`]).
-fn is_canary_build() -> bool {
+pub(crate) fn is_canary_build() -> bool {
     env!("CARGO_PKG_VERSION").contains("-canary.")
 }
 
@@ -7687,7 +7995,9 @@ fn perform_selfowned_upgrade(
 /// entirely. So: move the live `nub.exe` aside to `nub.exe.old` (succeeds even
 /// mid-run; rustup and uv ride the same fact), rename the staged binary into
 /// place, then refresh the `nubx.exe` COPY from it (install.ps1 ships nubx as a
-/// copy — symlinks need admin/Developer Mode) and the `busybox.exe` sidecar.
+/// copy — symlinks need admin/Developer Mode), then install the `busybox.exe`
+/// sidecar and overwrite the remaining bin/ sidecars so none can go stale
+/// against the new binary.
 ///
 /// All-or-nothing (the upgrade.md#atomicity contract, per-file form): if the
 /// first rename fails the install is untouched; if the second fails the old
@@ -7755,7 +8065,10 @@ fn swap_bin_files_windows(install_dir: &Path, staged_bin: &Path) -> Result<()> {
     //
     // Guarded on the staged file EXISTING, not on the destination: an archive
     // that stops shipping busybox must not abort the upgrade, per the resilience
-    // contract above. Best-effort for the same reason nubx is.
+    // contract above. Best-effort for the same reason nubx is. It gets the
+    // rename-aside dance rather than the generic refresh below because busybox
+    // can be RUNNING (it is the shell `nub run` spawns), and a rename over a
+    // running image fails on Windows.
     let staged_busybox = staged_bin.join("busybox.exe");
     if staged_busybox.is_file() {
         if busybox.exists() && std::fs::remove_file(&busybox).is_err() {
@@ -7768,6 +8081,43 @@ fn swap_bin_files_windows(install_dir: &Path, staged_bin: &Path) -> Result<()> {
                  the installer.",
                 display_path(&busybox)
             );
+        }
+    }
+
+    // Everything ELSE the archive ships in bin/ — the `nub compile` launcher
+    // template above all — must travel with the binary, or an upgraded install
+    // silently keeps the PREVIOUS release's copies. The POSIX path gets that free
+    // by swapping the whole directory. Here `nub.exe` was renamed OUT of the
+    // staging dir above, nubx is refreshed from it, and busybox is installed by
+    // the block just above, so all three are skipped and everything remaining is
+    // refreshed. Best-effort per the resilience contract: nub is already swapped
+    // and authoritative.
+    //
+    // Staged as temp-then-rename rather than remove-then-copy: a remove that
+    // succeeds followed by a copy that fails (AV lock, full disk) would leave the
+    // install with NO copy of the file at all — strictly worse than the
+    // stale-but-working one the failure started from.
+    if let Ok(entries) = std::fs::read_dir(staged_bin) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name == "nubx.exe"
+                || name == "busybox.exe"
+                || !entry.file_type().is_ok_and(|t| t.is_file())
+            {
+                continue;
+            }
+            let dest = bin_dir.join(&name);
+            let tmp = bin_dir.join(format!("{}.new", name.to_string_lossy()));
+            let staged =
+                std::fs::copy(entry.path(), &tmp).and_then(|_| std::fs::rename(&tmp, &dest));
+            if let Err(e) = staged {
+                let _ = std::fs::remove_file(&tmp);
+                eprintln!(
+                    "nub upgrade: warning: could not refresh {} ({e}); the previous \
+                     copy is left in place and `nub` is upgraded and usable.",
+                    dest.display()
+                );
+            }
         }
     }
     Ok(())
@@ -7876,7 +8226,10 @@ fn extract_release_archive(archive: &Path, target: &str, dest: &Path) -> Result<
 
 /// Download `url` to `dest` via curl (the same tool install.sh uses — keeps Nub
 /// free of a bundled HTTP/TLS stack and inherits the user's CA + proxy config).
-fn curl_download(url: &str, dest: &Path) -> Result<()> {
+/// Shared with `compile::launcher`, which pulls launcher templates from the same
+/// release: one transport for every release asset, so the `file://` test seam
+/// works for both.
+pub(crate) fn curl_download(url: &str, dest: &Path) -> Result<()> {
     let status = std::process::Command::new("curl")
         .args([
             "--fail",
@@ -7897,7 +8250,7 @@ fn curl_download(url: &str, dest: &Path) -> Result<()> {
 
 /// Fetch the `.sha256` sidecar and parse out the hex digest. The sidecar is the
 /// `shasum`/`sha256sum` format: `<hex>␠␠<filename>`; we take the first field.
-fn fetch_expected_sha256(sha_url: &str) -> Result<String> {
+pub(crate) fn fetch_expected_sha256(sha_url: &str) -> Result<String> {
     let out = std::process::Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--location", sha_url])
         .output()
@@ -7914,7 +8267,7 @@ fn fetch_expected_sha256(sha_url: &str) -> Result<String> {
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     let mut s = String::with_capacity(64);
@@ -8134,7 +8487,17 @@ fn print_version() {
 
 /// Native clap subcommands whose `--help` is rendered by clap directly.
 const CLAP_HELP_COMMANDS: &[&str] = &[
-    "run", "watch", "exec", "nubx", "upgrade", "install", "i", "ci", "init",
+    "run",
+    "watch",
+    "exec",
+    "nubx",
+    "upgrade",
+    "install",
+    "i",
+    "ci",
+    "init",
+    #[cfg(feature = "compile")]
+    "compile",
 ];
 
 /// True for any word `nub <word> -h` / `nub help <word>` can route to a real help
