@@ -107,8 +107,9 @@ replaceOrDie(
 // aube-parity.yml, and #290). Neither lock is normalized by .gitattributes, so
 // on the two windows-latest release shards they check out CRLF — and a literal
 // `\n` matches only 0x0A, so the stamp would exit 1 before either shard built
-// anything. The single-line patterns above are CRLF-transparent, because `.*`
-// absorbs the trailing `\r` and the replacement drops it.
+// anything. The single-line patterns above are CRLF-transparent for the opposite
+// reason: `.` excludes `\r` (a LineTerminator), so `.*` stops BEFORE it and the
+// CR is left in place — a fully-CRLF tree stamps cleanly and stays CRLF.
 const lockVersionOf = (crate) =>
   new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${crate}"\\r?\\nversion = )"[^"]*"`);
 replaceOrDie("crates/nub-launcher/Cargo.lock", lockVersionOf("nub-core"), `$1"${v}"`);
