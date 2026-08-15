@@ -33,7 +33,19 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 # Free, and ahead of BOTH the bypass and the staged-path filter: a conflict
 # resolution is a commit, so this is the earliest point the break can be caught,
 # and there is no cost here for NUB_SKIP_LAT_CHECK to buy back.
-sh "$ROOT/.githooks/agents-symlink-check.sh" || exit 1
+#
+# ⛔ RESOLVED BESIDE THIS HOOK, NOT UNDER $ROOT. `core.hooksPath` is an absolute path into the
+# SHARED tree, so THESE hooks run for every worktree — but $ROOT is the WORKTREE's toplevel, and a
+# branch that predates this helper simply has no such file there. The hook then died
+# `No such file or directory` and took every commit AND push from that worktree with it, on a
+# branch whose own .githooks/ is perfectly consistent. The helper finds its subject itself via
+# `git rev-parse --show-toplevel`, so only the SCRIPT path needs to follow the hook.
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || HOOK_DIR="$ROOT/.githooks"
+if [ -f "$HOOK_DIR/agents-symlink-check.sh" ]; then
+  sh "$HOOK_DIR/agents-symlink-check.sh" || exit 1
+else
+  echo "pre-commit: agents-symlink-check.sh not found beside this hook; skipping (CI still gates it)." >&2
+fi
 
 [ -n "${NUB_SKIP_LAT_CHECK:-}" ] && exit 0
 
