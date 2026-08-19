@@ -13,8 +13,8 @@ Task playbooks ("skills") live as plain-markdown `SKILL.md` files under `.claude
 - **`remote-build`** — run a cold build, `clippy --all-targets --all-features`, a full `cargo test`, or a `release` build on an ephemeral GCE spot VM instead of the dev Mac; cross-compile `aarch64-apple-darwin` on Linux (no Apple SDK) and pull a signed binary back. Reach for it whenever the host is contended; the ~5s warm inner loop stays local.
 - **`ci-adhoc-test`** — run a macOS/Windows/Linux-arch probe on real CI with no PR (branch-scoped workflow). **`ci-watch`** — block on CI correctly.
 - **`release`** — cut a patch release end-to-end. **`address-issue`** — the full issue playbook. **`audit-thread`** / **`sandbox-pentest`** — parity-audit and adversarial-red-team methodology.
-- **`dynamic-churn`** — run ONE session, in series, through work bigger than a context: a continuously-rewritten task list that is the only memory surviving compaction, driven by the standing prompt your harness re-delivers at rest and after compaction. No hooks to install — the loop is armed by the agent. Covers the part that decides whether such a loop converges or thrashes: how the task file is structured and what the standing prompt says.
-- **`prose-writing`** — required before writing any GitHub comment, doc, or release note. Also **`benchmarking`**, **`pm-perf-tracing`**, **`impact-analysis`**, **`aube-bump`**, **`git-archaeology`**, **`md-toc`**, **`soak`**.
+- **`epic`** — run ONE session, in series, through work bigger than a context: a continuously-rewritten task list that is the only memory surviving compaction, driven by the standing prompt your harness re-delivers at rest and after compaction. No hooks to install — the loop is armed by the agent. Covers the part that decides whether such a loop converges or thrashes: how the task file is structured and what the standing prompt says.
+- Also **`benchmarking`**, **`pm-perf-tracing`**, **`aube-bump`**, **`soak`**.
 
 `.claude/skills/*` is this repo's own agent tooling; the "agent-agnostic, never overfit to Claude" rule governs copy that ships to *users'* agents, not these playbooks.
 
@@ -367,7 +367,7 @@ Visual structure never replaces the host application's control syntax. In Fray, 
 
 **[`PROSE.md`](../PROSE.md) is the cross-project copywriting guide — read it before writing any GitHub comment, docs page, blog/marketing copy, or release note.**
 
-It is also the `prose-writing` skill, which auto-triggers on copy work and points back to PROSE.md as canonical. It owns register, sentence/heading mechanics, scannability, inline-code-pileup avoidance, description fields, real-output-only mockups, GitHub tone, markdown mechanics, and release-notes shape. The sections below carry only the nub-specific layers.
+The `prose-writing` skill auto-triggers on copy work and points back to PROSE.md as canonical. It owns register, sentence/heading mechanics, scannability, inline-code-pileup avoidance, description fields, real-output-only mockups, GitHub tone, markdown mechanics, and release-notes shape. The sections below carry only the nub-specific layers.
 
 **Any general copy-style feedback gets applied everywhere it applies, not just where it was raised** — and gets recorded in `PROSE.md`, not here. Dispatch a sweep of all docs (plus homepage/blog where relevant), then add the rule to the shared guide.
 
@@ -400,7 +400,6 @@ General structure rules live in [`PROSE.md`](../PROSE.md). The homepage is the c
 
 Before loading a large markdown file in full, run `node scripts/md-toc/index.mjs <file.md>` (or `nub scripts/md-toc/index.mjs <file.md>`) for a heading TOC with exact line ranges, then `Read` only the section you need via `offset`/`limit`.
 
-Full usage: `.claude/skills/md-toc/SKILL.md`.
 
 ## Releasing
 
