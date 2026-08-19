@@ -649,6 +649,32 @@ Sources, highest first:
 
 Nub appends the `v1/` schema suffix to the configured directory; a leading `~` expands to the home directory and a relative path resolves against the project root. The packument caches and the shared virtual store live under `cache-dir` (`NUB_CACHE_DIR`) instead — move both when a run must stay entirely off the default locations, and point them at the same volume so the virtual store keeps hardlinking out of the CAS.
 
+### Cache directory
+
+Registry metadata and the shared virtual store live in a cache at `$XDG_CACHE_HOME/nub/pm/` (default `~/.cache/nub/pm/`), separate from the content store above. Point it somewhere else — a faster volume, a CI cache mount — with one line in `.npmrc`:
+
+```ini title=".npmrc"
+cache-dir=/mnt/fast/nub-cache
+```
+
+Two environment variables set the same thing, and both outrank the file:
+
+```bash
+npm_config_cache_dir=/mnt/fast/nub-cache nub install   # neutral — npm and pnpm read it too
+NUB_CACHE_DIR=/mnt/fast/nub-cache nub install          # Nub's own spelling, wins over the above
+```
+
+Ask for the effective value rather than guessing which source won:
+
+```console
+$ npm_config_cache_dir=/mnt/fast/nub-cache nub config get cache-dir
+/mnt/fast/nub-cache
+```
+
+Sharing a volume with `store-dir`, as the section above recommends, matters only while the shared virtual store is enabled: packages materialize into it by hardlink out of the content store, and a hardlink cannot cross filesystems, so a split degrades every install to a per-file copy — which Nub warns about. In CI the shared store is off by default, so the two can sit on different volumes there at no cost.
+
+Some caches stay at the platform default whatever this is set to: the advisory database, the bootstrapped `node-gyp`, git clones, and the registry behind `nub link -g`.
+
 ### Virtual store
 
 The default `node_modules` layout is **isolated**: direct dependencies sit at the top level, transitive packages link into a per-project virtual store, and phantom dependencies fail instead of resolving by accident. Nub's virtual store is `node_modules/.store/` (pnpm uses `node_modules/.pnpm/`) — same shape, not byte-shared, so alternating tools relinks the tree.
