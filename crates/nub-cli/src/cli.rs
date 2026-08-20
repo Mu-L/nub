@@ -5488,7 +5488,8 @@ fn busybox_candidates(dir: &Path) -> [PathBuf; 2] {
 }
 
 /// Build the shell `Command` for a package script with Nub's augmentation
-/// applied exactly once: `NODE_OPTIONS` (injected flags + preload + webstorage),
+/// applied exactly once: `NODE_OPTIONS` (source maps + preload + webstorage; the
+/// version-gated feature flags ride argv instead — see `compute_augmentation_env`),
 /// the PATH shim prepended to the `node_modules/.bin` walk-up chain, `.env`
 /// files, and the `npm_*` lifecycle vars.
 ///
@@ -5618,7 +5619,6 @@ fn build_script_command(
     );
     let aug = nub_core::node::spawn::compute_augmentation_env(
         &nub_binary,
-        node.path.as_std_path(),
         node.version,
         compat_mode,
         pnp_ctx.as_ref().map(|c| c.pnp_cjs.as_path()),
@@ -7361,7 +7361,6 @@ fn apply_exec_augmentation(cmd: &mut std::process::Command, cwd: &Path) -> Resul
     let pnp_ctx = nub_core::pnp::detect(cwd);
     let Some(aug) = nub_core::node::spawn::compute_augmentation_env(
         &nub_binary,
-        node.path.as_std_path(),
         node.version,
         false,
         pnp_ctx.as_ref().map(|c| c.pnp_cjs.as_path()),
