@@ -952,7 +952,7 @@ function NubxBand() {
 
 /* ------------------------------------------------------------ Compatibility */
 
-/* Source: tests/cross-runtime/results.json, using Deno's Node-compat corpus (colinhacks/node_test @ node-25.8.1). Rates = runtime_pass / node_pass. */
+/* Source: tests/cross-runtime/results.json `scores.denoExclusions`, using Deno's Node-compat corpus (colinhacks/node_test @ node-25.8.1). Rate = the share of the tests real Node passes that this runtime ALSO passes, so numerator and denominator come from the same set. Do NOT recompute it as runtime_pass / node_pass: that draws the numerator from a larger set than the denominator and reads high (98.8 vs 98.6 for nub on the same June data). */
 const COMPAT = [
   { name: 'Node 25.8', rate: 100, tests: '4,367 / 4,367', us: false, dim: false },
   { name: 'Nub', rate: 98.6, tests: '4,307 / 4,367', us: true, dim: false },
