@@ -47,6 +47,8 @@ Results land in [`results.json`](./results.json). Useful flags: `--runtimes node
 
 Don't report a single headline percentage as "nub's compatibility" — the raw pass% is capped by corpus-vs-binary version alignment and invites denominator games. The defensible statement is the delta: *"nub passes every test real Node passes, minus `nubRegressions.length` documented deltas,"* shown next to the four-runtime competitive bars.
 
+A regenerated `results.json` is only half the update. The published figures are hand-copied from `scores.denoExclusions` into the `COMPAT` array in `site/src/app/(home)/page.tsx` and into the compatibility sentence in `site/content/blog/introducing-nub.mdx`; nothing reads this file at build time, so both drift silently until someone copies them across.
+
 ## Attribution
 
 The corpus (`node_test`) and the skip/config file (`config.jsonc`) are Deno's work, redistributed here under the MIT license for reproducible measurement. Deno's [v2.8 release notes](https://deno.com/blog/v2.8#nodejs-api-compatibility) put Bun 1.3.14 at 40.6%, within a point of what this harness measured for that version. Deno 2.9 moved its own corpus to Node 26, so that head-to-head no longer shares a suite with this one, which stays pinned to 25.8.1.
