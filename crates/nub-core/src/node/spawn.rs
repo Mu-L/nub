@@ -1322,6 +1322,23 @@ pub fn spawn_node(config: &SpawnConfig<'_>) -> Result<SpawnResult> {
     // SHELL, not a Node, so there is no double-application to guard against.
     // Compat mode is the zero-augmentation contract, so it carries none.
     if !config.compat_mode {
+        // Matrix-derived ARGV-only V8 unflags (`Mitigation::UnflagArgv`) ride here for
+        // the same reasons `v8Flags` do: NODE_OPTIONS refuses them, and this site — unlike
+        // the augment block above — still runs on a re-entrant spawn, which is exactly the
+        // real Node process that must receive them. The NODE_OPTIONS-bound flags can sit
+        // inside that block because a re-entrant child inherits them through the env; an
+        // argv flag has no such inheritance.
+        let argv_only = flags::argv_inject_flags(
+            Some(config.node.path.as_std_path()),
+            &config.node.version,
+            config.user_args,
+        );
+        // Tell the preload which flags to hide from `process.execArgv`; see
+        // `flags::ARGV_ONLY_FLAGS_ENV` for why leaving them visible breaks real builds.
+        if !argv_only.is_empty() {
+            cmd.env(flags::ARGV_ONLY_FLAGS_ENV, argv_only.join(" "));
+        }
+        cmd.args(&argv_only);
         cmd.args(config.runtime_v8_flags);
     }
 
