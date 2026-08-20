@@ -964,9 +964,8 @@ function Compatibility() {
   return (
     <div className="py-14">
         <div className="mx-auto max-w-2xl text-center">
-          <p className="eyebrow text-ember">Compatibility</p>
-          <h3 className="mt-3 text-balance font-display text-2xl font-medium leading-snug md:text-3xl">
-            Node-compatible, because it <span className="italic">is</span> Node
+          <h3 className="text-balance font-display text-2xl font-medium leading-snug md:text-3xl">
+            Node.js compatibility benchmark
           </h3>
           <p className="mt-5 text-balance text-lg leading-relaxed text-fd-muted-foreground">
             Your code is transpiled and executed with the stock <Mono>node</Mono>{' '}binary, so it
