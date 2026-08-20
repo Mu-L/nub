@@ -16,8 +16,8 @@ Match these to reproduce our numbers. **Critically, point both `node` and `nub` 
 |---------|---------|
 | node    | v25.8.1 |
 | nub     | (augmented, default mode) on Node v25.8.1 |
-| bun     | 1.3.14 |
-| deno    | 2.8.1 |
+| bun     | 1.4.0 |
+| deno    | 2.9.5 |
 
 ## Reproduce it yourself
 
@@ -49,4 +49,4 @@ Don't report a single headline percentage as "nub's compatibility" — the raw p
 
 ## Attribution
 
-The corpus (`node_test`) and the skip/config file (`config.jsonc`) are Deno's work, redistributed here under the MIT license for reproducible measurement. The competitive figures cross-check against Deno's own published head-to-head in the [Deno v2.8 release notes](https://deno.com/blog/v2.8#nodejs-api-compatibility).
+The corpus (`node_test`) and the skip/config file (`config.jsonc`) are Deno's work, redistributed here under the MIT license for reproducible measurement. Deno's [v2.8 release notes](https://deno.com/blog/v2.8#nodejs-api-compatibility) put Bun 1.3.14 at 40.6%, within a point of what this harness measured for that version. Deno 2.9 moved its own corpus to Node 26, so that head-to-head no longer shares a suite with this one, which stays pinned to 25.8.1.

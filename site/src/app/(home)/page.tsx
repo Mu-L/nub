@@ -954,10 +954,10 @@ function NubxBand() {
 
 /* Source: tests/cross-runtime/results.json, using Deno's Node-compat corpus (colinhacks/node_test @ node-25.8.1). Rates = runtime_pass / node_pass. */
 const COMPAT = [
-  { name: 'Node 25.8', rate: 100, tests: '4,368 / 4,368', us: false, dim: false },
-  { name: 'Nub', rate: 98.8, tests: '4,315 / 4,368', us: true, dim: false },
-  { name: 'Deno 2.8', rate: 77.4, tests: '3,380 / 4,368', us: false, dim: true },
-  { name: 'Bun 1.3.14', rate: 40.5, tests: '1,770 / 4,368', us: false, dim: true },
+  { name: 'Node 25.8', rate: 100, tests: '4,367 / 4,367', us: false, dim: false },
+  { name: 'Nub', rate: 98.6, tests: '4,307 / 4,367', us: true, dim: false },
+  { name: 'Deno 2.9', rate: 78.5, tests: '3,427 / 4,367', us: false, dim: true },
+  { name: 'Bun 1.4', rate: 66.8, tests: '2,916 / 4,367', us: false, dim: true },
 ];
 
 function Compatibility() {
@@ -1007,7 +1007,7 @@ function Compatibility() {
           })}
         </div>
         <p className="mx-auto mt-6 max-w-lg text-center text-sm leading-relaxed text-fd-muted-foreground">
-          Deno&rsquo;s Node-compat corpus, scored against stock Node. Nub&rsquo;s misses come from auto-enabling experimental features and loading native addons.<br/>
+          Deno&rsquo;s Node-compat corpus, scored against stock Node. Most of Nub&rsquo;s 60 misses are tests that assert on machinery Nub installs itself &mdash; module-loader hooks, the test runner, the compile cache &mdash; or on experimental warnings it suppresses.<br/>
           <a
             href="https://github.com/nubjs/nub/tree/main/tests/cross-runtime"
             target="_blank"
