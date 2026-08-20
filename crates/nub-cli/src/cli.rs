@@ -9406,7 +9406,7 @@ fn run_pm(args: &[String]) -> Result<i32> {
              \x20 pin [<version>]    lock this project to an exact nub version (default: the running nub)\n\
              \x20 update             re-resolve within the pinned range and bump the pin (alias: up)\n\
              \x20 cache [clear]      list cached package managers (or clear the cache)\n\
-             \x20 shim               link npm/pnpm/yarn shims into ~/.nub/shims (re-run after `nub upgrade`)\n\
+             \x20 shim               link npm/pnpm/yarn shims onto PATH (re-run after `nub upgrade`)\n\
              \x20 unshim             remove the shims and their PATH block"
         );
         return Ok(0);
@@ -10236,6 +10236,19 @@ fn run_pm_shim_install() -> Result<i32> {
     // same posture as every other `current_nub_binary` call site).
     let nub_binary = nub_core::node::spawn::current_nub_binary()?;
     let dir = shim::shim_dir()?;
+
+    // The shim dir moved out of `~/.nub`. Clear a pre-move install FIRST, along
+    // with its PATH block, or the profile ends up carrying two blocks and the
+    // stale dir — still holding the pre-upgrade binary — keeps shadowing
+    // npm/pnpm/yarn from earlier in PATH.
+    let migrated = dirs_next::home_dir()
+        .map(|home| shim::migrate_legacy_shim_dir(&home, shim::SHIMS_LEAF_PUBLIC))
+        .transpose()?
+        .flatten();
+    if migrated.is_some() {
+        shim::remove_path_block()?;
+    }
+
     let report = shim::install_shims(&nub_binary)?;
 
     let count = |action: ShimAction| report.iter().filter(|s| s.action == action).count();
@@ -10253,6 +10266,11 @@ fn run_pm_shim_install() -> Result<i32> {
     }
     if current > 0 {
         parts.push(format!("{current} already current"));
+    }
+    // Name the move: the user's shims were somewhere else a moment ago, and a
+    // silent relocation of something that shadows `npm` deserves a line.
+    if let Some(old) = &migrated {
+        println!("moved the shims out of {}", old.display());
     }
     println!(
         "{} entries in {} ({})",
@@ -10346,19 +10364,34 @@ fn run_pm_shim_install() -> Result<i32> {
 fn run_pm_unshim() -> Result<i32> {
     use nub_core::pm::shim;
 
-    let dir = shim::shim_dir()?;
-    let existed = shim::remove_shims()?;
+    // Every candidate dir is swept, not just the one that resolves now — an XDG
+    // install unshimmed from a shell without XDG_DATA_HOME would otherwise leave
+    // its shim binaries behind while the PATH line was stripped.
+    let removed = shim::remove_shims()?;
     let changed = shim::remove_path_block()?;
-    if existed {
-        println!("removed {}", dir.display());
+    if removed.is_empty() {
+        println!("{} was already gone", shim::shim_dir()?.display());
     } else {
-        println!("{} was already gone", dir.display());
+        for dir in &removed {
+            println!("removed {}", dir.display());
+        }
     }
     for profile in &changed {
         println!("  PATH: removed the shims block from {}", profile.display());
     }
     if changed.is_empty() {
         println!("  PATH: no profile carried the shims block");
+    }
+    // A stripped PATH block with nothing removed means the shims were installed
+    // somewhere this process cannot name — a custom XDG_DATA_HOME that is unset
+    // now. Say so rather than reporting a clean removal: the binaries are still
+    // on disk, and re-running with the variable set is what clears them.
+    if removed.is_empty() && !changed.is_empty() {
+        eprintln!(
+            "warning: a shims PATH block was removed but no shims directory was found. \
+             If they were installed with XDG_DATA_HOME set, re-run with that variable set \
+             to remove them."
+        );
     }
     Ok(0)
 }
@@ -10374,7 +10407,21 @@ fn run_node_shim_install() -> Result<i32> {
 
     let nub_binary = nub_core::node::spawn::current_nub_binary()?;
     let dir = shim::node_shim_dir()?;
+
+    // Same migration as the PM shims: clear the pre-move `~/.nub/node-shim` and
+    // its PATH block, or a stale `node` keeps shadowing from earlier in PATH.
+    let migrated = dirs_next::home_dir()
+        .map(|home| nub_core::pm::shim::migrate_legacy_shim_dir(&home, shim::NODE_SHIM_LEAF_PUBLIC))
+        .transpose()?
+        .flatten();
+    if migrated.is_some() {
+        shim::remove_node_path_block()?;
+    }
+
     let entry = shim::install_node_shim(&nub_binary)?;
+    if let Some(old) = &migrated {
+        println!("moved the node shim out of {}", old.display());
+    }
 
     let state = match entry.action {
         ShimAction::Created => "created",
@@ -10457,12 +10504,16 @@ fn run_node_shim_install() -> Result<i32> {
 fn run_node_unshim() -> Result<i32> {
     use nub_core::node::shim;
 
-    let dir = shim::node_shim_dir()?;
-    let (existed, changed) = shim::remove_node_shim()?;
-    if existed {
-        println!("removed {}", dir.display());
+    // Name the dirs the sweep actually cleared, not the one resolving now — the
+    // two differ whenever the shim was installed under a different root, and
+    // printing the resolved path would name somewhere nothing happened.
+    let (removed, changed) = shim::remove_node_shim()?;
+    if removed.is_empty() {
+        println!("{} was already gone", shim::node_shim_dir()?.display());
     } else {
-        println!("{} was already gone", dir.display());
+        for dir in &removed {
+            println!("removed {}", dir.display());
+        }
     }
     for profile in &changed {
         println!(
@@ -10472,6 +10523,16 @@ fn run_node_unshim() -> Result<i32> {
     }
     if changed.is_empty() {
         println!("  PATH: no profile carried the node-shim block");
+    }
+    // Same honesty as `run_pm_unshim`: a stripped block with nothing removed
+    // means the shim lives somewhere this process cannot name (a custom
+    // XDG_DATA_HOME that is unset now), so the hardlink is still on disk.
+    if removed.is_empty() && !changed.is_empty() {
+        eprintln!(
+            "warning: a node-shim PATH block was removed but no shim directory was found. \
+             If it was installed with XDG_DATA_HOME set, re-run with that variable set \
+             to remove it."
+        );
     }
     Ok(0)
 }
