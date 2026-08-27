@@ -977,6 +977,13 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.publish }}
     # verify supplies the expected canary version on main pushes.
     needs: [verify, build]
+    # actions:read is for the container legs' REST artifact download below —
+    # the JS download-artifact action cannot run at all in an Alpine container
+    # on an arm64 runner ("JavaScript Actions in Alpine containers are only
+    # supported on x64 Linux runners"), so those legs fetch the artifact with
+    # curl against the artifacts API instead.
+    permissions:
+      actions: read
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     strategy:
@@ -1029,12 +1036,34 @@ jobs:
       # The alpine container is toolchain-bare: bash for the smoke shell below.
       - name: Toolchain (bash, musl container only)
         if: ${{ matrix.container != '' }}
-        run: apk add --no-cache bash
+        run: apk add --no-cache bash curl jq unzip
       - name: Download ${{ matrix.platform }} platform package
+        if: ${{ matrix.container == '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: nub-${{ matrix.platform }}
           path: nub-pkg
+      # The container legs cannot use the JS action (Alpine + arm64 runner), so
+      # they pull the same artifact through the REST API. v4 artifacts are
+      # downloadable while the run is still in progress.
+      - name: Download ${{ matrix.platform }} platform package (container legs)
+        if: ${{ matrix.container != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: nub-${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${ARTIFACT_NAME}&per_page=100"
+          id="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api" | jq -r '.artifacts[0].id // empty')"
+          if [ -z "$id" ]; then
+            echo "::error::artifact $ARTIFACT_NAME not found in run $GITHUB_RUN_ID"
+            exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o /tmp/artifact.zip \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip"
+          mkdir -p nub-pkg
+          unzip -q /tmp/artifact.zip -d nub-pkg
       - name: Assert the built binary runs and reports the release version
         shell: bash
         env:
