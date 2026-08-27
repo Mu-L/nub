@@ -1345,9 +1345,17 @@ jobs:
           test -f "$LOADER_OUT" \
             || { echo "::error::nub compile produced no user-loader artifact at $LOADER_OUT"; exit 1; }
           [ -n "$EXE" ] || chmod +x "$LOADER_OUT"
+          # --import takes a file URL: Node parses a raw Windows absolute path as
+          # a URL with protocol "d:" and refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME)
+          # — stock node fails the same way, so the URL form is the fixture's job.
+          if [ -n "$EXE" ]; then
+            USER_LOADER_IMPORT="file:///$(cygpath -m "$USER_LOADER")"
+          else
+            USER_LOADER_IMPORT="$USER_LOADER"
+          fi
           LOADER_ACTUAL="$(
             cd "$FOREIGN_CWD"
-            NODE_OPTIONS="--import=$USER_LOADER" \
+            NODE_OPTIONS="--import=$USER_LOADER_IMPORT" \
               __NUB_COMPILE_CACHE_DIR="$WORKDIR/user-loader-runtime-cache" "$LOADER_OUT"
           )"
           if [ "$LOADER_ACTUAL" != "user-loader-compatible" ]; then
