@@ -1433,7 +1433,13 @@ jobs:
             ARCHIVE_PATH_NATIVE="$(cygpath -w "$ARCHIVE_PATH")"
             powershell.exe -NoProfile -NonInteractive -Command \
               "Compress-Archive -LiteralPath '$ARCHIVE_TOP_NATIVE' -DestinationPath '$ARCHIVE_PATH_NATIVE' -Force"
-            ARCHIVE_SHA="$(sha256sum "$ARCHIVE_PATH" | awk '{print $1}')"
+            # sha256sum backslash-escapes its whole output line when the path
+            # argument carries a backslash (leading "\" + doubled separators in
+            # the name), so a RUNNER_TEMP-rooted Windows path corrupts the hash
+            # field into "\<64-hex>" and the launcher rightly refuses it. Hand
+            # it the POSIX spelling; no escaping fires. Measured on the
+            # probe/win-shasums run before landing.
+            ARCHIVE_SHA="$(sha256sum "$(cygpath -u "$ARCHIVE_PATH")" | awk '{print $1}')"
             printf '%s  %s\n' "$ARCHIVE_SHA" "$ARCHIVE_NAME" > "$MIRROR_VERSION/SHASUMS256.txt"
             # Windows stores this as `SystemRoot`; bash lookup is case-sensitive
             # and MSYS2 does not uppercase it, so a bare $SYSTEMROOT is unbound
