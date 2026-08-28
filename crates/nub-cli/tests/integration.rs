@@ -4419,6 +4419,35 @@ fn worker_blob_wrapping_preserves_file_instanceof_blob() {
 }
 
 #[test]
+fn worker_blob_url_revoke_forwards_caller_arity() {
+    // Regression: the revokeObjectURL wrap called the native function with a fixed
+    // arity of one, so `URL.revokeObjectURL()` passed `undefined` through instead of
+    // reaching Node's zero-arg ERR_MISSING_ARGS check — nub returned silently where
+    // vanilla Node throws.
+    let (stdout, stderr, code) = run_nub("worker", "blob-url-revoke-arity.ts");
+    assert_eq!(
+        code, 0,
+        "revoke-arity fixture should run: {stderr}\n{stdout}"
+    );
+    // Node's own zero-arg guard landed in v20.12.0; on the 18.19 floor and the
+    // 20.11 compat leg plain Node returns silently, so forwarding real arity
+    // must return silently there too.
+    let expected = if node_at_least((20, 12, 0)) {
+        "revoke-no-args:ERR_MISSING_ARGS"
+    } else {
+        "revoke-no-args:no-throw"
+    };
+    assert!(
+        stdout.contains(expected),
+        "URL.revokeObjectURL() with no arguments must match plain Node ({expected}): {stdout}"
+    );
+    assert!(
+        stdout.contains("revoke-one-arg:ok"),
+        "the ordinary one-argument revoke must still succeed: {stdout}"
+    );
+}
+
+#[test]
 fn worker_error_event_carries_source_location() {
     // WHATWG ErrorEvent must carry filename/lineno/colno from where the error was
     // raised. nub fills these from the worker error's stack (they were hardcoded
