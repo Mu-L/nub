@@ -10339,6 +10339,21 @@ fn run_pm_shim_install() -> Result<i32> {
         ProfileOutcome::AlreadyPresent(profile) => {
             println!("  PATH: already present in {}", profile.display())
         }
+        // Reached on upgrade. The directory is a compile-time constant within
+        // one build, but the CONSTANT ITSELF moved under XDG in #752, so a
+        // profile written by an older nub still names `$HOME/.nub/shims` beneath
+        // this marker and the line is rewritten in place. Only when that legacy
+        // directory is already GONE — the migration above strips the block
+        // outright while it still exists — so the live shell carries a
+        // directory on PATH that holds no shims, which is why the re-source
+        // hint matters more here than on a fresh add.
+        ProfileOutcome::Rewritten(profile) => println!(
+            "  PATH: updated the entry in {} to point at {}\n  \
+             restart your shell, or run: source {}",
+            profile.display(),
+            dir.display(),
+            profile.display()
+        ),
         // No writable profile for this shell: print the line and exit 0 (the
         // spec's manual fallback — the shims themselves are installed).
         ProfileOutcome::Manual { line } => println!(
@@ -10486,6 +10501,21 @@ fn run_node_shim_install() -> Result<i32> {
         ProfileOutcome::AlreadyPresent(profile) => {
             println!("  PATH: already present in {}", profile.display())
         }
+        // Reached on upgrade. The directory is a compile-time constant within
+        // one build, but the CONSTANT ITSELF moved under XDG in #752, so a
+        // profile written by an older nub still names `$HOME/.nub/node-shim` beneath
+        // this marker and the line is rewritten in place. Only when that legacy
+        // directory is already GONE — the migration above strips the block
+        // outright while it still exists — so the live shell carries a
+        // directory on PATH that holds no shims, which is why the re-source
+        // hint matters more here than on a fresh add.
+        ProfileOutcome::Rewritten(profile) => println!(
+            "  PATH: updated the entry in {} to point at {}\n  \
+             restart your shell, or run: source {}",
+            profile.display(),
+            dir.display(),
+            profile.display()
+        ),
         ProfileOutcome::Manual { line } => println!(
             "  PATH: no known shell profile to edit — add this line to your shell config:\n    {line}"
         ),
