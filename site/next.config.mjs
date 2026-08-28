@@ -11,6 +11,24 @@ const withMDX = createMDX();
 /** @type {import('next').NextConfig} */
 const config = {
   reactStrictMode: true,
+  // A shared docs heading link carries `?section=<slug>` so its OG card can
+  // name the heading. A static page has exactly one <head>, so that request has
+  // to be served by the on-demand `docs/section/[[...slug]]` route instead —
+  // routed here declaratively (a query condition evaluated by the platform
+  // router, no middleware code) so the plain `docs/[[...slug]]` route stays
+  // fully static. Every docs view and sidebar prefetch used to be a function
+  // invocation because the docs route itself read `searchParams`.
+  async rewrites() {
+    return {
+      beforeFiles: [
+        {
+          source: '/docs/:path*',
+          has: [{ type: 'query', key: 'section' }],
+          destination: '/docs/section/:path*',
+        },
+      ],
+    };
+  },
   // Docs slugs were aligned to their commands (2026-06-10); keep the old
   // descriptive URLs working.
   async redirects() {
