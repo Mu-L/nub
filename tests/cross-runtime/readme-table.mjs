@@ -85,9 +85,107 @@ for (const blk of BLOCKS) {
     console.log(expected + "\n");
   }
 }
+// The published figures are hand-copied onto four surfaces and nothing else
+// rechecks them — the homepage COMPAT array, the blog sentence and the wiki
+// research doc all drifted when a re-measurement moved a score, and this
+// README's own retry-flip sentence went stale twice in one PR. --check
+// compares every one against results.json; a missing file exits 2
+// (uncheckable), a mismatch exits 1 like table drift.
+function checkHandCopies() {
+  const by = (lens) => {
+    const s = results.scores[lens];
+    const m = Object.fromEntries(s.runtimes.map((r) => [r.runtime, r]));
+    return { rate: (rt) => (m[rt].pass / s.nodePass * 100).toFixed(1), pass: (rt) => m[rt].pass, nodePass: s.nodePass };
+  };
+  const deno = by("denoExclusions"), bun = by("bunUniverse"), full = by("fullCorpus");
+  // major.minor from the measured binary, so a re-measure on a newer runtime
+  // also forces the hand-written 'Bun 1.4' / 'Deno 2.9' labels to move.
+  const mm = (rt) => version(rt).split(".").slice(0, 2).join(".");
+  const corpusMM = String(results.meta.corpusNodeVersion || "?").split(".").slice(0, 2).join(".");
+  const nubMisses = String(deno.nodePass - deno.pass("nub"));
+  const surfaces = [
+    {
+      file: path.join(HERE, "../../site/src/app/(home)/page.tsx"),
+      wants: [
+        { re: /name: 'Nub', rate: ([\d.]+), tests: '([\d,]+) \/ ([\d,]+)'/, lens: deno, rt: "nub" },
+        { re: /name: 'Deno [\d.]+', rate: ([\d.]+), tests: '([\d,]+) \/ ([\d,]+)'/, lens: deno, rt: "deno" },
+        { re: /name: 'Bun [\d.]+', rate: ([\d.]+), tests: '([\d,]+) \/ ([\d,]+)'/, lens: deno, rt: "bun" },
+        { re: /name: 'Deno ([\d.]+)'/, value: mm("deno"), label: "Deno version label" },
+        { re: /name: 'Bun ([\d.]+)'/, value: mm("bun"), label: "Bun version label" },
+        { re: /name: 'Node ([\d.]+)'/, value: corpusMM, label: "Node corpus label" },
+        { re: /name: 'Node [\d.]+', rate: 100, tests: '([\d,]+) \/ ([\d,]+)'/, values: [n(deno.nodePass), n(deno.nodePass)], label: "Node row counts" },
+        { re: /Most of Nub&rsquo;s (\d+) misses/, value: nubMisses, label: "Nub miss count" },
+        { re: /Node (\d+\.\d+)&rsquo;s own test suite/, value: corpusMM, label: "Node corpus label (prose)" },
+      ],
+    },
+    {
+      file: path.join(HERE, "../../site/content/blog/introducing-nub.mdx"),
+      wants: [
+        { re: /clears ([\d.]+)% of what real Node passes/, lens: deno, rt: "nub" },
+        { re: /([\d.]+)% for Deno/, lens: deno, rt: "deno" },
+        { re: /([\d.]+)% for Bun/, lens: deno, rt: "bun" },
+        { re: /for Deno (\d+\.\d+)/, value: mm("deno"), label: "Deno version label" },
+        { re: /for Bun (\d+\.\d+)/, value: mm("bun"), label: "Bun version label" },
+        { re: /On Node (\d+\.\d+)'s own test suite/, value: corpusMM, label: "Node corpus label" },
+      ],
+    },
+    {
+      file: path.join(HERE, "../../wiki/research/node-test-suite-leverage.md"),
+      wants: [
+        { re: /skip list: nub ([\d.]+)%, deno ([\d.]+)%, bun ([\d.]+)%/, lens: deno, rts: ["nub", "deno", "bun"] },
+        { re: /nothing skipped\): nub ([\d.]+)%, deno ([\d.]+)%, bun ([\d.]+)%/, lens: bun, rts: ["nub", "deno", "bun"] },
+        { re: /wrappers: nub ([\d.]+)%, deno ([\d.]+)%, bun ([\d.]+)%/, lens: full, rts: ["nub", "deno", "bun"] },
+      ],
+    },
+    {
+      file: README,
+      wants: [
+        {
+          re: /flipped (\d+) node, (\d+) nub, (\d+) bun, (\d+) deno and (\d+) node25 verdicts/,
+          counts: ["node", "nub", "bun", "deno", "node25"].map((rt) => String(results.meta.retried?.[rt]?.flippedToPass ?? "?")),
+          label: "retry-flip counts vs meta.retried",
+        },
+      ],
+    },
+  ];
+  let bad = false;
+  for (const { file, wants } of surfaces) {
+    let src;
+    try { src = fs.readFileSync(file, "utf8"); } catch (e) { console.error(`cannot read ${file}: ${e.message}`); process.exit(2); }
+    for (const w of wants) {
+      const m = w.re.exec(src);
+      const name = w.label || w.rt || (w.rts || []).join("/");
+      if (!m) { console.error(`${path.basename(file)}: pattern for ${name} not found (${w.re})`); bad = true; continue; }
+      if (w.value !== undefined || w.values) {
+        const list = w.values || [w.value];
+        list.forEach((want, i) => {
+          if (m[1 + i] !== want) { console.error(`${path.basename(file)}: ${name} says ${m[1 + i]}, results.json says ${want}`); bad = true; }
+        });
+        continue;
+      }
+      const rts = w.counts ? [] : (w.rts || [w.rt]);
+      rts.forEach((rt, i) => {
+        const want = w.lens.rate(rt);
+        if (m[1 + i] !== want) { console.error(`${path.basename(file)}: ${rt} says ${m[1 + i]}, results.json says ${want}`); bad = true; }
+      });
+      if (w.counts) {
+        w.counts.forEach((want, i) => {
+          if (m[1 + i] !== want) { console.error(`${path.basename(file)}: ${name} — position ${i + 1} says ${m[1 + i]}, meta.retried says ${want}`); bad = true; }
+        });
+      }
+      if (w.rt && m[2] && (m[2] !== n(w.lens.pass(w.rt)) || m[3] !== n(w.lens.nodePass))) {
+        console.error(`${path.basename(file)}: ${w.rt} tests say ${m[2]} / ${m[3]}, results.json says ${n(w.lens.pass(w.rt))} / ${n(w.lens.nodePass)}`);
+        bad = true;
+      }
+    }
+  }
+  return bad;
+}
+
 if (process.argv.includes("--check")) {
+  if (checkHandCopies()) drifted = true;
   if (drifted) process.exit(1);
-  console.log("README tables match results.json");
+  console.log("README tables and site figures match results.json");
 } else if (process.argv.includes("--write")) {
   fs.writeFileSync(README, readme);
   console.log("README tables rewritten");

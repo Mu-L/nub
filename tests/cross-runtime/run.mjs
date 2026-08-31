@@ -72,7 +72,11 @@ const CORPUS_NODE_VERSION = (() => {
   try {
     const h = fs.readFileSync(path.join(SUITE, "src/node_version.h"), "utf8");
     const n = (k) => h.match(new RegExp(`#define NODE_${k}_VERSION (\\d+)`))[1];
-    return `${n("MAJOR")}.${n("MINOR")}.${n("PATCH")}`;
+    // A nightly checkout carries the NEXT version's numbers with the release
+    // flag off; without the suffix it stamps as a clean release and a corpus
+    // drift reads as a version bump in the committed meta.
+    const nightly = /#define NODE_VERSION_IS_RELEASE 0/.test(h) ? "-nightly" : "";
+    return `${n("MAJOR")}.${n("MINOR")}.${n("PATCH")}${nightly}`;
   } catch { return "?"; }
 })();
 const PTY_SPAWN = path.join(HERE, "pty-spawn.py");
@@ -400,7 +404,39 @@ function buildPlainCommand(runtime, relPath, source, serialId) {
     // --allow-natives-syntax and a bogus flag). So bun gets the same `// Flags:`
     // tokens node gets, the same way. An earlier revision passed none, which
     // cost bun tests that only work with their flag (e.g. --expose-gc).
-    const env = { ...baseEnv, NODE_OPTIONS: "", ...extraEnv };
+    //
+    // node:test files run under `bun test`: bun's node:test registers tests
+    // only inside its test runner ("Cannot use describe outside of the test
+    // runner" as a plain script, where real node runs the same file
+    // standalone). Bun's own CI runner (scripts/runner.node.mjs) detects
+    // node:test sources and switches to `bun test`, and this harness already
+    // grants deno the equivalent (`deno test` below), so bun gets the same
+    // accommodation. The one exception, copied from bun's runner: a file that
+    // only DRIVES node:test's run() is the parent of the run, not a test file
+    // — under `bun test` it registers nothing and exits before run() finishes.
+    // Two sharp edges, both measured on bun 1.4.x: the path must be ABSOLUTE
+    // (`bun test <relative>` is a name filter that silently matches nothing),
+    // and the per-test --timeout must be passed (default 5s is tighter than
+    // the harness budget). BUN_TEST_DRAIN_EVENT_LOOP mirrors bun-CI's node
+    // parity: node exits only when the event loop drains, and common.mustCall
+    // verifies its counts in 'exit' handlers.
+    const env = { ...baseEnv, NODE_OPTIONS: "", BUN_TEST_DRAIN_EVENT_LOOP: "1", ...extraEnv };
+    if (usesNodeTest(source)) {
+      const importsRun =
+        /\brun\b[^\n]*=\s*require\(['"]node:test['"]\)/.test(source) ||
+        /import\s*{[^}]*\brun\b[^}]*}\s*from\s*['"]node:test['"]/.test(source);
+      const registersAtColumnZero = /^(?:test|it|describe|suite)\s*[.(]/m.test(source);
+      const registersTests = /(?:^|[^.\w])(?:test|it|describe|suite)\s*[.(]/m.test(source);
+      const isRunDriver = importsRun && !registersAtColumnZero && (!registersTests || source.includes("NODE_TEST_CONTEXT"));
+      if (!isRunDriver) {
+        // The same `// Flags:` tokens ride along: `bun test` skips an
+        // unrecognized long flag rather than erroring (probed with a passing
+        // control plus a bogus flag), so the flagged node:test files keep
+        // the treatment the plain path gives them.
+        const args = ["test", `--timeout=${timeoutFor(relPath)}`, ...nodeFlagArgs(tokens), path.join(SUITE, testPath)];
+        return { bin: BINS[runtime], args, env };
+      }
+    }
     return { bin: BINS[runtime], args: [...nodeFlagArgs(tokens), testPath], env };
   }
 
@@ -654,6 +690,19 @@ async function main() {
   }
   const mergeArg = argValue("--merge");
   const prior = mergeArg ? JSON.parse(fs.readFileSync(mergeArg, "utf8")) : null;
+  if (prior) {
+    // A composite results file is one measurement over one tree. Merging a run
+    // from a different corpus checkout silently mixes verdicts measured on
+    // different sources — the exact contamination this refuses (a drifted
+    // submodule once merged nightly-corpus bun verdicts into a v26.7.0 file,
+    // leaving 174 stale carry-overs). Restore the corpus, or start a fresh
+    // --out instead of merging.
+    const currentCommit = fs.existsSync(path.join(SUITE, ".git")) ? capture("git rev-parse HEAD", SUITE) : null;
+    const priorCommit = prior.meta?.corpusCommit ?? null;
+    if (priorCommit && currentCommit && priorCommit !== currentCommit) {
+      throw new Error(`--merge: corpus mismatch — prior verdicts were measured on ${priorCommit}, this checkout is at ${currentCommit}`);
+    }
+  }
   if (Number.isFinite(limit)) runList = runList.slice(0, limit);
 
   // Preload sources once.
