@@ -3201,6 +3201,69 @@ fn node_compat_flag_disables_augmentation() {
     );
 }
 
+/// `--experimental-webstorage` must ride ARGV and never the inherited NODE_OPTIONS.
+/// The flag does not exist before Node 22.4 — above nub's 18.19 support floor — and
+/// NODE_OPTIONS is inherited by the whole process subtree, so a descendant on an older
+/// Node aborts at startup with exit 9 on a flag it cannot parse. That is reachable, not
+/// theoretical: a host on the 22.4–24 band running Electron 34 or older (embedded Node
+/// 20.18.1) hit exactly this, and issue #7 was the same flag reaching an older child
+/// through a nested `.nvmrc`. Argv reaches the spawned process and nothing below it.
+///
+/// This is the WIRING test: the version-band unit tests in `feature_matrix` and the
+/// `flags::should_inject_experimental_webstorage` policy tests all pass just as well
+/// with the injection wired to the wrong channel, because none of them observe which
+/// channel a real spawn actually used. Both halves are asserted together — absent from
+/// NODE_OPTIONS is only meaningful alongside present on argv, since a flag that stopped
+/// being injected at all would satisfy the first half on its own.
+#[test]
+fn webstorage_flag_rides_argv_and_never_node_options() {
+    if !node_at_least((22, 4, 0)) {
+        eprintln!("skipping: webstorage needs Node >= 22.4 (target is older)");
+        return;
+    }
+    let (maj, _, _) = target_node_version();
+    if maj >= 25 {
+        eprintln!("skipping: 25+ has Web Storage native, so nub injects no flag to place");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("nub-ws-channel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"name":"ws-channel"}"#).unwrap();
+    std::fs::write(
+        dir.join("probe.js"),
+        "console.log('OPTS=' + (process.env.NODE_OPTIONS || ''));\n\
+         console.log('ARGV=' + process.execArgv.join(' '));",
+    )
+    .unwrap();
+
+    let out = Command::new(nub_binary())
+        .args(["probe.js"])
+        .current_dir(&dir)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .expect("failed to spawn nub");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let opts = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("OPTS="))
+        .unwrap_or_else(|| panic!("probe printed no OPTS line; stdout={stdout:?}"));
+    let argv = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("ARGV="))
+        .unwrap_or_else(|| panic!("probe printed no ARGV line; stdout={stdout:?}"));
+
+    assert!(
+        argv.contains("--experimental-webstorage"),
+        "nub must still inject the flag on the 22.4–24 band, on argv; argv={argv:?}"
+    );
+    assert!(
+        !opts.contains("--experimental-webstorage"),
+        "the flag must NOT be in NODE_OPTIONS — that string is inherited by the whole \
+         subtree and aborts any descendant below Node 22.4; NODE_OPTIONS={opts:?}"
+    );
+}
+
 /// sessionStorage works OUT OF THE BOX (the maintainer, 2026-06-15): nub always injects
 /// `--experimental-webstorage` on the 22.4–24 flag-needed band (and 25+ has it
 /// native), so `sessionStorage` is a working global with no opt-in. localStorage
@@ -3447,16 +3510,18 @@ fn user_node_options_localstorage_file_is_not_clobbered() {
 }
 
 /// The localStorage neutralization must reach GRANDCHILDREN, not just the direct
-/// child (F1). nub injects `--experimental-webstorage` via NODE_OPTIONS, which
-/// inherits to the whole process subtree — so a `node`-spawned grandchild
-/// re-installs Node's throwing `localStorage` getter. The neutralize signal
-/// (`__NUB_NEUTRALIZE_LOCALSTORAGE`) is a plain env var that also inherits, so the
-/// preload re-runs and re-neutralizes at every level. Before the fix the preload
-/// DELETED that var after reading it, so the child and grandchild inherited the
-/// throwing getter with no neutralize signal → `typeof localStorage` threw two
-/// levels down. This fixture has nub run a parent that spawns a plain `node` child
-/// that spawns a plain `node` grandchild, all without `--localstorage-file`, and
-/// asserts `typeof localStorage === "undefined"` (no throw) at all three levels.
+/// child (F1). Each `node` in the chain re-installs Node's throwing `localStorage`
+/// getter, because each receives `--experimental-webstorage` itself: the flag rides
+/// ARGV (never NODE_OPTIONS, whose 22.4 floor aborted below-floor descendants), so a
+/// plain `node` picks it up by re-entering nub through the PATH shim. The neutralize
+/// signal (`__NUB_NEUTRALIZE_LOCALSTORAGE`) is a plain env var that inherits, and nub
+/// re-sets it wherever it sets the flag, so the preload re-neutralizes at every level.
+/// Two regressions this pins: the preload once DELETED that var after reading it, so
+/// the child and grandchild inherited the throwing getter with no signal; and the flag
+/// and its signal must move together, since a level that gets one without the other
+/// throws. This fixture has nub run a parent that spawns a plain `node` child that
+/// spawns a plain `node` grandchild, all without `--localstorage-file`, and asserts
+/// `typeof localStorage === "undefined"` (no throw) at all three levels.
 #[test]
 fn localstorage_neutralization_reaches_grandchildren() {
     if !node_at_least((22, 4, 0)) {
@@ -3474,7 +3539,7 @@ fn localstorage_neutralization_reaches_grandchildren() {
     // neutralize ran here too. Tag the level so a failure is self-debugging.
     std::fs::write(
         dir.join("grandchild.js"),
-        "console.log('GRANDCHILD:' + typeof localStorage);",
+        "console.log('GRANDCHILD:' + typeof localStorage + ':' + typeof sessionStorage);",
     )
     .unwrap();
     // child.js: prints its own level, then spawns the grandchild as a plain `node`
@@ -3482,7 +3547,7 @@ fn localstorage_neutralization_reaches_grandchildren() {
     // preload via inherited NODE_OPTIONS — exactly the subtree we must cover).
     std::fs::write(
         dir.join("child.js"),
-        "console.log('CHILD:' + typeof localStorage);\n\
+        "console.log('CHILD:' + typeof localStorage + ':' + typeof sessionStorage);\n\
          const cp = require('node:child_process');\n\
          const r = cp.spawnSync('node', [require('node:path').join(__dirname, 'grandchild.js')], { stdio: 'inherit' });\n\
          process.exit(r.status ?? 1);",
@@ -3491,7 +3556,7 @@ fn localstorage_neutralization_reaches_grandchildren() {
     // parent.js: top level run by nub. Spawns the child as a plain `node`.
     std::fs::write(
         dir.join("parent.js"),
-        "console.log('PARENT:' + typeof localStorage);\n\
+        "console.log('PARENT:' + typeof localStorage + ':' + typeof sessionStorage);\n\
          const cp = require('node:child_process');\n\
          const r = cp.spawnSync('node', [require('node:path').join(__dirname, 'child.js')], { stdio: 'inherit' });\n\
          process.exit(r.status ?? 1);",
@@ -3512,9 +3577,15 @@ fn localstorage_neutralization_reaches_grandchildren() {
         "grandchild chain must not throw at any level: stdout={stdout:?} stderr={stderr:?}"
     );
     for level in ["PARENT", "CHILD", "GRANDCHILD"] {
+        // `localStorage` neutralized AND `sessionStorage` live, asserted together at
+        // each level. The second half is a POSITIVE CONTROL and is what makes the
+        // first half mean anything: on this band a process that never received
+        // `--experimental-webstorage` also reports `localStorage` as "undefined", so
+        // the neutralize assertion alone passes just as well when the flag failed to
+        // arrive at all. `sessionStorage` is "object" only when the flag DID arrive.
         assert!(
-            stdout.contains(&format!("{level}:undefined")),
-            "`typeof localStorage` must be \"undefined\" (not throw) at the {level} level with no --localstorage-file; stdout={stdout:?} stderr={stderr:?}"
+            stdout.contains(&format!("{level}:undefined:object")),
+            "at the {level} level `typeof localStorage` must be \"undefined\" (neutralized, not thrown) and `typeof sessionStorage` must be \"object\" (proving --experimental-webstorage actually reached this level); stdout={stdout:?} stderr={stderr:?}"
         );
     }
 
