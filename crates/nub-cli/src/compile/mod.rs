@@ -1899,19 +1899,20 @@ impl Drop for FileGuard {
     }
 }
 
-fn which_first(names: &[&str]) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    for name in names {
-        for dir in std::env::split_paths(&path) {
-            if dir.join(name).is_file() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
+/// The first of `names` on PATH, as the matched path — which is what gets spawned,
+/// so discovery and execution cannot disagree.
+///
+/// Thin on purpose: the lookup lives in nub-core because the launcher needs the
+/// same one, and because nub-core's tests run on every OS leg while the
+/// compile-feature tests run only on Ubuntu. The rule it carries is that on
+/// Windows the strippers are on disk as `llvm-strip.exe`, so a bare
+/// `dir.join("llvm-strip")` matched nothing and `prepare_node_bytes` took its
+/// unstripped early return on every compile run on a Windows host.
+fn which_first(names: &[&str]) -> Option<PathBuf> {
+    nub_core::find_on_path(names)
 }
 
-fn run_ok(program: &str, args: &[&std::ffi::OsStr]) -> bool {
+fn run_ok(program: impl AsRef<std::ffi::OsStr>, args: &[&std::ffi::OsStr]) -> bool {
     std::process::Command::new(program)
         .args(args)
         .stdout(std::process::Stdio::null())
