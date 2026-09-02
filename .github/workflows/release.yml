@@ -2070,6 +2070,11 @@ jobs:
           tag_name: ${{ needs.verify.outputs.publish_tag }}
           generate_release_notes: true
           prerelease: false
+          # Promotion is an UPDATE, and an update that omits make_latest leaves the
+          # repo's "Latest" pointer untouched — v0.7.5 stayed latest through three
+          # stable 0.8.x promotions, so `releases/latest` (nub upgrade + both
+          # installers) kept serving 0.7.5. Claim it explicitly.
+          make_latest: "true"
 
   canary-immutable-release:
     name: Create immutable canary release
