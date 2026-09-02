@@ -198,12 +198,12 @@ gh issue list --repo nubjs/nub --state closed --search "closed:<PREV-date>..<cut
 
 For each issue/PR in the union, check whether it ALREADY carries the comment before posting (`gh issue view <n> --repo nubjs/nub --json comments --jq '[.comments[].body|select(test("Shipped in v<ver>"))]|length'`) — skip a `NOT_PLANNED` issue with no shipped fix. **Re-run this pass for any issue closed AFTER the cut** — a late-closing issue does not appear in the first sweep.
 
-Then comment (short, factual — what fixed it + the version and release link, no fluff):
+Then comment (extremely concise — the version and release link, no recap of what was done or how; add a brief thanks when the reporter or PR author is external):
 
 ```bash
 REL="https://github.com/nubjs/nub/releases/tag/v<ver>"
 gh issue comment <n> --body "Fixed in v<ver> (now published): $REL"
-gh pr comment <n>    --body "Shipped in v<ver>: $REL"
+gh pr comment <n>    --body "Shipped in v<ver>: $REL — thanks for the contribution."
 ```
 
 Hit **every** issue and PR the mechanical union above surfaces — not just the headline fixes. This is non-optional; do not skip an issue because it was "minor," and do not fall back to the release thread's targeted-fix list as the source of truth (it under-counts). Do not comment on issues unrelated to the release.
