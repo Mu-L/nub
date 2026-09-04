@@ -113,7 +113,11 @@ Jobs:
   clippy   the full CI clippy gate (default)
   test     the whole-workspace test suite
   adhoc    build the nub binary + real addon, then run YOUR --script at the synced repo
-           root with NUB_BIN naming the built binary. For fixture probes and ad-hoc e2e
+           root with NUB_BIN naming the built binary. NUB_BIN carries DEFAULT features
+           only, so a probe of a feature-gated command (\`nub compile\`) must build its
+           own: \`cargo build -p nub-cli --features compile --profile fast\` and then
+           \$CARGO_TARGET_DIR/fast/nub -- never \$PWD/target, which this job never uses.
+           For fixture probes and ad-hoc e2e
            sweeps (the ad-hoc-test loop) that need no macOS-specific behavior. The image
            carries Node ${NODE_MAJOR} + npm; a script installs any other reference tool itself.
 
