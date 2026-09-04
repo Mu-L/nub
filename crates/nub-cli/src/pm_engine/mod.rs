@@ -66,6 +66,7 @@ pub mod phantom_closure;
 pub mod platform_flags;
 pub mod present;
 pub mod publish_family;
+mod remix_compat;
 mod resource_limits;
 pub mod store_config_family;
 pub mod unsupported_config;
@@ -2784,13 +2785,26 @@ fn nub_setting_defaults(
     // Metro — can't reach the machine-global store at any version). `expo` is
     // version-gated: it gained store-awareness only in SDK 56 (On-demand
     // Filesystem), so a project declaring `expo` below the floor is ejected while
-    // 56+ keeps GVS. See [`expo_compat`]. The list stays curated and small
-    // because there is no manifest signal for "this tool canonicalizes
-    // symlinks"; it is unavoidably a behavioral-property list.
+    // 56+ keeps GVS. See [`expo_compat`]. `remix` is version-gated the other way
+    // round: Remix 3's unbundled asset server serves npm packages to the browser
+    // only from mounts relative to the project root, so a `remix` major ≥ 3 is
+    // ejected while the bundler-built earlier majors keep GVS. See
+    // [`remix_compat`]. The list stays curated and small because there is no
+    // manifest signal for "this tool canonicalizes symlinks"; it is unavoidably
+    // a behavioral-property list.
+    // The incumbent's root when detected, else the cwd — a fresh project
+    // (`detected.is_none()`) is rooted at the cwd. Workspace discovery expands
+    // the member globs against the disk, so it runs ONCE here and the three
+    // manifest scans below (the two version gates and the injected-deps check)
+    // share the result.
     let gvs_root = detected.map(|d| d.dir.as_path()).unwrap_or(cwd);
+    let workspace_members = aube_workspace::find_workspace_packages(gvs_root).unwrap_or_default();
     let mut gvs_off: Vec<&str> = vec!["next", "react-native"];
-    if expo_compat::expo_below_gvs_floor(gvs_root) {
+    if expo_compat::expo_below_gvs_floor(gvs_root, &workspace_members) {
         gvs_off.push("expo");
+    }
+    if remix_compat::remix_needs_project_local_store(gvs_root, &workspace_members) {
+        gvs_off.push("remix");
     }
     let store_dir = format!("node_modules/{PROJECT_VIRTUAL_STORE_LEAF}");
     let mut defaults = vec![
@@ -2846,11 +2860,9 @@ fn nub_setting_defaults(
             data.join("store").to_string_lossy().into_owned(),
         ));
     }
-    // Scan for injected deps at the incumbent's root when detected, else the
-    // cwd — a fresh project (`detected.is_none()`) is rooted at the cwd, so it
-    // is still excluded from the GVS default below if it declares injected deps.
-    let injected_root = detected.map(|d| d.dir.as_path()).unwrap_or(cwd);
-    let injected = unsupported_config::injected_deps_present(injected_root);
+    // Scan for injected deps at the same root, so a fresh project is still
+    // excluded from the GVS default below if it declares injected deps.
+    let injected = unsupported_config::injected_deps_present(gvs_root, &workspace_members);
     // EVERY project defaults to isolated. Hoisting is left GVS-AWARE via the
     // engine's `gvs_over_default_hoist` profile (nub's identity sets it): a
     // NON-injected project pushes NO `hoist`, so it resolves to the built-in
