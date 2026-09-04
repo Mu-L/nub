@@ -15,6 +15,7 @@
 //! not a re-read of whatever the writer happened to emit.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -33,6 +34,7 @@ pub fn inject(
     payload: &[u8],
     icon: Option<&[u8]>,
     version_info: Option<&[u8]>,
+    hide_console: bool,
     out: &Path,
 ) -> Result<()> {
     let format = target.format();
@@ -80,10 +82,23 @@ pub fn inject(
             if let Some(version_info) = version_info {
                 pe = pe.set_version_info(version_info.to_vec());
             }
+            // Built into memory rather than straight into the file, because the
+            // subsystem flip has to land on the FINISHED image. libsui rebuilds
+            // the PE headers while it rewrites the resource directory, so a
+            // subsystem set on the template is discarded here along with the
+            // template's own resources — the same reason the icon and the version
+            // resource are set inside this builder chain instead of baked in.
+            let mut image = Vec::with_capacity(template.len() + payload.len());
             pe.write_resource(nub_core::compile::SECTION_NAME, payload.to_vec())
                 .map_err(|e| anyhow!("injecting the payload resource: {e:?}"))?
-                .build(&mut file)
-                .map_err(|e| anyhow!("building the executable: {e:?}"))
+                .build(&mut image)
+                .map_err(|e| anyhow!("building the executable: {e:?}"))?;
+            if hide_console {
+                set_pe_subsystem_gui(&mut image)
+                    .context("hiding the console window (--hide-console)")?;
+            }
+            file.write_all(&image)
+                .with_context(|| format!("writing {}", out.display()))
         }
     }
 }
@@ -484,6 +499,62 @@ fn pe_header_offset(image: &[u8]) -> Result<usize> {
     Ok(pe)
 }
 
+/// Flip a PE's subsystem to GUI, so Windows opens no console beside the app.
+///
+/// `Subsystem` sits at optional-header offset 68 in BOTH PE32 and PE32+. The two
+/// layouts differ earlier — PE32 carries an extra `BaseOfData`, and an `ImageBase`
+/// four bytes narrower than PE32+'s — and those differences cancel exactly, so the
+/// field lands at the same offset either way and no magic-dependent arithmetic is
+/// needed. Deno computes it as `standard_fields_size + 68`, which is correct only
+/// because Deno ships 64-bit alone; on a PE32 image that expression points four
+/// bytes past the field, into `DllCharacteristics`. Worth not copying.
+///
+/// Applied to the FINISHED artifact rather than the template: libsui rebuilds the
+/// headers while rewriting the resource directory, so a flip made beforehand is
+/// discarded — the same reason the icon is set inside the builder chain.
+///
+/// This is only HALF of hiding the console. nub's launcher spawns Node as a
+/// child, and a GUI-subsystem parent starting a console-subsystem child still
+/// gets a console allocated for that child, so the launcher must also pass
+/// `CREATE_NO_WINDOW`. Bun and Deno need this half alone because each one IS the
+/// process it is hiding.
+/// The PE `Subsystem` field, read back the way Windows' loader reads it.
+///
+/// Exists for the same reason the version-resource scanner does: a cross-compiled
+/// Windows binary cannot be run on this host, so reading the field back out of the
+/// finished file is the only evidence the flip survived libsui's header rebuild.
+/// `None` when the image is not a placeable PE.
+pub fn pe_subsystem(image: &[u8]) -> Option<u16> {
+    let pe = pe_header_offset(image).ok()?;
+    match u16le(image, pe + 24) {
+        Some(0x20b) | Some(0x10b) => u16le(image, pe + 24 + 68),
+        _ => None,
+    }
+}
+
+/// `IMAGE_SUBSYSTEM_WINDOWS_GUI` — the value that stops Windows allocating a
+/// console for the process it starts from this image.
+pub const SUBSYSTEM_WINDOWS_GUI: u16 = 2;
+
+fn set_pe_subsystem_gui(image: &mut [u8]) -> Result<()> {
+    let pe = pe_header_offset(image)?;
+    let optional_header = pe + 24;
+    // Checked rather than assumed: a ROM image (0x107) lays its optional header
+    // out differently, so writing at +68 would land in an unrelated field and
+    // produce a corrupt executable that still passes every other check here.
+    match u16le(image, optional_header) {
+        Some(0x20b) | Some(0x10b) => {}
+        Some(other) => bail!("unexpected PE optional-header magic {other:#x}"),
+        None => bail!("truncated PE optional header"),
+    }
+    let at = optional_header + 68;
+    let slot = image
+        .get_mut(at..at + 2)
+        .context("truncated PE optional header")?;
+    slot.copy_from_slice(&SUBSYSTEM_WINDOWS_GUI.to_le_bytes());
+    Ok(())
+}
+
 /// `(virtual_address, virtual_size, raw_offset, raw_size)` per section.
 fn pe_sections(image: &[u8], pe: usize) -> Result<Vec<(u32, u32, u32, u32)>> {
     let count = u16le(image, pe + 6).context("truncated COFF header")? as usize;
@@ -590,6 +661,7 @@ mod tests {
             install_message: None,
             node_flags: Vec::new(),
             sealed_module_graph: false,
+            hide_console: false,
         };
         nub_core::compile::encode(
             &manifest,
@@ -615,7 +687,7 @@ mod tests {
         let target = TargetPlatform::parse(triple).unwrap();
         let out = tmp(&format!("artifact-{triple}"));
         let payload = payload("main.js");
-        inject(&target, template, &payload, None, None, &out).expect("inject");
+        inject(&target, template, &payload, None, None, false, &out).expect("inject");
 
         let produced = fs::read(&out).unwrap();
         assert_eq!(
@@ -688,6 +760,7 @@ mod tests {
             &payload("main.js"),
             Some(&fixtures::png()),
             Some(&info.encode().expect("the fixture encodes")),
+            false,
             &out,
         )
         .expect("inject");
@@ -708,6 +781,71 @@ mod tests {
             "the payload must still be findable once RT_VERSION joins the table"
         );
         let _ = fs::remove_file(&out);
+    }
+
+    /// The flip has to survive the write, which is the whole reason it is applied
+    /// to the finished image instead of the template.
+    ///
+    /// libsui rebuilds the PE headers while it rewrites the resource directory, so
+    /// a subsystem set on the way in is discarded — silently, leaving a binary that
+    /// passes every other check here and still flashes a console on the user's
+    /// machine. The CUI assertion on the same build with the flag off is the
+    /// control: without it this would pass against a fixture that was never
+    /// console-subsystem to begin with.
+    #[test]
+    fn the_hidden_console_subsystem_survives_the_resource_rewrite() {
+        let target = TargetPlatform::parse("win32-x64").unwrap();
+        assert_eq!(
+            pe_subsystem(&fixtures::pe()),
+            Some(3),
+            "the fixture must start as CUI, or this test cannot fail"
+        );
+
+        let hidden = tmp("artifact-hidden");
+        inject(
+            &target,
+            &fixtures::pe(),
+            &payload("main.js"),
+            None,
+            None,
+            true,
+            &hidden,
+        )
+        .expect("inject");
+        let produced = fs::read(&hidden).unwrap();
+        assert_eq!(
+            pe_subsystem(&produced),
+            Some(SUBSYSTEM_WINDOWS_GUI),
+            "--hide-console must leave the produced artifact GUI-subsystem"
+        );
+        // The payload is what the flip is written next to, and a wrong offset would
+        // corrupt the header the scan walks, so assert both in one breath.
+        assert!(
+            find_payload(ContainerFormat::Pe, &produced)
+                .unwrap()
+                .is_some(),
+            "the payload must still be findable once the subsystem is flipped"
+        );
+
+        let plain = tmp("artifact-shown");
+        inject(
+            &target,
+            &fixtures::pe(),
+            &payload("main.js"),
+            None,
+            None,
+            false,
+            &plain,
+        )
+        .expect("inject");
+        assert_eq!(
+            pe_subsystem(&fs::read(&plain).unwrap()),
+            Some(3),
+            "without the flag the artifact must stay a console application"
+        );
+
+        let _ = fs::remove_file(&hidden);
+        let _ = fs::remove_file(&plain);
     }
 
     /// The negative control for the scan above: without one it must report none
@@ -740,6 +878,7 @@ mod tests {
             &payload("main.js"),
             None,
             None,
+            false,
             &tmp("wrong"),
         )
         .unwrap_err();
@@ -770,6 +909,7 @@ mod tests {
             &payload("main.js"),
             None,
             None,
+            false,
             &tmp("badarch"),
         )
         .unwrap_err();
@@ -786,6 +926,7 @@ mod tests {
                 &payload("main.js"),
                 None,
                 None,
+                false,
                 &tmp("okarch")
             )
             .is_ok(),
@@ -804,6 +945,7 @@ mod tests {
             &payload("main.js"),
             None,
             None,
+            false,
             &tmp("unknownarch"),
         )
         .unwrap_err();
@@ -820,6 +962,48 @@ mod tests {
         assert!(msg.contains("unsupported or unreadable"), "{msg}");
         assert!(msg.contains("Mach-O (macOS)"), "{msg}");
         assert!(msg.contains("darwin-x64"), "{msg}");
+    }
+
+    /// The subsystem flip, asserted against the byte Windows actually reads.
+    ///
+    /// The fixture ships `3` (`WINDOWS_CUI`), so the starting state is a real
+    /// console executable rather than a zeroed field that would pass whatever this
+    /// wrote. The offset is the whole claim — a flip four bytes wide of it lands in
+    /// `DllCharacteristics` and silently changes ASLR or DEP instead — so the test
+    /// reads it back at `pe + 24 + 68` computed independently of the function, and
+    /// checks that its neighbours on both sides are untouched.
+    #[test]
+    fn the_subsystem_flip_writes_gui_at_the_offset_windows_reads() {
+        let mut image = fixtures::pe();
+        let opt = 0x80 + 24;
+        assert_eq!(
+            u16le(&image, opt + 68),
+            Some(3),
+            "fixture should start as a console executable, or this proves nothing"
+        );
+        let before = (u16le(&image, opt + 66), u16le(&image, opt + 70));
+
+        set_pe_subsystem_gui(&mut image).unwrap();
+
+        assert_eq!(u16le(&image, opt + 68), Some(2), "subsystem must be GUI");
+        assert_eq!(
+            (u16le(&image, opt + 66), u16le(&image, opt + 70)),
+            before,
+            "the write must not touch MinorSubsystemVersion or DllCharacteristics"
+        );
+    }
+
+    /// A magic this function does not understand must refuse rather than write.
+    ///
+    /// A ROM image lays the optional header out differently, so a blind write at
+    /// +68 would corrupt an unrelated field and still leave every structural check
+    /// in this module passing.
+    #[test]
+    fn the_subsystem_flip_refuses_an_optional_header_it_cannot_place() {
+        let mut rom = fixtures::pe();
+        rom[0x98..0x9a].copy_from_slice(&0x107u16.to_le_bytes());
+        let err = set_pe_subsystem_gui(&mut rom).unwrap_err();
+        assert!(format!("{err:#}").contains("0x107"), "{err:#}");
     }
 
     #[test]
