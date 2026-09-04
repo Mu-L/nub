@@ -75,20 +75,22 @@ Another 2.8% sits in `detail::sprp`, a Miller–Rabin strong-probable-prime test
 | v26.3.0 | 14.6 | 20.7 ms | 11.9% |
 | v26.7.0 | 14.6 | 19.6 ms | 12.1% |
 
-The mechanism is in `deps/v8/src/numbers/hash-seed.cc`. Since V8 14.1 the string hash is rapidhash, whose secret is three 64-bit words that must each have balanced bytes, pairwise Hamming distance 32, and be prime ("a feeling to be perfect", per the wyhash author quoted in `third_party/rapidhash-v8/secret.h`). `HashSeed::InitializeRoots` either copies a compile-time default secret and stores a fresh random meta seed, when `V8_USE_DEFAULT_HASHER_SECRET` is defined, or calls `rapidhash_make_secret(seed, …)`, which rejection-samples the three primes with a 12-base Miller–Rabin test. V8's `BUILD.gn` sets `v8_use_default_hasher_secret = true`, so Chrome takes the first path; Node's gyp files (`tools/v8_gypfiles/features.gypi`, `common.gypi`) never pass the define, so every Node isolate, main thread and each `worker_threads` Worker alike, takes the second. The code's own comment estimates the generation at ~200 µs; measured, it is 2–3 ms of a 20 ms process.
+The mechanism is in `deps/v8/src/numbers/hash-seed.cc`. Since V8 14.1 the string hash is rapidhash, whose secret is three 64-bit words that must each have balanced bytes, pairwise Hamming distance 32, and be prime ("a feeling to be perfect", per the wyhash author quoted in `third_party/rapidhash-v8/secret.h`). `HashSeed::InitializeRoots` either copies a compile-time default secret and stores a fresh random meta seed, when `V8_USE_DEFAULT_HASHER_SECRET` is defined, or calls `rapidhash_make_secret(seed, …)`, which rejection-samples the three primes with a 12-base Miller–Rabin test. V8's `BUILD.gn` sets `v8_use_default_hasher_secret = true`, so Chrome takes the first path; Node builds without the define, so every Node isolate, main thread and each `worker_threads` Worker alike, takes the second. The code's own comment estimates the generation at ~200 µs; measured, it is 2–3 ms of a 20 ms process.
 
-Adding `'V8_USE_DEFAULT_HASHER_SECRET=1'` to the `defines` in `tools/v8_gypfiles/features.gypi` (one line) and rebuilding main (`53234233acb`, gcc 13, `./configure --ninja`) on the same box, paired in one hyperfine session with the unpatched build:
+The random secrets are not optional for Node. Its March-2026 HashDoS fix ([CVE-2026-21717][hashdos2026]) scrambles array-index string hashes with three multipliers derived from exactly these secrets (`DeriveSecretsForArrayIndexHash` in the same file, enabled by `v8_enable_seeded_array_index_hash` in `tools/v8_gypfiles/features.gypi`), and Node's write-up states the scheme "needs to be used together with `v8_use_default_hasher_secret = false` for HashDoS resistance"; the per-process meta seed does not enter that hash, so with the define the multipliers would be public constants. Deno builds V8 with the same `v8_use_default_hasher_secret = false` ("prevent hashdos" in `rusty_v8`'s `.gn`), so it pays the same generation on every isolate. The 2019 `v8_use_siphash = true` in `common.gypi` is the same posture: Node runs stronger flooding defenses than Chrome, where a renderer DoS is out of scope.
+
+Building main (`53234233acb`, gcc 13, `./configure --ninja`) with `V8_USE_DEFAULT_HASHER_SECRET=1` therefore only prices the generation; it is not a shippable configuration. Paired in one hyperfine session with the unpatched build on the same box:
 
 | `node -e 0`, Linux x64 | min | median |
 |---|---|---|
 | main | 21.7 ms | 25.4 ms |
-| main + `V8_USE_DEFAULT_HASHER_SECRET=1` | 19.3 ms | 20.5 ms |
+| main with the generation compiled out | 19.3 ms | 20.5 ms |
 
-`performance.nodeTiming`'s `v8Start → environment` span drops from 8.4 to 6.4 ms, `HashSeed::InitializeRoots` and `sprp` leave the profile (the top symbol becomes the snapshot deserializer at 8.4%), and `test/parallel/test-hash-seed.mjs` passes, since the per-process meta seed stays random; only the multiplier secret becomes the fixed default that Chrome already uses. Both `-fvisibility` variants of [#65526][pr65526] were built on the same box for comparison and change nothing on Linux (19.9 / 20.5 / 21.4 ms are within noise), which is expected: `-fvisibility=hidden` there shrinks `.dynsym` from 208,643 to 186,791 entries and weak symbols from 14,135 to 869, but glibc's loader was never the cost.
+`performance.nodeTiming`'s `v8Start → environment` span drops from 8.4 to 6.4 ms and `HashSeed::InitializeRoots` and `sprp` leave the profile (the top symbol becomes the snapshot deserializer at 8.4%). The cost lives in one helper, not in the randomness: `mul_mod` in `secret.h` is a 64-iteration shift-add loop with two 64-bit `%` per iteration, called ~9,000 times per generation inside the Miller–Rabin test (~1,560 candidates, ~99 `sprp` calls), while the file's own comment says the test "is fast as long as we have 64x64 -> 128 bit muls and modulos". A standalone copy of the generator with `mul_mod` rewritten as a 128-bit multiply and modulo (`unsigned __int128`, or `_umul128`/`_udiv128` on MSVC x64) produces bit-identical secrets for 2,000 seeds and runs in 148 µs instead of 2,569 µs on an Apple M1 Max, so the fix is a ~20-line change to V8's `secret.h` with no change in what gets generated. Both `-fvisibility` variants of [#65526][pr65526] were built on the same box for comparison and change nothing on Linux (19.9 / 20.5 / 21.4 ms are within noise), which is expected: `-fvisibility=hidden` there shrinks `.dynsym` from 208,643 to 186,791 entries and weak symbols from 14,135 to 869, but glibc's loader was never the cost.
 
 ### The three fixes built on macOS
 
-Six builds of Node main (`53234233acb`) on macOS 15 arm64 runners, benchmarked interleaved on one Mac, confirm it: the visibility flags empty the dyld bucket, the `atexit` change saves 2 ms in-process, and the hasher define trims the isolate.
+Six builds of Node main (`53234233acb`) on macOS 15 arm64 runners, benchmarked interleaved on one Mac, confirm it: the visibility flags empty the dyld bucket, the `atexit` change saves 2 ms in-process, and secret generation is 1.2 ms of the isolate.
 
 Every number below comes from the same session on a host under load ~40, so absolute values are inflated and only the differences matter (hyperfine minimum / median of 40 runs; the phase split is the interposer minimum of 40 spawns):
 
@@ -105,8 +107,8 @@ What the rows say:
 
 - `-fvisibility-inlines-hidden` alone removes 57% of the weak-coalesce imports and ~5 ms of exec+dyld; the 985 that survive are non-inline weak definitions (415 libc++ template instantiations, 354 in `node::`, 196 abseil C symbols such as `AbslInternalPerThreadSemPost`, 134 ICU, 54 abseil, 34 ada), which only `-fvisibility=hidden` reaches. The full [#65526][pr65526] leaves 18 and brings exec+dyld to 8.5 ms, level with Deno 2.9 and Bun on the same box.
 - The `atexit` change is worth 2.0–2.3 ms in-process in every pairing (the interposer counts the registrations at 0), independent of the visibility flags.
-- The hasher define shows up where it should: the in-process bucket drops 1.2 ms and the runner's `performance.nodeTiming` `v8Start → environment` span goes from 5.2 to 3.7 ms, the macOS counterpart of the Linux 8.4 → 6.4.
-- Together, [#65526][pr65526] plus the `atexit` change take `node --version` from 18.6 to 7.1 ms and `node -e 0` from 30.6 to 18.5 ms on this host, 40% off; the hasher define's ~1.2 ms lands in a phase neither of them touches. In the same session `deno run hello.js` (2.9.0) took 11.6 ms and `bun hello.js` 11.8 ms against the patched Node's 20.7 ms, so the remaining gap is the in-process 12 ms (isolate and snapshot deserialization, then the bootstrap chain), no longer anything before `main`.
+- Compiling the secret generation out (the define row, a measurement and not a shippable build, see above) shows the cost where it should be: the in-process bucket drops 1.2 ms and the runner's `performance.nodeTiming` `v8Start → environment` span goes from 5.2 to 3.7 ms, the macOS counterpart of the Linux 8.4 → 6.4.
+- Together, [#65526][pr65526] plus the `atexit` change take `node --version` from 18.6 to 7.1 ms and `node -e 0` from 30.6 to 18.5 ms on this host, 40% off; the secret generation's ~1.2 ms lands in a phase neither of them touches. In the same session `deno run hello.js` (2.9.0) took 11.6 ms and `bun hello.js` 11.8 ms against the patched Node's 20.7 ms, so the remaining gap is the in-process 12 ms (isolate and snapshot deserialization, then the bootstrap chain), no longer anything before `main`.
 
 ## TL;DR
 
@@ -244,9 +246,9 @@ For runtime user-land snapshotting, [#44014][issue44014] is the open tracking is
 
 ## What's still on the table upstream
 
-Ten items are open or unowned: the V8 hasher define, the macOS weak defs and `atexit` registrations, user-land snapshots, OpenSSL and cppgc init, config-file probing, the CoreFoundation dependency, the bootstrap chain, and options parsing.
+Ten items are open or unowned: V8's rapidhash secret generation, the macOS weak defs and `atexit` registrations, user-land snapshots, OpenSSL and cppgc init, config-file probing, CoreFoundation, the bootstrap chain, and options parsing.
 
-- **`V8_USE_DEFAULT_HASHER_SECRET` in Node's V8 build** — V8's own default since rapidhash landed in 14.1, omitted by Node's gyp files; measured above at 2–3 ms of every isolate start on Node 25+, and a one-line change in `tools/v8_gypfiles/features.gypi`.
+- **rapidhash secret generation in V8** — required by Node's [CVE-2026-21717][hashdos2026] fix, so the define Chrome uses is not available; measured above at 2–3 ms of every isolate start on Node 25+ (Deno pays it too). The cost is the schoolbook `mul_mod` inside `third_party/rapidhash-v8/secret.h`; a 128-bit multiply gives identical secrets 17× faster. No V8 CL or Node issue exists for it yet.
 - **Default-visibility weak defs in the macOS binary** — [#65526][pr65526], open; the interposer numbers above put dyld's coalescing of them at ~10 ms of the 18 ms exec+dyld bucket.
 - **`atexit()` on macOS** — [#65549][pr65549], open; 2.2 ms for the two registrations, because Apple's `atexit` scans the 204K-entry symbol table via `dladdr`.
 - **Run-time snapshots for arbitrary user code** — [#44014][issue44014], open since 2022. Blocked on V8 supporting more embedder types outside build-time snapshots.
@@ -301,7 +303,11 @@ From isaacs (npm originator), [#53787][issue53787]:
 Every number above comes from the nodejs/performance startup thread, one of the landmark PRs listed in the timeline, or Node's own snapshot README; the link definitions below resolve those references.
 
 [perf180]: https://github.com/nodejs/performance/issues/180
-[pr56275]: https://github.com/nodejs/node/pull/56275 [pr65526]: https://github.com/nodejs/node/pull/65526 [pr65549]: https://github.com/nodejs/node/pull/65549 [pr65484]: https://github.com/nodejs/node/pull/65484
+[pr56275]: https://github.com/nodejs/node/pull/56275
+[pr65526]: https://github.com/nodejs/node/pull/65526
+[pr65549]: https://github.com/nodejs/node/pull/65549
+[pr65484]: https://github.com/nodejs/node/pull/65484
+[hashdos2026]: https://nodejs.org/en/blog/vulnerability/march-2026-hashdos
 [pr45659]: https://github.com/nodejs/node/pull/45659
 [pr45716]: https://github.com/nodejs/node/pull/45716
 [pr42466]: https://github.com/nodejs/node/pull/42466
@@ -332,3 +338,4 @@ Every revision to this document, with the date and what changed.
 - 2026-08-28 — Trimmed to the measured findings and current behavior.
 - 2026-09-04 — Added the v26.7 decomposition against Deno 2.9 and Bun on macOS and Linux: dyld weak-def coalescing and `atexit`/`dladdr` on macOS, and V8's per-isolate rapidhash prime search on Node 25+ (absent from Node 24), with the `V8_USE_DEFAULT_HASHER_SECRET=1` build verified on Linux.
 - 2026-09-04 — Added the macOS build verification: six variants of Node main built on macOS 15 arm64 runners and benchmarked interleaved on one host, confirming the weak-def, `atexit` and hasher attributions and putting the patched Node at 20.7 ms `hello.js` against Deno 2.9 at 11.6 ms.
+- 2026-09-04 — **REVERSAL:** the doc previously recommended building Node with `V8_USE_DEFAULT_HASHER_SECRET=1`. It must not: Node's CVE-2026-21717 fix derives its array-index hash multipliers from the random rapidhash secrets, and Node's own write-up requires `v8_use_default_hasher_secret = false`. The define build now stands only as a measurement of the generation's cost. Added the actual fix: a 128-bit `mul_mod` in V8's `secret.h`, bit-identical secrets, 2,569 → 148 µs standalone. Noted that Deno builds with the same setting and pays the same cost.
