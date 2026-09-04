@@ -3117,10 +3117,15 @@ mod tests {
         });
 
         let entry = read_flag_entry_in(&cache, &node).expect("both writes land in one entry");
-        assert_eq!(entry.env.as_deref(), Some(&["--permission".to_string()][..]));
+        assert_eq!(
+            entry.env.as_deref(),
+            Some(&["--permission".to_string()][..])
+        );
         assert_eq!(entry.argv.get("--js-defer-import-eval"), Some(&false));
         assert_eq!(
-            std::fs::read_dir(cache.join(FLAG_ENTRY_DIR)).unwrap().count(),
+            std::fs::read_dir(cache.join(FLAG_ENTRY_DIR))
+                .unwrap()
+                .count(),
             1,
             "one binary must occupy exactly one entry file"
         );
