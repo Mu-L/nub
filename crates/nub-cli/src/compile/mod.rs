@@ -3574,7 +3574,7 @@ mod tests {
                 external: Vec::new(),
                 unbundled: Vec::new(),
                 bundled: Vec::new(),
-                allow_dynamic_import: false,
+                allow_dynamic_import: Vec::new(),
                 tsconfig: None,
                 loaders: Vec::new(),
                 native_target: None,
