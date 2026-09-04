@@ -279,8 +279,8 @@ For runtime user-land snapshotting, [#44014][issue44014] is the open tracking is
 
 Ten items are open or unowned: V8's rapidhash secret generation, the macOS weak defs and `atexit` registrations, user-land snapshots, OpenSSL and cppgc init, config-file probing, CoreFoundation, the bootstrap chain, and options parsing.
 
-- **rapidhash secret generation in V8** — required by Node's [CVE-2026-21717][hashdos2026] fix, so the define Chrome uses is not available; measured above at 2–3 ms of every isolate start on Node 25+ (Deno pays it too). The cost is the schoolbook `mul_mod` inside `third_party/rapidhash-v8/secret.h`; a 128-bit multiply gives identical secrets 15–22× faster everywhere but Windows, whose clang runtime lacks `__umodti3`, and, built into Node, 1.7 ms off `node -e 0` on Linux with the full suites unchanged. It is a V8 change (`third_party/rapidhash-v8/secret.h`) followed by a Node cherry-pick; no V8 CL or Node issue exists for it yet.
-- **V8's entropy source routed through OpenSSL** — no issue; seeding V8 from `uv_random()` and running the eager CSPRNG check only under FIPS or a user-supplied OpenSSL configuration is 0.7 ms per process on Linux, measured above, with the full suites unchanged; a `src/node.cc` change that stands on its own.
+- **rapidhash secret generation in V8** — required by Node's [CVE-2026-21717][hashdos2026] fix, so the define Chrome uses is not available; measured above at 2–3 ms of every isolate start on Node 25+ (Deno pays it too). The cost is the schoolbook `mul_mod` inside `third_party/rapidhash-v8/secret.h`; a 128-bit multiply gives identical secrets 15–22× faster everywhere but Windows, whose clang runtime lacks `__umodti3`, and, built into Node, 1.7 ms off `node -e 0` on Linux with the full suites unchanged. Proposed as a floating patch on Node's V8 copy in [#65795][pr65795], with V8's bug 409717082 as the upstream home for the same diff.
+- **V8's entropy source routed through OpenSSL** — no issue; seeding V8 from `uv_random()` and running the eager CSPRNG check only under FIPS or a user-supplied OpenSSL configuration is 0.7 ms per process on Linux, measured above, with the full suites unchanged; proposed in [#65796][pr65796].
 - **Default-visibility weak defs in the macOS binary** — [#65526][pr65526], open; the interposer numbers above put dyld's coalescing of them at ~10 ms of the 18 ms exec+dyld bucket, and the export-table and addon-import checks above show the public API and 74 real addons untouched.
 - **`atexit()` on macOS** — [#65549][pr65549], open; 2.2 ms for the two registrations, because Apple's `atexit` scans the 204K-entry symbol table via `dladdr`.
 - **Run-time snapshots for arbitrary user code** — [#44014][issue44014], open since 2022. Blocked on V8 supporting more embedder types outside build-time snapshots.
@@ -338,6 +338,8 @@ Every number above comes from the nodejs/performance startup thread, one of the 
 [pr56275]: https://github.com/nodejs/node/pull/56275
 [pr65526]: https://github.com/nodejs/node/pull/65526
 [pr65549]: https://github.com/nodejs/node/pull/65549
+[pr65795]: https://github.com/nodejs/node/pull/65795
+[pr65796]: https://github.com/nodejs/node/pull/65796
 [pr65484]: https://github.com/nodejs/node/pull/65484
 [hashdos2026]: https://nodejs.org/en/blog/vulnerability/march-2026-hashdos
 [pr44493]: https://github.com/nodejs/node/pull/44493
@@ -377,3 +379,4 @@ Every revision to this document, with the date and what changed.
 - 2026-09-04 — Verified the `mul_mod` fix inside a Node build on Linux (`-e 0` 19.75 → 18.09 ms). Added the call-graph split of the remaining Linux start, the V8-entropy-through-OpenSSL finding with a measured fix (0.7 ms), the export-table and 74-addon import check for the visibility flags, the CoreFoundation attribution on macOS, and two measured non-wins (snapshotting `stream`/`net`, RELR).
 - 2026-09-04 — Self-review of the two proposed fixes. The 128-bit `mul_mod` does not link under clang-cl on Windows (`__umodti3` is absent from clang's Windows runtime, measured on x64 and arm64 runners), so the V8 patch keeps the loop there and the fast path is guarded with `!defined(_WIN32)`. The entropy change keeps the eager CSPRNG check for user-supplied OpenSSL configurations, which `test-crypto-no-algorithm` pins; full `parallel`/`sequential`/`message`/`es-module` suite comparisons on Linux (5,228 tests) show no new failure for either change. Corrected libuv's Windows random source (`RtlGenRandom`, not `BCryptGenRandom`).
 - 2026-09-04 — Added the macOS measurement of the two fixes built on a macOS 15 arm64 runner and benchmarked interleaved: 1.4 ms per isolate for the `mul_mod` change (0.85 ms per Worker spawn), 0.6 ms per process for the entropy change, `-e 0` 30.8 → 29.0 ms min.
+- 2026-09-04 — Both fixes are now proposed upstream: the `mul_mod` change as [#65795][pr65795], the entropy change as [#65796][pr65796].
