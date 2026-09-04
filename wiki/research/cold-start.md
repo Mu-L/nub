@@ -186,7 +186,7 @@ Even with the fix in, `dyld` is still the largest single contributor on macOS. F
 /usr/lib/libc++.1.dylib
 ```
 
-A proposal to remove CoreFoundation ([#44715][pr44715]) was closed unactioned because ICU pulls it in. From Daniel Lemire in [#180][perf180]:
+A proposal to remove CoreFoundation ([#44715][issue44715]) was closed in 2022 after screenshots on macOS 12.6 showed Instruments' Heap Allocations recorder no longer working without the framework loaded; nothing in that thread concerns ICU. From Daniel Lemire in [#180][perf180]:
 
 > "One maybe significant difference between bun and node is that node depends on Core Foundation whereas bun does not appear to do so... So I am back at my theory: this is a case where dynamic linking and rebasing is expensive under macOS for some reason."
 
@@ -239,7 +239,7 @@ Every one runs on every hello-world. [#45659][pr45659] ("bootstrap: lazy load no
 
 Result: **~17% faster basic startup, ~37% faster worker startup**, at the cost of 5–10% on apps that need every builtin. The PR primarily recovered a regression rather than going below v14.
 
-Follow-ups still landing in 2025–26: [#62267][pr62267] lazy source-map cache in the CJS loader; [#59517][pr59517] lazy `internal/tty` in tests; [#56980][pr56980] lazy modules in test runner; [#57307][pr57307] `fs.getLazy`; [#59473][pr59473] simdjson for `--snapshot-config`. Pattern: each PR shaves micro/single-digit milliseconds; nobody has the lever to drop 5+ ms in one PR anymore.
+Follow-ups still landing in 2025–26: [#59517][pr59517] lazy `internal/tty` in tests; [#56980][pr56980] lazy modules in test runner; [#57307][pr57307] `fs.getLazy`; [#59473][pr59473] simdjson for `--snapshot-config`. Pattern: each PR shaves micro/single-digit milliseconds; nobody has the lever to drop 5+ ms in one PR anymore. ([#62267][pr62267], a lazy source-map cache in the CJS loader, was closed by its author in April 2026 without landing, so that one is unclaimed.) The exception arrived on 2026-09-04: [#65336][pr65336] starts worker threads from the built-in snapshot and reports a Worker start of 21.1 → 10.6 ms in Node's own `misc/startup-core` benchmark; every per-Worker figure in this document predates it.
 
 ### 5. Module resolution and the actual user script
 
@@ -289,7 +289,7 @@ Ten items are open or unowned: V8's rapidhash secret generation, the macOS weak 
 - **Macro-level OpenSSL init cost** — no tracking issue; the `OPENSSL_init_crypto` line is the largest single C++ frame still visible. Bun avoids it by using BoringSSL.
 - **`cppgc::InitializeProcess`** — added by V8 upgrade; no Node-side fix being worked.
 - **Config-file initialization** ([#53787][issue53787]) is adjacent: loading a config file by default "adds overhead to the startup to probe the file system." Same problem will face any package.json-based hooks config; the lean is on a field _inside package.json_ rather than a new dotfile.
-- **CoreFoundation dependency on macOS** — [#44715][pr44715] proposed removal; closed without action because ICU pulls it in.
+- **CoreFoundation dependency on macOS** — [#44715][issue44715] proposed removal; closed in 2022 because Instruments' Heap Allocations recorder needed the framework loaded, an observation made on macOS 12.6 that nobody has repeated on a current macOS.
 - **Single-pass bootstrap JS** — `pre_execution.js` is still a long imperative chain. Each `setup…` adds μs; together they're a couple of ms. There are `TODO: move this to vm.js?` markers in the source suggesting more lazification is wanted.
 - **Run-time options parsing in JS** — `refreshRuntimeOptions()` runs every start. [#59473][pr59473] moved snapshot-config parsing to simdjson; the full options system is still JS.
 
@@ -355,8 +355,8 @@ Every number above comes from the nodejs/performance startup thread, one of the 
 [pr59473]: https://github.com/nodejs/node/pull/59473
 [pr27321]: https://github.com/nodejs/node/pull/27321
 [pr28181]: https://github.com/nodejs/node/pull/28181
-[pr44715]: https://github.com/nodejs/node/issues/44715
 [pr62267]: https://github.com/nodejs/node/pull/62267
+[pr65336]: https://github.com/nodejs/node/pull/65336
 [pr59517]: https://github.com/nodejs/node/pull/59517
 [pr56980]: https://github.com/nodejs/node/pull/56980
 [pr57307]: https://github.com/nodejs/node/pull/57307
@@ -385,3 +385,4 @@ Every revision to this document, with the date and what changed.
 - 2026-09-04 — Entropy fix revised after review on [#65796][pr65796]: the seeding check is keyed on `OSSL_PROVIDER_available` instead of on how the OpenSSL configuration was supplied (the OPENSSLDIR file is read with no flag, and `--openssl-legacy-provider` needs the default provider active first), AIX keeps OpenSSL's CSPRNG for V8, and the `addons` suite joins the comparison; Linux and macOS numbers re-measured for the revised build.
 - 2026-09-04 — Both builds run over 59 OpenSSL configuration and flag cases on Linux and 52 on macOS: two further behavior differences recorded (an unavailable `[random]` DRBG now fails at first use instead of aborting at startup; the DRBGs live in the secure heap and Workers no longer abort the process on an exhausted one), with tests.
 - 2026-09-04 — `mul_mod` equivalence re-run at 50,000 seeds per toolchain (gcc and clang, x64 and arm64, Linux and macOS) and at 3,000 seeds on s390x, ppc64le, riscv64 and aarch64 under QEMU, with a UBSan and ASan pass; the earlier 2,000-seed figure and its Windows wording are replaced, since the 128-bit form does not build on Windows and the loop stays there.
+- 2026-09-04 — Corrections: #44715 was closed over Instruments' heap recorder, not ICU; #62267 never landed; #65336 (worker threads from the built-in snapshot) landed today and supersedes the per-Worker figures here.
