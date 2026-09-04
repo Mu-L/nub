@@ -86,6 +86,28 @@ Adding `'V8_USE_DEFAULT_HASHER_SECRET=1'` to the `defines` in `tools/v8_gypfiles
 
 `performance.nodeTiming`'s `v8Start → environment` span drops from 8.4 to 6.4 ms, `HashSeed::InitializeRoots` and `sprp` leave the profile (the top symbol becomes the snapshot deserializer at 8.4%), and `test/parallel/test-hash-seed.mjs` passes, since the per-process meta seed stays random; only the multiplier secret becomes the fixed default that Chrome already uses. Both `-fvisibility` variants of [#65526][pr65526] were built on the same box for comparison and change nothing on Linux (19.9 / 20.5 / 21.4 ms are within noise), which is expected: `-fvisibility=hidden` there shrinks `.dynsym` from 208,643 to 186,791 entries and weak symbols from 14,135 to 869, but glibc's loader was never the cost.
 
+### The three fixes built on macOS
+
+Six builds of Node main (`53234233acb`) on macOS 15 arm64 runners, benchmarked interleaved on one Mac, confirm it: the visibility flags empty the dyld bucket, the `atexit` change saves 2 ms in-process, and the hasher define trims the isolate.
+
+Every number below comes from the same session on a host under load ~40, so absolute values are inflated and only the differences matter (hyperfine minimum / median of 40 runs; the phase split is the interposer minimum of 40 spawns):
+
+| Variant | weak-coalesce imports | exec+dyld | in-process | `--version` | `-e 0` | `hello.js` |
+|---|---|---|---|---|---|---|
+| main | 2305 | 17.6 ms | 14.3 ms | 18.6 / 20.8 | 30.6 / 34.5 | 32.5 / 35.7 |
+| main + `atexit` change ([#65549][pr65549], `node.cc` half) | 2305 | 17.9 ms | 12.0 ms | 15.9 / 18.8 | 27.7 / 31.7 | 29.8 / 31.8 |
+| main + `-fvisibility-inlines-hidden` only | 985 | 12.5 ms | 14.2 ms | 12.7 / 15.1 | 25.9 / 29.3 | 26.1 / 30.1 |
+| main + [#65526][pr65526] (`-fvisibility=hidden` too) | 18 | 8.5 ms | 14.8 ms | 8.6 / 11.1 | 21.7 / 25.5 | 22.4 / 25.3 |
+| main + #65526 + `atexit` change | 18 | 7.9 ms | 12.1 ms | 7.1 / 9.9 | 18.5 / 22.1 | 20.7 / 23.3 |
+| main + `V8_USE_DEFAULT_HASHER_SECRET=1` | 2305 | 18.0 ms | 13.1 ms | 19.6 / 21.8 | 29.8 / 32.9 | 30.7 / 33.1 |
+
+What the rows say:
+
+- `-fvisibility-inlines-hidden` alone removes 57% of the weak-coalesce imports and ~5 ms of exec+dyld; the 985 that survive are non-inline weak definitions (415 libc++ template instantiations, 354 in `node::`, 196 abseil C symbols such as `AbslInternalPerThreadSemPost`, 134 ICU, 54 abseil, 34 ada), which only `-fvisibility=hidden` reaches. The full [#65526][pr65526] leaves 18 and brings exec+dyld to 8.5 ms, level with Deno 2.9 and Bun on the same box.
+- The `atexit` change is worth 2.0–2.3 ms in-process in every pairing (the interposer counts the registrations at 0), independent of the visibility flags.
+- The hasher define shows up where it should: the in-process bucket drops 1.2 ms and the runner's `performance.nodeTiming` `v8Start → environment` span goes from 5.2 to 3.7 ms, the macOS counterpart of the Linux 8.4 → 6.4.
+- Together, [#65526][pr65526] plus the `atexit` change take `node --version` from 18.6 to 7.1 ms and `node -e 0` from 30.6 to 18.5 ms on this host, 40% off; the hasher define's ~1.2 ms lands in a phase neither of them touches. In the same session `deno run hello.js` (2.9.0) took 11.6 ms and `bun hello.js` 11.8 ms against the patched Node's 20.7 ms, so the remaining gap is the in-process 12 ms (isolate and snapshot deserialization, then the bootstrap chain), no longer anything before `main`.
+
 ## TL;DR
 
 A warm `node ./hello.js` on macOS arm64 today spends its ~15–27 ms roughly like this (apportioned from flamegraphs and `--no-node-snapshot` A/B numbers in [nodejs/performance#180][perf180]):
@@ -222,7 +244,7 @@ For runtime user-land snapshotting, [#44014][issue44014] is the open tracking is
 
 ## What's still on the table upstream
 
-Seven items are open or unowned: run-time user-land snapshots, OpenSSL and cppgc init cost, config-file probing, the macOS CoreFoundation dependency, the imperative bootstrap chain, and options parsing in JS.
+Ten items are open or unowned: the V8 hasher define, the macOS weak defs and `atexit` registrations, user-land snapshots, OpenSSL and cppgc init, config-file probing, the CoreFoundation dependency, the bootstrap chain, and options parsing.
 
 - **`V8_USE_DEFAULT_HASHER_SECRET` in Node's V8 build** — V8's own default since rapidhash landed in 14.1, omitted by Node's gyp files; measured above at 2–3 ms of every isolate start on Node 25+, and a one-line change in `tools/v8_gypfiles/features.gypi`.
 - **Default-visibility weak defs in the macOS binary** — [#65526][pr65526], open; the interposer numbers above put dyld's coalescing of them at ~10 ms of the 18 ms exec+dyld bucket.
@@ -309,3 +331,4 @@ Every revision to this document, with the date and what changed.
 - 2026-07-30 — Initial publication.
 - 2026-08-28 — Trimmed to the measured findings and current behavior.
 - 2026-09-04 — Added the v26.7 decomposition against Deno 2.9 and Bun on macOS and Linux: dyld weak-def coalescing and `atexit`/`dladdr` on macOS, and V8's per-isolate rapidhash prime search on Node 25+ (absent from Node 24), with the `V8_USE_DEFAULT_HASHER_SECRET=1` build verified on Linux.
+- 2026-09-04 — Added the macOS build verification: six variants of Node main built on macOS 15 arm64 runners and benchmarked interleaved on one host, confirming the weak-def, `atexit` and hasher attributions and putting the patched Node at 20.7 ms `hello.js` against Deno 2.9 at 11.6 ms.
