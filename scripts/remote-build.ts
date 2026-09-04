@@ -488,10 +488,16 @@ tests/brand-lint/check-path-literals.sh`;
     // sees ZERO `NUB_*` vars, and cargo passes its own environment straight through. The one
     // failure aborted the run at `tests/integration.rs`, so every suite after it
     // alphabetically was silently never reached by ANY remote test job.
+    // The `compile` line is ci.yml:1080 and it is NOT optional padding: `compile`
+    // is not a default feature, so the bare `cargo test` above runs ZERO compile
+    // tests and still exits 0. This job reported green for a pull request whose
+    // every change was under `compile/`, and the PR was merged on that green.
+    // Keep both lines in lockstep with ci.yml's test job.
     return `${PREPARE}(cd crates/nub-native && cargo build)
 cp "$CARGO_TARGET_DIR/debug/libnub_native.so" runtime/addons/nub-native.node
 unset NUB_ALLOW_INCOMPLETE_RUNTIME
-cargo test`;
+cargo test
+cargo test -p nub-cli --features compile --bin nub compile::`;
   }
   // The caller's script RUNS the binary, which the gates never do — two consequences. The
   // placeholder addon PREPARE staged must be overwritten with the real one (a non-embedded
