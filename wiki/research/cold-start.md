@@ -23,6 +23,69 @@ Cold first-run (fs cache evicted) is far worse — Node hit **137 ms** on the ve
 
 The `node -e ''` case loads no script file; the ~1 ms it shaves vs `node hello.cjs` is the fopen+stat+read+parse of an empty script. Neither `--no-warnings` nor `--disable-warning` made a measurable difference, so the per-warning install cost is below noise.
 
+## Where v26.7 spends it, measured in 2026-09
+
+Three mechanisms explain most of Node's remaining gap to Deno 2.9 and Bun: V8's per-isolate search for three random primes on Node 25+ (every platform), and on macOS only, dyld weak-def coalescing before `main` plus two `atexit()` symbol-table scans.
+
+The prime search exists because Node's build omits a define that V8's own build sets by default; the macOS costs come from ~2100 default-visibility weak-def symbols and a 204K-entry symbol table that Apple's `atexit` scans through `dladdr`.
+
+Deno 2.9 halved Deno's own cold start (34.2 → 17.3 ms on Deno's x86_64 Linux box, per its release post), which is where a "Node is ~2.4× slower than Deno" figure comes from. Against Deno 2.8.1 the gap was ~1.2×. Re-measured here with Node v26.7.0 official binaries, Deno 2.9.0 and Bun 1.4 (hyperfine minimums; the Mac was under load ~40, the Linux box was idle):
+
+| Invocation | macOS arm64 (M-series, loaded) | Linux x64 (n2-standard-64, idle) |
+|---|---|---|
+| `node hello.js` | 38.8 ms | 20.7 ms |
+| `node --version` | 18.2 ms | 2.8 ms |
+| `deno run hello.js` (2.9.0) | 17.3 ms | 12.2 ms |
+| `deno run hello.js` (2.8.1) | 27.4 ms | 27.6 ms |
+| `bun hello.js` | 18.0 ms | 3.4 ms |
+
+`node --version` is the tell: it runs no JavaScript and creates no isolate, yet costs 18 ms on macOS and 3 ms on Linux. The macOS gap is outside Node's code; the Linux gap is entirely inside the isolate.
+
+### Phase split on macOS
+
+An interposer inserted with `DYLD_INSERT_LIBRARIES` timestamps its own initializer, `exit()` and `_exit()`; a `posix_spawn` harness reads them and keeps the minimum of 40 spawns.
+
+That splits each launch into exec+dyld (spawn → first dylib initializer, before any of Node's static constructors), in-process, exit handlers, and kernel teardown:
+
+| Runtime, `-e 0` / `eval 0` | exec+dyld | in-process | exit handlers | teardown |
+|---|---|---|---|---|
+| node v26.7.0 | 18.3 ms | 17.0 ms | 0.3 ms | 0.9 ms |
+| deno 2.9.0 | 7.4 ms | 11.9 ms | 0.0 ms | 1.1 ms |
+| bun 1.3.14 | 7.8 ms | 8.6 ms | 0.0 ms | 1.0 ms |
+| a trivial C binary | 4.5 ms | 0.1 ms | | 0.3 ms |
+| the same, linked to CoreFoundation + Security + libc++ | 5.6 ms | 0.7 ms | | 0.4 ms |
+
+**dyld weak-def coalescing is the 10 ms.** The v26.7 Mach-O carries `WEAK_DEFINES` and `BINDS_TO_WEAK`: 2311 weak-def exports (inline and template instantiations compiled at default visibility: 1348 from `node::`, 417 `std::__1` instantiations, 265 abseil C symbols, 134 ICU, 60 abseil, 43 ada, 32 V8 header inlines) and 2125 of its 2840 unique dyld imports are `weak-def-coalesce` lookups, each a search across the loaded images at every launch. Two synthetic binaries isolate the cost: a C++ executable with 2500 default-visibility inline functions spends 14.6 ms in exec+dyld; the same source built with `-fvisibility-inlines-hidden` spends 4.8 ms. A binary with 130,000 rebases spends 4.5 ms, the same as a trivial one, so fixup count is not a factor and neither is binary size. Deno 2.9 and Bun carry no weak defines (Deno 2.9 also dropped its CoreFoundation, Security, Foundation and Metal links; it now depends only on libSystem, libobjc and libiconv). V8's part of this was fixed in [#56275][pr56275]; the rest of the binary is what [#65526][pr65526] (open, 2026-08) applies the same flags to, and `-fvisibility-inlines-hidden` alone removes the weak defs while leaving every non-inline symbol exported for addons and embedders.
+
+**`atexit()` costs 1.1 ms per call on macOS.** Apple's `atexit` calls `dladdr` to find the image that owns the handler, and `dladdr` scans the executable's `nlist` symbol table linearly. The shipped binary keeps 204,315 entries (145,496 of them local `t` symbols), and Node registers two handlers, `ResetStdio` in `PlatformInit` and OpenSSL's `OPENSSL_cleanup` during static initialization; the interposer measures the pair at 2.2–2.4 ms per run, half of `node --version`'s 4.6 ms in-process time. Deno registers none; Bun registers one against a 1-symbol table (0.003 ms). `strip -x` on the shipped binary (204K → 39K symbols, 144 → 107 MB) cuts in-process time by 4.6 ms on `-e 0` with no source change. [#65549][pr65549] (open, 2026-08) replaces `atexit(ResetStdio)` with a static destructor and passes `OPENSSL_INIT_NO_ATEXIT`; its lazy cipher-table half landed separately in [#65484][pr65484].
+
+Node's launch also runs 657 dyld initializers (365 in Network.framework, 253 its own, plus the Swift runtime, SkyLight and CoreDisplay reached through the CoreFoundation/Security dependency tree) and dlopens CoreFoundation, libswiftCore, ColorSync and QuartzCore from Foundation's `_NSInitializePlatform`; Deno 2.9 runs 20 initializers and Bun 6. Measured as the trivial-binary delta above, that tree costs ~1–2 ms.
+
+### The isolate on Linux: a prime search on every start
+
+With the dynamic loader at ~0.2 ms, a Linux `perf` profile of 200 runs of the official v26.7 `node -e 0` puts its single largest symbol at **12.1% of samples in `v8::internal::HashSeed::InitializeRoots`**.
+
+Another 2.8% sits in `detail::sprp`, a Miller–Rabin strong-probable-prime test, and `LD_DEBUG=statistics` counts only 3.6K relocations, so the loader is not the cost. A sweep of official linux-x64 binaries dates it:
+
+| Node | V8 | `-e 0` min | `HashSeed::InitializeRoots` share |
+|---|---|---|---|
+| v24.14.0 | 13.6 | 18.6 ms | absent |
+| v25.9.0 | 14.1 | 20.6 ms | 13.4% |
+| v26.0.0 | 14.6 | 20.5 ms | 12.6% |
+| v26.3.0 | 14.6 | 20.7 ms | 11.9% |
+| v26.7.0 | 14.6 | 19.6 ms | 12.1% |
+
+The mechanism is in `deps/v8/src/numbers/hash-seed.cc`. Since V8 14.1 the string hash is rapidhash, whose secret is three 64-bit words that must each have balanced bytes, pairwise Hamming distance 32, and be prime ("a feeling to be perfect", per the wyhash author quoted in `third_party/rapidhash-v8/secret.h`). `HashSeed::InitializeRoots` either copies a compile-time default secret and stores a fresh random meta seed, when `V8_USE_DEFAULT_HASHER_SECRET` is defined, or calls `rapidhash_make_secret(seed, …)`, which rejection-samples the three primes with a 12-base Miller–Rabin test. V8's `BUILD.gn` sets `v8_use_default_hasher_secret = true`, so Chrome takes the first path; Node's gyp files (`tools/v8_gypfiles/features.gypi`, `common.gypi`) never pass the define, so every Node isolate, main thread and each `worker_threads` Worker alike, takes the second. The code's own comment estimates the generation at ~200 µs; measured, it is 2–3 ms of a 20 ms process.
+
+Adding `'V8_USE_DEFAULT_HASHER_SECRET=1'` to the `defines` in `tools/v8_gypfiles/features.gypi` (one line) and rebuilding main (`53234233acb`, gcc 13, `./configure --ninja`) on the same box, paired in one hyperfine session with the unpatched build:
+
+| `node -e 0`, Linux x64 | min | median |
+|---|---|---|
+| main | 21.7 ms | 25.4 ms |
+| main + `V8_USE_DEFAULT_HASHER_SECRET=1` | 19.3 ms | 20.5 ms |
+
+`performance.nodeTiming`'s `v8Start → environment` span drops from 8.4 to 6.4 ms, `HashSeed::InitializeRoots` and `sprp` leave the profile (the top symbol becomes the snapshot deserializer at 8.4%), and `test/parallel/test-hash-seed.mjs` passes, since the per-process meta seed stays random; only the multiplier secret becomes the fixed default that Chrome already uses. Both `-fvisibility` variants of [#65526][pr65526] were built on the same box for comparison and change nothing on Linux (19.9 / 20.5 / 21.4 ms are within noise), which is expected: `-fvisibility=hidden` there shrinks `.dynsym` from 208,643 to 186,791 entries and weak symbols from 14,135 to 869, but glibc's loader was never the cost.
+
 ## TL;DR
 
 A warm `node ./hello.js` on macOS arm64 today spends its ~15–27 ms roughly like this (apportioned from flamegraphs and `--no-node-snapshot` A/B numbers in [nodejs/performance#180][perf180]):
@@ -161,6 +224,9 @@ For runtime user-land snapshotting, [#44014][issue44014] is the open tracking is
 
 Seven items are open or unowned: run-time user-land snapshots, OpenSSL and cppgc init cost, config-file probing, the macOS CoreFoundation dependency, the imperative bootstrap chain, and options parsing in JS.
 
+- **`V8_USE_DEFAULT_HASHER_SECRET` in Node's V8 build** — V8's own default since rapidhash landed in 14.1, omitted by Node's gyp files; measured above at 2–3 ms of every isolate start on Node 25+, and a one-line change in `tools/v8_gypfiles/features.gypi`.
+- **Default-visibility weak defs in the macOS binary** — [#65526][pr65526], open; the interposer numbers above put dyld's coalescing of them at ~10 ms of the 18 ms exec+dyld bucket.
+- **`atexit()` on macOS** — [#65549][pr65549], open; 2.2 ms for the two registrations, because Apple's `atexit` scans the 204K-entry symbol table via `dladdr`.
 - **Run-time snapshots for arbitrary user code** — [#44014][issue44014], open since 2022. Blocked on V8 supporting more embedder types outside build-time snapshots.
 - **Macro-level OpenSSL init cost** — no tracking issue; the `OPENSSL_init_crypto` line is the largest single C++ frame still visible. Bun avoids it by using BoringSSL.
 - **`cppgc::InitializeProcess`** — added by V8 upgrade; no Node-side fix being worked.
@@ -213,7 +279,7 @@ From isaacs (npm originator), [#53787][issue53787]:
 Every number above comes from the nodejs/performance startup thread, one of the landmark PRs listed in the timeline, or Node's own snapshot README; the link definitions below resolve those references.
 
 [perf180]: https://github.com/nodejs/performance/issues/180
-[pr56275]: https://github.com/nodejs/node/pull/56275
+[pr56275]: https://github.com/nodejs/node/pull/56275 [pr65526]: https://github.com/nodejs/node/pull/65526 [pr65549]: https://github.com/nodejs/node/pull/65549 [pr65484]: https://github.com/nodejs/node/pull/65484
 [pr45659]: https://github.com/nodejs/node/pull/45659
 [pr45716]: https://github.com/nodejs/node/pull/45716
 [pr42466]: https://github.com/nodejs/node/pull/42466
@@ -242,3 +308,4 @@ Every revision to this document, with the date and what changed.
 
 - 2026-07-30 — Initial publication.
 - 2026-08-28 — Trimmed to the measured findings and current behavior.
+- 2026-09-04 — Added the v26.7 decomposition against Deno 2.9 and Bun on macOS and Linux: dyld weak-def coalescing and `atexit`/`dladdr` on macOS, and V8's per-isolate rapidhash prime search on Node 25+ (absent from Node 24), with the `V8_USE_DEFAULT_HASHER_SECRET=1` build verified on Linux.
