@@ -19,11 +19,14 @@
   const zlib = boot.getBuiltin("node:zlib");
 
   const ENTRY = "__NUB_INLINE_ENTRY__";
-  // The virtual root every chunk reports as its own location. `file:` rather than
-  // a private scheme because the bundled runtime calls `fileURLToPath` on
-  // `import.meta.url`, and a scheme it does not know throws. Bun publishes
-  // `/$bunfs/root` for the same reason.
-  const ROOT = "file:///$nub/";
+  // The virtual root every chunk reports as its own location, and the same string
+  // `nub compile` bakes into each chunk's `import.meta.url` — see
+  // `compile::inline::VIRTUAL_ROOT`, which carries the reason for the drive
+  // letter. The short version: Node's Windows `fileURLToPath` rejects any path
+  // that does not start with one, and `createRequire(import.meta.url)` converts,
+  // so `file:///$nub/` crashed every inline artifact on Windows. `/N:/$nub/` is
+  // an ordinary absolute path on POSIX, so one string serves both.
+  const ROOT = "file:///N:/$nub/";
   // nub_core::compile::INLINE_LOCATOR_MAGIC.
   const MAGIC = Buffer.from("006e75622d696e6c696e652d61707000", "hex");
   // How much of the executable's tail to search before falling back to the whole
@@ -95,11 +98,17 @@
     fs.closeSync(fd);
   }
 
-  // The payload's V2 app region, which is the one container structure this file
+  // The payload's V3 app region, which is the one container structure this file
   // knows: [u32 files][u32 records][per file: u16 nameLen, name, u32 dataIndex]
-  // [per record: u64 len, bytes]. Bit 31 of dataIndex is the executable flag,
-  // which an inline payload never sets — it ships no verbatim file — and is
-  // masked off rather than asserted so the parse stays a pure reader.
+  // [per record: u64 len, u64 plainLen, bytes]. Bit 31 of dataIndex is the
+  // executable flag, which an inline payload never sets — it ships no verbatim
+  // file — and is masked off rather than asserted so the parse stays a pure reader.
+  //
+  // `plainLen` is the pre-compression size the warm-cache check compares against;
+  // this reader decompresses, so it skips the field rather than using it. It MUST
+  // still be skipped: the encoder writes V3 unconditionally, so reading V2's
+  // two-field record here walks the pointer 8 bytes off at the first record and
+  // every subsequent read is garbage.
   let p = 0;
   const u32 = () => {
     const v = region.readUInt32LE(p);
@@ -120,6 +129,7 @@
   for (let i = 0; i < recordCount; i++) {
     const len = Number(region.readBigUInt64LE(p));
     p += 8;
+    p += 8; // plainLen, written by the encoder and unused here
     records.push(region.subarray(p, p + len));
     p += len;
   }
@@ -171,6 +181,6 @@
   const entryUrl = urlFor(ENTRY);
   // Not awaited, and deliberately not wrapped: an import failure must surface as
   // the ordinary unhandled rejection Node prints for a failed ESM entry, with the
-  // `file:///$nub/…` frames the sourceURL above establishes.
+  // `ROOT`-rooted frames the sourceURL above establishes.
   import(entryUrl);
 })();

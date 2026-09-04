@@ -4,9 +4,14 @@
 //! on first run, because Node has to be handed a `--require` preload and an entry
 //! by PATH. A payload that reduces to generated JavaScript needs neither: the
 //! launcher passes the bootstrap as `-e` and the bootstrap serves each chunk to
-//! `import()` as a `data:` URL read straight out of the executable. Nothing on the
-//! path to running such an artifact touches the filesystem, so it starts under a
-//! read-only `HOME` and `TMPDIR`, where today it refuses to start at all.
+//! `import()` as a `data:` URL read straight out of the executable.
+//!
+//! That removes the APP's write, which is the only one this module can remove. The
+//! DEFAULT shape still extracts its embedded Node to the cache to exec it, so an
+//! inline payload alone does not survive a read-only `HOME` — measured, both shapes
+//! failing identically on the same fixture. It is `--smol` plus an inline payload
+//! that writes nothing at all: no Node to extract, no app to unpack, and it runs
+//! under a read-only `HOME` and `TMPDIR` where every other shape refuses to start.
 //!
 //! Everything here runs AFTER bundling, on the emitted chunks. That is the design
 //! constraint, not an implementation detail: whether a payload qualifies is not
@@ -27,7 +32,25 @@ use super::bundle;
 /// scheme because the bundled preamble calls `fileURLToPath(import.meta.url)`,
 /// which throws on a scheme it does not know. Bun publishes `/$bunfs/root` for the
 /// same reason.
-const VIRTUAL_ROOT: &str = "file:///$nub/";
+///
+/// The DRIVE LETTER is what makes it portable, and it is not decoration: Node's
+/// `fileURLToPath` has a separate Windows implementation that rejects any path
+/// whose second character is not a drive letter followed by `:`, so the obvious
+/// `file:///$nub/` threw `ERR_INVALID_FILE_URL_PATH` on Windows — and every
+/// payload hits it, because the emitted entry and the CommonJS interop chunk both
+/// open with `createRequire(import.meta.url)`, which converts before it does
+/// anything else. Measured: every inline fixture died at startup on both Windows
+/// legs while the two that decline inline passed. `/N:/$nub/` is an ordinary
+/// absolute path on POSIX — a colon is a legal filename character there — so one
+/// string satisfies both conversions and the two implementations of this shape
+/// cannot drift apart on a platform only one of them was tested on. Bun instead
+/// carries a second root (`B:\~BUN\root`) for Windows; the single string is chosen
+/// here because a divergence is exactly what shipped this bug.
+///
+/// Nothing is read through it, so a machine that really has an `N:` drive is
+/// unaffected: the chunks are served as `data:` URLs and this string is only an
+/// identity.
+const VIRTUAL_ROOT: &str = "file:///N:/$nub/";
 
 /// The specifier an inline chunk carries in place of a relative import of another
 /// chunk. The loader replaces it with that chunk's `data:` URL before importing.
@@ -50,8 +73,40 @@ const ENTRY_PLACEHOLDER: &str = "__NUB_INLINE_ENTRY__";
 /// delete before the first `import()` is undone. Every chunk carries it and the
 /// first one evaluated does the work; the rest are five failed lookups.
 ///
+/// `-e` also publishes every BUILTIN MODULE NAME as a lazy global — `fs`, `http`,
+/// `node:sqlite`, 46 of them on Node 26 — which a plain script does not have. That
+/// is the larger half of the divergence and the one `a-global-parity` catches:
+/// measured, an inline artifact carried 44 globals the same file run through
+/// `nub <file>` did not.
+///
+/// The DESCRIPTOR is what identifies an injected name, and it is chosen over
+/// comparing the global against the module it would load. `addBuiltinLibsToObject`
+/// installs a lazy ACCESSOR and skips any name globalThis already owns, so a
+/// preload that assigned its own `globalThis.fs` leaves a DATA property, which is
+/// kept. Reading the value instead would be correct too, and was measured to cost
+/// far more than it is worth: it instantiates every builtin at startup, and
+/// touching the deprecated ones emits four `DeprecationWarning`s — DEP0192 twice,
+/// DEP0040 and DEP0025 — on stderr of every artifact that starts.
+///
+/// `crypto` is the one name a descriptor cannot settle, because it is an accessor
+/// either way: Node 18 has no WebCrypto global, so `-e` injects the MODULE and it
+/// must go, while from Node 19 the global is a `Crypto` instance that must stay.
+/// Its constructor name separates them, and reading that one value loads nothing
+/// that warns. `process` and `console` are accessors too and are simply named —
+/// both are real globals on every supported version.
+///
+/// Measured exact on three majors, nothing over-deleted and nothing left behind:
+/// 113 = 113 on Node 18, 135 = 135 on Node 24, 141 = 141 on Node 26.
+///
+/// The name list comes from the bootstrap's own builtin accessor rather than the
+/// `module` global, because that global is itself one of the injected names — it
+/// is the `node:module` NAMESPACE, not a CJS module instance, so the
+/// `module.constructor.builtinModules` that works in a real `-e` script reads
+/// `undefined` here. The accessor also survives the deletions below, which take
+/// `module` with them.
+///
 /// One line, so the source-map shift stays exactly one generated line.
-const EVAL_GLOBAL_CLEANUP: &str = "for(const k of[\"require\",\"module\",\"exports\",\"__filename\",\"__dirname\"])delete globalThis[k];";
+const EVAL_GLOBAL_CLEANUP: &str = "{const L=process[Symbol.for(\"nub.compile.bootstrap\")]?.getBuiltin(\"node:module\")?.builtinModules;for(const k of[\"require\",\"module\",\"exports\",\"__filename\",\"__dirname\"])delete globalThis[k];if(L)for(const k of L){if(k===\"process\"||k===\"console\")continue;const d=Object.getOwnPropertyDescriptor(globalThis,k);if(!d||!d.get)continue;if(k===\"crypto\"&&globalThis.crypto?.constructor?.name===\"Crypto\")continue;delete globalThis[k];}}";
 
 /// Why a payload cannot run inline. Reported in the build summary rather than as an
 /// error: each of these is a payload that works, just not without extracting.
@@ -73,6 +128,29 @@ pub enum Decline {
     /// another needs a topological order and a cycle has none. Rolldown's manual
     /// CommonJS boundary makes this reachable rather than theoretical.
     CyclicChunks,
+    /// The payload reaches the `cluster` builtin. `cluster.fork()` defaults the
+    /// child's module to `process.argv[1]`, and an inline artifact publishes the
+    /// EXECUTABLE there — so the fork hands a Mach-O/ELF/PE to the real Node, which
+    /// parses it as JavaScript and dies. Declining is the answer rather than a
+    /// re-entry fixup because an inline payload writes nothing to disk, so no
+    /// JavaScript file exists to point the child at; the extracted tree has one.
+    ClusterReentry,
+    /// The artifact embeds a Node, so it extracts that to the cache to exec it
+    /// whatever this module decides — and then serving the app from memory buys
+    /// nothing, while costing a measurable amount. Measured on an identical
+    /// hello-world payload, macOS arm64, the two shapes byte-for-byte the same
+    /// size: 47.2 ms inline against 39.8 ms extracted, +19%. The `-e` script is
+    /// parsed with no code cache, the chunks are brotli-decoded in JavaScript and
+    /// re-encoded as base64 `data:` URLs, and none of that is cached between runs
+    /// the way the extracted tree's compile cache is.
+    ///
+    /// So the no-write shape is `--smol` plus an inline payload, which is the pair
+    /// that runs under a read-only `HOME` — measured, an embedding artifact fails
+    /// there identically whether its app inlined or not. Paying 19% for a property
+    /// the artifact does not end up having is the wrong default, and the build
+    /// summary would have claimed "nothing is written to disk" beside a 28 MB Node
+    /// being unpacked.
+    EmbeddedNode,
     /// The build asked for source maps. Measured on Node 26.7: `--enable-source-maps`
     /// does not apply an inline map to a `data:` URL module at all — with or without
     /// a `//# sourceURL` — so an inline artifact would report unmapped frames where
@@ -90,6 +168,8 @@ impl Decline {
             Self::StaticWorker => "it carries a worker chunk",
             Self::NonChunkFile => "it carries a file that is not a compiled chunk",
             Self::CyclicChunks => "its chunks import each other in a cycle",
+            Self::EmbeddedNode => "it extracts its embedded Node anyway",
+            Self::ClusterReentry => "it uses node:cluster, which re-runs the executable",
             Self::SourceMap => "it was built with source maps",
         }
     }
@@ -104,6 +184,8 @@ pub struct Inputs<'a> {
     pub worker_wrappers: usize,
     /// Whether any source map was asked for.
     pub sourcemap: bool,
+    /// Whether the artifact carries a Node of its own — everything but `--smol`.
+    pub embeds_node: bool,
     /// The entry chunk's payload name.
     pub entry: &'a str,
 }
@@ -114,6 +196,12 @@ pub enum Rewritten {
     Inline(AppFiles),
     Extract(AppFiles, Decline),
 }
+
+/// The root manifest `assemble_app` synthesizes for the extracted tree. Spelled
+/// here rather than shared, because the two uses are independent: that one exists
+/// so a walk-up finds a package boundary on disk, and this one drops it again
+/// because an inline payload has no disk to walk.
+const ROOT_MANIFEST_NAME: &str = "package.json";
 
 /// Rewrite `files` for inline launch, or say why the payload has to extract.
 ///
@@ -129,10 +217,28 @@ pub fn rewrite(files: AppFiles, inputs: &Inputs<'_>) -> Result<Rewritten> {
             let bootstrap_name = nub_core::compile::COMPILE_BOOTSTRAP_NAME;
             let rewritten = files
                 .into_iter()
+                // Dropped, not rewritten: nothing resolves through it once the
+                // payload never lands on disk, and the arm below would otherwise
+                // hand its JSON to the chunk rewriter as if it were a module.
+                .filter(|file| file.name != ROOT_MANIFEST_NAME)
                 .map(|mut file| {
                     if file.name == bootstrap_name {
-                        file.bytes.push(b'\n');
-                        file.bytes.extend_from_slice(loader.as_bytes());
+                        // Wrapped, because this pair is handed to Node as `-e`, where
+                        // a top-level function declaration becomes a GLOBAL. The
+                        // bootstrap has one — `installCompiledForkIdentity` — and it
+                        // showed up in `a-global-parity`'s diff beside the builtins
+                        // `EVAL_GLOBAL_CLEANUP` removes. Under `--require`, which is
+                        // how the extracted shape loads the same file, CJS module
+                        // scope already contained it, so only this path needs it.
+                        // Nothing here reads top-level `this` or exports anything;
+                        // the bootstrap publishes through `process[Symbol.for(…)]`,
+                        // which an arrow body reaches unchanged.
+                        let mut wrapped = b"(()=>{\n".to_vec();
+                        wrapped.append(&mut file.bytes);
+                        wrapped.push(b'\n');
+                        wrapped.extend_from_slice(loader.as_bytes());
+                        wrapped.extend_from_slice(b"\n})();\n");
+                        file.bytes = wrapped;
                         return Ok(file);
                     }
                     let source = String::from_utf8(std::mem::take(&mut file.bytes))
@@ -158,15 +264,29 @@ fn classify(files: &AppFiles, inputs: &Inputs<'_>) -> Result<Result<BTreeSet<Str
     if inputs.sourcemap {
         return Ok(Err(Decline::SourceMap));
     }
+    // Cheap and last of the caller-supplied checks, so a payload that could never
+    // inline still reports the reason it could never inline rather than this one.
+    if inputs.embeds_node {
+        return Ok(Err(Decline::EmbeddedNode));
+    }
     let bootstrap_name = nub_core::compile::COMPILE_BOOTSTRAP_NAME;
-    // Every file is the bootstrap or a chunk. `--include`s, emitted assets and
-    // native islands are already excluded by the sealed-graph check above; what this
-    // catches is the compiler's OWN non-chunk output, which today means a
-    // `--sourcemap=linked` map travelling beside the bundle.
-    if files
-        .iter()
-        .any(|file| file.name != bootstrap_name && !file.name.ends_with(".mjs"))
-    {
+    // Every file is the bootstrap, a chunk, or the root manifest `assemble_app`
+    // synthesizes. `--include`s, emitted assets and native islands are already
+    // excluded by the sealed-graph check above; what this catches is the compiler's
+    // OWN non-chunk output, which today means a `--sourcemap=linked` map travelling
+    // beside the bundle.
+    //
+    // The manifest is exempt because it exists only for a walk-up through the
+    // EXTRACTED tree, and an inline payload is never on disk for anything to walk.
+    // A user-supplied `package.json` cannot reach here: it arrives via `--include`,
+    // which unseals the graph and is declined above. So dropping it below loses
+    // nothing, and keeping it would decline every build — the manifest is
+    // unconditional, so this check rejected 100% of payloads once it landed.
+    if files.iter().any(|file| {
+        file.name != bootstrap_name
+            && file.name != ROOT_MANIFEST_NAME
+            && !file.name.ends_with(".mjs")
+    }) {
         return Ok(Err(Decline::NonChunkFile));
     }
     let chunk_names: BTreeSet<String> = files
@@ -179,6 +299,14 @@ fn classify(files: &AppFiles, inputs: &Inputs<'_>) -> Result<Result<BTreeSet<Str
             "the compiled entry {:?} is not among the emitted chunks",
             inputs.entry
         );
+    }
+
+    if files
+        .iter()
+        .filter(|file| file.name.ends_with(".mjs"))
+        .any(|file| std::str::from_utf8(&file.bytes).is_ok_and(reaches_cluster))
+    {
+        return Ok(Err(Decline::ClusterReentry));
     }
 
     // The chunk graph, read the way the loader will read it: a chunk depends on
@@ -200,6 +328,137 @@ fn classify(files: &AppFiles, inputs: &Inputs<'_>) -> Result<Result<BTreeSet<Str
         return Ok(Err(Decline::CyclicChunks));
     }
     Ok(Ok(chunk_names))
+}
+
+/// Whether a chunk names the `cluster` builtin as a module specifier.
+///
+/// Both spellings reach the emitted bundle: the authored ESM `node:cluster` keeps
+/// its prefix, and the interop shim Rolldown writes around it is a bare
+/// `require("cluster")`. Import syntax is not the only route — a chunk can also
+/// take the module from `createRequire(import.meta.url)(…)`, from
+/// `process.getBuiltinModule(…)`, or from the renamed `__require` a bundler emits —
+/// and every one of them ends in the same re-entry crash, so the callee shapes in
+/// `resolves_builtin` count too. AST rather than a substring search because the
+/// word is an ordinary English one — a payload logging "cluster failed" resolves
+/// nothing and must still inline. A chunk that fails to parse yields false: the
+/// bundler already emitted it, so a parse failure here is this pass being wrong
+/// about the syntax, and it must never be what fails or degrades a build.
+fn reaches_cluster(source: &str) -> bool {
+    use oxc_allocator::Allocator;
+    use oxc_ast::ast::{
+        CallExpression, ExportAllDeclaration, ExportNamedDeclaration, Expression,
+        ImportDeclaration, MemberExpression,
+    };
+    use oxc_ast_visit::{Visit, walk};
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    fn is_cluster(specifier: &str) -> bool {
+        matches!(specifier, "cluster" | "node:cluster")
+    }
+
+    /// A no-substitution template literal is as static as a string literal, and
+    /// the minifier emits both.
+    fn literal_specifier<'a>(expr: &'a Expression<'_>) -> Option<&'a str> {
+        match expr.get_inner_expression() {
+            Expression::StringLiteral(s) => Some(s.value.as_str()),
+            Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+                .quasis
+                .first()
+                .map(|q| q.value.cooked.as_ref().unwrap_or(&q.value.raw).as_str()),
+            _ => None,
+        }
+    }
+
+    /// Whether a callee is a plausible way to obtain a builtin module by name.
+    ///
+    /// Targeted on purpose: an unnecessary decline costs a real optimization, so
+    /// this matches the shapes that hand back the module — a `require` binding under
+    /// whatever name the bundler renamed it to, the three property names that stand
+    /// in for one, and the require a `createRequire` call returns — and leaves
+    /// `logger.info("cluster")` alone.
+    fn resolves_builtin(callee: &Expression<'_>) -> bool {
+        match callee.get_inner_expression() {
+            Expression::Identifier(id) => id.name.ends_with("require"),
+            // `createRequire(import.meta.url)("cluster")`: the require is the value a
+            // call produced, so the callee is itself a call. ANY call, deliberately.
+            // Requiring the inner callee to name `createRequire` was tried and
+            // reverted: minification is on by default and renames the import, so the
+            // emitted chunk reads `i(import.meta.url)(`cluster`)` and the narrower
+            // rule let a real cluster payload inline — measured, and it crashes at
+            // `fork()`. A local rule cannot do better: the emitted binding is
+            // imported from the runtime chunk, so the name `createRequire` is not in
+            // this file to match on, minified or not.
+            //
+            // Both directions can break a build, so the choice is which failure to
+            // take. Over-declining `makeLogger()("cluster")` extracts a payload that
+            // did not need to — which is not merely a lost optimization, since a
+            // `--smol` artifact built FOR a read-only HOME then has nowhere to
+            // extract to and will not start there. Under-declining ships a binary
+            // whose `cluster.fork()` hands the real Node a Mach-O/ELF/PE and dies,
+            // for every user, in every environment. The second is unconditional and
+            // the first is confined to one deployment shape, so this over-declines.
+            Expression::CallExpression(_) => true,
+            other => other
+                .as_member_expression()
+                .and_then(MemberExpression::static_property_name)
+                .is_some_and(|property| {
+                    matches!(property, "require" | "getBuiltinModule" | "createRequire")
+                }),
+        }
+    }
+
+    #[derive(Default)]
+    struct Visitor {
+        found: bool,
+    }
+
+    impl<'a> Visit<'a> for Visitor {
+        fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
+            self.found |= is_cluster(it.source.value.as_str());
+            walk::walk_import_declaration(self, it);
+        }
+
+        fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
+            if let Some(source) = &it.source {
+                self.found |= is_cluster(source.value.as_str());
+            }
+            walk::walk_export_named_declaration(self, it);
+        }
+
+        fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
+            self.found |= is_cluster(it.source.value.as_str());
+            walk::walk_export_all_declaration(self, it);
+        }
+
+        fn visit_expression(&mut self, expr: &Expression<'a>) {
+            if let Expression::ImportExpression(import) = expr
+                && let Some(specifier) = literal_specifier(&import.source)
+            {
+                self.found |= is_cluster(specifier);
+            }
+            walk::walk_expression(self, expr);
+        }
+
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if resolves_builtin(&call.callee)
+                && let Some(argument) = call.arguments.first().and_then(|a| a.as_expression())
+                && let Some(specifier) = literal_specifier(argument)
+            {
+                self.found |= is_cluster(specifier);
+            }
+            walk::walk_call_expression(self, call);
+        }
+    }
+
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    if parsed.panicked {
+        return false;
+    }
+    let mut visitor = Visitor::default();
+    visitor.visit_program(&parsed.program);
+    visitor.found
 }
 
 /// Every spelling Rolldown can emit for a sibling chunk's specifier.
@@ -312,9 +571,202 @@ fn loader_source(entry: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `AppFiles` is the alias this module works in; the element type is only named
+    // here, to build payloads by hand.
+    use nub_core::compile::AppFile;
 
     fn chunks(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    fn sealed(entry: &str) -> Inputs<'_> {
+        Inputs {
+            sealed_module_graph: true,
+            worker_roots: 0,
+            worker_wrappers: 0,
+            sourcemap: false,
+            embeds_node: false,
+            entry,
+        }
+    }
+
+    /// Classify a one-chunk payload that is inlinable but for `source` itself.
+    fn decline_of(source: &str) -> Option<Decline> {
+        let files = vec![
+            AppFile::plain(
+                nub_core::compile::COMPILE_BOOTSTRAP_NAME.to_string(),
+                b"// bootstrap\n".to_vec(),
+            ),
+            AppFile::plain("main.mjs".to_string(), source.as_bytes().to_vec()),
+        ];
+        match rewrite(files, &sealed("main.mjs")).expect("classification succeeds") {
+            Rewritten::Extract(_, why) => Some(why),
+            Rewritten::Inline(_) => None,
+        }
+    }
+
+    /// `cluster.fork()` re-runs `process.argv[1]`, which an inline artifact
+    /// publishes as the executable — so the child feeds the binary to Node and dies
+    /// on the first byte. Every route to the module ends there, import syntax or
+    /// not, and the word on its own decides nothing: a substring search would
+    /// decline a payload that only mentions clusters in a message.
+    #[test]
+    fn a_payload_that_reaches_the_cluster_builtin_declines_but_a_mere_mention_does_not() {
+        assert_eq!(
+            decline_of("import cluster from\"node:cluster\";cluster.fork();"),
+            Some(Decline::ClusterReentry),
+            "the authored ESM spelling keeps its node: prefix"
+        );
+        assert_eq!(
+            decline_of("const cluster = require(\"cluster\");cluster.fork();"),
+            Some(Decline::ClusterReentry),
+            "the interop shim requires the bare builtin name"
+        );
+        assert_eq!(
+            decline_of("const cluster = __require(\"cluster\");cluster.fork();"),
+            Some(Decline::ClusterReentry),
+            "a bundler renames the require binding and the call still resolves"
+        );
+        assert_eq!(
+            decline_of(
+                "import{createRequire}from\"node:module\";\
+                 createRequire(import.meta.url)(\"cluster\").fork();"
+            ),
+            Some(Decline::ClusterReentry),
+            "the callee is the require a createRequire call returned"
+        );
+        assert_eq!(
+            decline_of("process.getBuiltinModule(\"node:cluster\").fork();"),
+            Some(Decline::ClusterReentry),
+            "getBuiltinModule hands back the builtin with no import at all"
+        );
+        assert_eq!(
+            decline_of("const make = () => (n) => n;make()(\"cluster\");"),
+            Some(Decline::ClusterReentry),
+            "an immediately-invoked call result is accepted without proving it is a \
+             require, because minification renames the createRequire binding out of \
+             reach — deliberately over-declining, which costs the no-write launch and \
+             so a read-only deployment, against under-declining, which ships a binary \
+             that crashes at fork() for everyone"
+        );
+        assert_eq!(
+            decline_of("const msg = \"cluster failed\";console.log(msg);"),
+            None,
+            "the word in a string literal resolves nothing, so the payload still inlines"
+        );
+        assert_eq!(
+            decline_of("logger.info(\"cluster\");"),
+            None,
+            "an unrelated call passing the word resolves nothing either"
+        );
+    }
+
+    /// `assemble_app` puts a root `package.json` in EVERY payload, so a decline on
+    /// any non-chunk file declines every build — which is exactly what happened, and
+    /// silently, because nothing exercised the inline path. The manifest is for a
+    /// walk-up through the extracted tree; an inline payload has no tree, so it is
+    /// dropped rather than shipped.
+    #[test]
+    fn the_synthesized_root_manifest_neither_declines_the_payload_nor_rides_in_it() {
+        let files = vec![
+            AppFile::plain(
+                nub_core::compile::COMPILE_BOOTSTRAP_NAME.to_string(),
+                b"// bootstrap\n".to_vec(),
+            ),
+            AppFile::plain("main.mjs".to_string(), b"console.log(1);\n".to_vec()),
+            AppFile::plain(
+                ROOT_MANIFEST_NAME.to_string(),
+                b"{\"private\":true}\n".to_vec(),
+            ),
+        ];
+
+        match rewrite(files, &sealed("main.mjs")).expect("classification succeeds") {
+            Rewritten::Extract(_, why) => {
+                panic!("the manifest declined an otherwise inlinable payload: {why:?}")
+            }
+            Rewritten::Inline(out) => {
+                assert!(
+                    !out.iter().any(|f| f.name == ROOT_MANIFEST_NAME),
+                    "the manifest must be dropped: nothing can resolve through it off disk, \
+                     and the chunk rewriter would otherwise treat its JSON as a module"
+                );
+                assert!(
+                    out.iter().any(|f| f.name == "main.mjs"),
+                    "the chunk still ships"
+                );
+            }
+        }
+    }
+
+    /// The complement, so the exemption above cannot silently widen into "any
+    /// non-chunk file is fine" — a `--sourcemap=linked` map must still decline.
+    #[test]
+    fn a_non_chunk_file_that_is_not_the_manifest_still_declines() {
+        let files = vec![
+            AppFile::plain(
+                nub_core::compile::COMPILE_BOOTSTRAP_NAME.to_string(),
+                b"// bootstrap\n".to_vec(),
+            ),
+            AppFile::plain("main.mjs".to_string(), b"console.log(1);\n".to_vec()),
+            AppFile::plain("main.mjs.map".to_string(), b"{}\n".to_vec()),
+        ];
+
+        match rewrite(files, &sealed("main.mjs")).expect("classification succeeds") {
+            Rewritten::Extract(_, why) => assert_eq!(
+                why,
+                Decline::NonChunkFile,
+                "a linked source map declines for being a non-chunk file"
+            ),
+            Rewritten::Inline(_) => panic!("a linked source map cannot be served from a data: URL"),
+        }
+    }
+
+    /// An embedding artifact unpacks its Node to the cache to exec it, so inlining
+    /// its app removes one write out of two and the binary still needs a writable
+    /// cache. Measured, it costs 19% of warm start to remove that one write, so the
+    /// shape declines and the no-write claim belongs to `--smol` alone.
+    #[test]
+    fn a_payload_that_embeds_its_own_node_declines_however_inlinable_it_is() {
+        let files = vec![AppFile::plain(
+            nub_core::compile::COMPILE_BOOTSTRAP_NAME.to_string(),
+            b"//boot\n".to_vec(),
+        )];
+        let inputs = Inputs {
+            embeds_node: true,
+            ..sealed("main.mjs")
+        };
+        match rewrite(files, &inputs).expect("classification succeeds") {
+            Rewritten::Extract(_, why) => assert_eq!(why, Decline::EmbeddedNode),
+            Rewritten::Inline(_) => {
+                panic!(
+                    "an embedding artifact writes its Node out regardless, so inlining is a cost"
+                )
+            }
+        }
+    }
+
+    /// The root is a CONTRACT between this file and the runtime loader, and it has
+    /// one non-obvious requirement: Node converts it with `fileURLToPath`, whose
+    /// Windows implementation rejects anything that is not `<letter>:`. Without the
+    /// drive letter every inline artifact died at startup on Windows and nowhere
+    /// else, because `createRequire(import.meta.url)` runs before any user code.
+    /// Both halves are asserted here — the shape, and that the loader agrees —
+    /// since a second implementation drifting silently is what shipped the bug.
+    #[test]
+    fn the_virtual_root_is_a_windows_convertible_path_the_loader_agrees_on() {
+        let path = VIRTUAL_ROOT
+            .strip_prefix("file:///")
+            .expect("the virtual root is an absolute file URL");
+        let drive: Vec<char> = path.chars().take(2).collect();
+        assert!(
+            drive[0].is_ascii_alphabetic() && drive[1] == ':',
+            "a file URL Node can convert on Windows opens with a drive letter, not {path:?}"
+        );
+        let loader = loader_source("main.mjs").expect("the loader source is readable");
+        assert!(
+            loader.contains(&format!("const ROOT = {VIRTUAL_ROOT:?};")),
+            "the loader publishes the same root this bakes into every chunk"
+        );
     }
 
     #[test]
@@ -323,13 +775,14 @@ mod tests {
         let out = rewrite_chunk(source, "main.mjs", &chunks(&["main.mjs", "dep-A1.mjs"]));
         let lines: Vec<&str> = out.lines().collect();
         assert!(
-            lines[0].ends_with("import.meta.url = \"file:///$nub/main.mjs\";"),
+            lines[0].ends_with("import.meta.url = \"file:///N:/$nub/main.mjs\";"),
             "the identity assignment closes the single prefix line: {}",
             lines[0]
         );
         assert!(
-            lines[0].starts_with("for(const k of["),
-            "and the `-e` global cleanup opens it"
+            lines[0].starts_with(EVAL_GLOBAL_CLEANUP),
+            "and the `-e` global cleanup opens it: {}",
+            lines[0]
         );
         assert_eq!(
             lines[1], "import{a}from\"nub-inline:dep-A1.mjs\";",
