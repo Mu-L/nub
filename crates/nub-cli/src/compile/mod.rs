@@ -4453,6 +4453,10 @@ mod tests {
                 ("sharp".to_string(), "--external"),
             ],
             deferred: 3,
+            // Consistent with the rest of these facts rather than an arbitrary
+            // pick: `--external` and a surviving computed import are exactly what
+            // leaves the graph unsealed, and this build has both.
+            app_extracts: Some(inline::Decline::UnsealedGraph),
             report: Some(PathBuf::from("report.json")),
             elapsed: std::time::Duration::from_millis(8_880),
         }
@@ -4488,6 +4492,7 @@ mod tests {
                 format!("platform={}", host.triple()),
                 "shipped=@napi-rs/nice (native addon), sharp (--external)".to_string(),
                 "deferred=3 dynamic import sites  resolved where the binary runs".to_string(),
+                "app=extracted on first run  it resolves modules at run time".to_string(),
                 "report=report.json  esbuild schema".to_string(),
                 "elapsed=8.9s".to_string(),
             ]
@@ -4533,6 +4538,7 @@ mod tests {
             app_bytes: 2_500_000,
             shipped: Vec::new(),
             deferred: 0,
+            app_extracts: None,
             report: None,
             elapsed: std::time::Duration::from_millis(2_400),
         };
@@ -4550,6 +4556,7 @@ mod tests {
                 "output=acme  4.4 MB  (app 2.5 MB · launcher 1.9 MB)".to_string(),
                 "runtime=Node >=22 <23, not embedded  (--target)".to_string(),
                 format!("platform={}", host.triple()),
+                "app=run from the executable  nothing is written to disk".to_string(),
                 "elapsed=2.4s".to_string(),
             ]
         );
@@ -4598,6 +4605,7 @@ mod tests {
                     vec![Ink::Plain, Ink::Muted, Ink::Plain, Ink::Plain, Ink::Muted,],
                 ),
                 ("deferred", vec![Ink::Plain, Ink::Muted]),
+                ("app", vec![Ink::Plain, Ink::Muted]),
                 ("report", vec![Ink::Plain, Ink::Muted]),
                 ("elapsed", vec![Ink::Plain]),
             ],
