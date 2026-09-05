@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -707,14 +708,20 @@ fn bundle_inner(
         report.finish(&emitted, &modules, &edge_kinds, &external_imports)
     });
 
+    // Before `root_support_files` reads the decision: islands bypass `transform`,
+    // so this is the only place their usage can be folded in.
+    for file in &native_files {
+        prelude.note_island_usage(&file.bytes);
+    }
+
     Ok(BundleResult {
         entry,
         files,
         detached_maps,
         assets,
-        native_files,
         support_files: prelude.support_files().collect(),
         root_support_files: prelude.root_support_files().collect(),
+        native_files,
         dynamic_import_sites,
         native_addons,
         external_imports,
@@ -1853,6 +1860,12 @@ struct CompilePreamble {
     /// Runtime bootstrap extracted at the payload root rather than beside the
     /// content-addressed bundle layout. The launcher loads it before the entry.
     root_support_files: Vec<(String, Vec<u8>)>,
+    /// Whether an APP module — the graph minus nub's own runtime tree — names a
+    /// builtin the bootstrap would otherwise load eagerly. Written from `transform`,
+    /// which Rolldown drives concurrently, so these are atomics rather than a lock.
+    /// See [`strip_unused_bootstrap_regions`].
+    app_uses_child_process: AtomicBool,
+    app_uses_worker: AtomicBool,
 }
 
 /// Polyfills the compile preamble installs, and the first Node version that ships
@@ -1904,12 +1917,22 @@ fn strip_native_polyfills(source: &str, target: Option<(u64, u64, u64)>) -> Stri
     if native.is_empty() {
         return source.to_string();
     }
+    strip_regions(source, "// #region nub:polyfill:", &native)
+}
+
+/// Remove `<prefix><name>` … `// #endregion` blocks for every name in `drop`.
+///
+/// The region contract is the same wherever it is used and it lives across two
+/// files: each region must be independently removable and must leave valid syntax
+/// behind, so the source it guards is written to survive its own deletion. Regions
+/// do not nest — the first `// #endregion` closes the block.
+fn strip_regions(source: &str, prefix: &str, drop: &[&str]) -> String {
     let mut out = String::with_capacity(source.len());
     let mut skipping = false;
     for line in source.lines() {
         let trimmed = line.trim();
-        if let Some(name) = trimmed.strip_prefix("// #region nub:polyfill:") {
-            if native.contains(&name) {
+        if let Some(name) = trimmed.strip_prefix(prefix) {
+            if drop.contains(&name) {
                 skipping = true;
                 continue;
             }
@@ -1924,6 +1947,118 @@ fn strip_native_polyfills(source: &str, target: Option<(u64, u64, u64)>) -> Stri
         out.push('\n');
     }
     out
+}
+
+/// Can this module reach a builtin by a name the substring scan cannot read?
+///
+/// Compiled CommonJS deliberately PRESERVES a non-static `require(expr)` rather
+/// than failing the build (see [`Requires::classify_require`], which declines to
+/// flag them because every real instance measured was a guarded optional loader).
+/// That is correct for the bundler and fatal for a literal scan:
+/// `require(["child", "process"].join("_")).fork(...)` reaches the builtin naming
+/// neither marker, and stripping the fork identity patch there would let `fork()`
+/// silently re-run the artifact instead of real Node.
+///
+/// So a module that can compute a specifier counts as using EVERYTHING. The same
+/// applies to the indirect accessors, which take a specifier this scan never sees.
+/// A template literal counts as computed even when its body is constant — the
+/// distinction is not worth reading, and the cheap answer is the safe one.
+/// Is the text after a `require(` / `import(` a WHOLE static specifier?
+///
+/// Opening with a quote proves nothing: `require("child" + "_process")` starts
+/// like a literal, names no contiguous marker, and is preserved by the compiler as
+/// a real runtime load — so accepting it on its first byte strips the fork identity
+/// patch for a payload that genuinely forks. The specifier must therefore END the
+/// argument: the string closes, and the next thing is the call's own `)` or a
+/// second argument (`import(spec, options)`), never an operator.
+///
+/// An immediately-closing paren is accepted because `import()` takes no specifier
+/// at all and is a SyntaxError, so it can reach nothing. That case is worth
+/// spelling out: the sequence occurs in PROSE, and one zod comment reading "an
+/// inline `import()` of an ESM path" was enough to keep both eager loads for every
+/// artifact depending on zod.
+fn argument_is_one_static_string(after_paren: &str) -> bool {
+    let arg = after_paren.trim_start();
+    let bytes = arg.as_bytes();
+    let quote = match bytes.first() {
+        Some(b')') => return true,
+        Some(&q @ (b'"' | b'\'')) => q,
+        _ => return false,
+    };
+    let mut i = 1;
+    let close = loop {
+        match bytes.get(i) {
+            // Unterminated within this slice — unreadable, so treat it as computed.
+            None => return false,
+            // An ESCAPE makes the literal's VALUE differ from its SPELLING, and the
+            // marker check that follows reads the spelling. A specifier written with
+            // `_` in place of the underscore is perfectly static and resolves
+            // the builtin at run time, while containing no contiguous marker — so
+            // accepting it would strip the fork patch for a payload that really
+            // forks. Decoding would be the precise answer; declining to read an
+            // escaped literal is the cheap one, and costs an eager load only on a
+            // spelling almost nobody writes.
+            Some(b'\\') => return false,
+            Some(&c) if c == quote => break i + 1,
+            _ => i += 1,
+        }
+    };
+    matches!(
+        arg[close..].trim_start().as_bytes().first(),
+        Some(b')') | Some(b',')
+    )
+}
+
+fn has_computed_module_access(code: &str) -> bool {
+    for accessor in ["createRequire", "getBuiltinModule", "process.binding"] {
+        if code.contains(accessor) {
+            return true;
+        }
+    }
+    for call in ["require(", "import("] {
+        let mut rest = code;
+        while let Some(at) = rest.find(call) {
+            rest = &rest[at + call.len()..];
+            if !argument_is_one_static_string(rest) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Drop the bootstrap's eager builtin loads when the APP graph never names them.
+///
+/// Loading `node:child_process` costs ~1.9 ms and `node:worker_threads` ~1.4 ms on
+/// every run of the artifact (measured on a quiet CI runner against interleaved
+/// duplicate baselines; 2.3 ms together, since they share a subgraph). A payload
+/// that touches neither pays that for nothing.
+///
+/// The scan behind `uses_*` covers the graph MINUS nub's own runtime tree, and that
+/// exclusion is what makes it work at all: the preamble bundles `worker-polyfill.mjs`
+/// (which declares `class Worker`) and `preload-common.cjs` (which names
+/// `child_process`), so a scan over the FINISHED chunks matches on every payload —
+/// verified against a bare `console.log("hello")`, which carries all four markers —
+/// and would strip nothing, ever.
+fn strip_unused_bootstrap_regions(
+    source: &[u8],
+    uses_child_process: bool,
+    uses_worker: bool,
+) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return source.to_vec();
+    };
+    let mut drop: Vec<&str> = Vec::new();
+    if !uses_child_process {
+        drop.push("childprocess");
+    }
+    if !uses_worker {
+        drop.push("worker");
+    }
+    if drop.is_empty() {
+        return source.to_vec();
+    }
+    strip_regions(text, "// #region nub:compile:", &drop).into_bytes()
 }
 
 impl CompilePreamble {
@@ -1963,6 +2098,62 @@ impl CompilePreamble {
             ]))),
             support_files: Vec::new(),
             root_support_files: Vec::new(),
+            app_uses_child_process: AtomicBool::new(false),
+            app_uses_worker: AtomicBool::new(false),
+        }
+    }
+
+    /// Fold a native-addon island into the same decision.
+    ///
+    /// An island is a verbatim copy of a package directory rather than a bundled
+    /// module, so its files never reach [`Plugin::transform`] and the scan there
+    /// cannot see them. Island code runs in the artifact's own process, so an
+    /// island calling `fork` needs the identity fix-up exactly as application code
+    /// does. Scanned as raw bytes because an island carries binaries as well as
+    /// JavaScript; a stray match inside a `.node` only keeps a load.
+    fn note_island_usage(&self, bytes: &[u8]) {
+        let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        if contains(b"child_process") || contains(b"cluster") {
+            self.app_uses_child_process
+                .store(true, AtomicOrdering::Relaxed);
+        }
+        if contains(b"worker_threads") || contains(b"Worker") {
+            self.app_uses_worker.store(true, AtomicOrdering::Relaxed);
+        }
+    }
+
+    /// Note that an application module names a builtin whose eager load in the
+    /// bootstrap cannot then be stripped.
+    ///
+    /// Substring matching over source text, deliberately. It over-detects — a
+    /// variable named `cluster` or a comment mentioning `Worker` is enough — and
+    /// that is the safe direction: a false positive keeps an eager load the payload
+    /// did not need and costs startup, whereas a false negative ships an artifact
+    /// whose `fork` is never identity-corrected, which is the failure that silently
+    /// bypassed the policy for every cluster worker before it was fixed.
+    fn note_app_builtin_usage(&self, id: &str, code: &str) {
+        // A leading NUL is Rollup's plugin-only namespace, which here means one of
+        // this compiler's own virtual roots — and the PREAMBLE is served from one.
+        // Its source names every marker, so without this the scan sets both flags
+        // on every payload and nothing is ever stripped. Its transitive imports are
+        // real paths under the runtime tree and the second test covers those.
+        if id.starts_with('\0') || Path::new(clean_url(id)).starts_with(&self.runtime_dir) {
+            return;
+        }
+        // A module that can COMPUTE a specifier defeats substring matching outright,
+        // so it counts as using everything. See [`has_computed_module_access`].
+        if has_computed_module_access(code) {
+            self.app_uses_child_process
+                .store(true, AtomicOrdering::Relaxed);
+            self.app_uses_worker.store(true, AtomicOrdering::Relaxed);
+            return;
+        }
+        if code.contains("child_process") || code.contains("cluster") {
+            self.app_uses_child_process
+                .store(true, AtomicOrdering::Relaxed);
+        }
+        if code.contains("worker_threads") || code.contains("Worker") {
+            self.app_uses_worker.store(true, AtomicOrdering::Relaxed);
         }
     }
 
@@ -1977,13 +2168,23 @@ impl CompilePreamble {
         })
     }
 
+    /// Collected AFTER the graph is walked, which is what makes the strip possible:
+    /// the bootstrap is not bundled, so unlike the preamble it can still be rewritten
+    /// once every application module has been seen.
     fn root_support_files(&self) -> impl Iterator<Item = BundledFile> + '_ {
-        self.root_support_files
-            .iter()
-            .map(|(name, bytes)| BundledFile {
+        let uses_child_process = self.app_uses_child_process.load(AtomicOrdering::Relaxed);
+        let uses_worker = self.app_uses_worker.load(AtomicOrdering::Relaxed);
+        self.root_support_files.iter().map(move |(name, bytes)| {
+            let bytes = if name == nub_core::compile::COMPILE_BOOTSTRAP_NAME {
+                strip_unused_bootstrap_regions(bytes, uses_child_process, uses_worker)
+            } else {
+                bytes.clone()
+            };
+            BundledFile {
                 name: name.clone(),
-                bytes: bytes.clone(),
-            })
+                bytes,
+            }
+        })
     }
 
     /// Register `source` as a static worker root and return the virtual entry id
@@ -2266,6 +2467,7 @@ impl Plugin for CompilePreamble {
         _ctx: SharedTransformPluginContext,
         args: &HookTransformArgs<'_>,
     ) -> impl Future<Output = HookTransformReturn> + Send {
+        self.note_app_builtin_usage(args.id, args.code);
         let root = self.is_root_source(args.id);
         let rewritten = if root {
             let cjs = rewrite_entry_main_checks(clean_url(args.id), args.code);
@@ -9722,6 +9924,231 @@ after
         // Surrounding code always survives — otherwise the assertions above could
         // pass by the stripper eating the whole file.
         for out in [&n26, &n24, &n18] {
+            assert!(
+                out.contains("before") && out.contains("after"),
+                "the stripper must only remove its own regions"
+            );
+        }
+    }
+
+    /// The usage scan counts application modules and ignores the compiler's own.
+    ///
+    /// Written after shipping the inverse by accident: the preamble is served from
+    /// a virtual id rather than a path under the runtime tree, so excluding only
+    /// the runtime tree let the preamble's own source — which names every marker —
+    /// set both flags on every payload, and nothing was ever stripped. The failure
+    /// was silent, because over-detection only costs startup.
+    #[test]
+    fn the_builtin_scan_ignores_the_compilers_own_modules() {
+        let every_marker = "child_process cluster worker_threads Worker";
+        let fresh = || {
+            CompilePreamble::from_source(
+                Path::new("/app/entry.ts"),
+                PathBuf::from("/nub/runtime"),
+                String::new(),
+            )
+        };
+        let uses = |p: &CompilePreamble| {
+            (
+                p.app_uses_child_process.load(AtomicOrdering::Relaxed),
+                p.app_uses_worker.load(AtomicOrdering::Relaxed),
+            )
+        };
+
+        let virtual_root = fresh();
+        virtual_root.note_app_builtin_usage(COMPILE_PREAMBLE_ID, every_marker);
+        assert_eq!(
+            uses(&virtual_root),
+            (false, false),
+            "the preamble's own virtual module must not count as application usage"
+        );
+
+        let runtime_file = fresh();
+        runtime_file.note_app_builtin_usage("/nub/runtime/worker-polyfill.mjs", every_marker);
+        assert_eq!(
+            uses(&runtime_file),
+            (false, false),
+            "a file in nub's runtime tree must not count as application usage"
+        );
+
+        // The positive control. Without it the assertions above would pass just as
+        // well against a scan that never records anything at all.
+        let app = fresh();
+        app.note_app_builtin_usage(
+            "/app/entry.ts",
+            "import { fork } from 'node:child_process';",
+        );
+        assert_eq!(
+            uses(&app),
+            (true, false),
+            "an application module naming child_process must keep only that load"
+        );
+
+        let app_worker = fresh();
+        app_worker.note_app_builtin_usage("/app/entry.ts", "const w = new Worker(url);");
+        assert_eq!(
+            uses(&app_worker),
+            (false, true),
+            "an application module naming Worker must keep only that load"
+        );
+    }
+
+    /// A module that can compute a specifier keeps every eager load.
+    ///
+    /// This is the hole a literal scan leaves: compiled CommonJS preserves a
+    /// non-static `require(expr)`, so `require(["child", "process"].join("_"))`
+    /// reaches the builtin naming neither marker. Stripping there would drop the
+    /// fork identity patch and let `fork()` re-run the artifact with no error
+    /// raised, which is the silent failure this whole scan is written around.
+    #[test]
+    fn a_computed_specifier_keeps_every_eager_load() {
+        for computed in [
+            r#"require(["child", "process"].join("_"))"#,
+            r#"const m = "fs"; require(m);"#,
+            r#"await import(specifier)"#,
+            r#"createRequire(import.meta.url)("child_process")"#,
+            r#"process.getBuiltinModule(name)"#,
+            "require(`fs`)", // a template is not read, and cheap-and-safe wins
+            // A QUOTED PREFIX is not a static specifier. This one opens with a
+            // quote and names no contiguous marker, so reading only the first byte
+            // stripped the fork patch for a payload that really does fork.
+            r#"require("child" + "_process")"#,
+            r#"await import("node:" + name)"#,
+            r#"require("fs".concat(""))"#,
+            // An ESCAPED literal is static, but its spelling is not the marker, so
+            // the substring scan that follows finds nothing in it. Both spellings
+            // resolve the builtin at run time.
+            r#"require("child\u005fprocess")"#,
+            r#"require("child\x5fprocess")"#,
+        ] {
+            assert!(
+                has_computed_module_access(computed),
+                "must be treated as computed: {computed}"
+            );
+        }
+
+        // The negative half is what keeps the optimisation alive at all: if every
+        // ordinary module read as computed, nothing would ever be stripped and the
+        // positive assertions above would still pass.
+        for literal in [
+            r#"import { readFile } from "node:fs/promises";"#,
+            r#"const fs = require("node:fs");"#,
+            r#"await import("./chunk.mjs")"#,
+            r#"console.log("plain");"#,
+            // Prose, not code. A zod comment shaped exactly like this kept both
+            // eager loads for every artifact depending on zod until empty parens
+            // were excluded — `import()` takes no specifier, so it reaches nothing.
+            "// emits an indexed access rather than an inline `import()` of a path",
+        ] {
+            assert!(
+                !has_computed_module_access(literal),
+                "must stay readable: {literal}"
+            );
+        }
+
+        // And the whole point: a computed specifier forces BOTH loads, even though
+        // it names neither builtin.
+        let p = CompilePreamble::from_source(
+            Path::new("/app/entry.ts"),
+            PathBuf::from("/nub/runtime"),
+            String::new(),
+        );
+        p.note_app_builtin_usage("/app/entry.ts", r#"require(["child","process"].join("_"))"#);
+        assert!(
+            p.app_uses_child_process.load(AtomicOrdering::Relaxed)
+                && p.app_uses_worker.load(AtomicOrdering::Relaxed),
+            "an unreadable specifier must keep every eager load"
+        );
+
+        // The same, for a specifier that merely BEGINS like a literal. This is the
+        // shape that reached the builtin while both flags stayed false.
+        let split = CompilePreamble::from_source(
+            Path::new("/app/entry.ts"),
+            PathBuf::from("/nub/runtime"),
+            String::new(),
+        );
+        split.note_app_builtin_usage("/app/entry.ts", r#"require("child" + "_process").fork(m)"#);
+        assert!(
+            split.app_uses_child_process.load(AtomicOrdering::Relaxed)
+                && split.app_uses_worker.load(AtomicOrdering::Relaxed),
+            "a quoted-prefix concatenation must keep every eager load"
+        );
+
+        // And for a literal whose SPELLING is not its value. This one is fully
+        // static, so the specifier reader would accept it, while the marker scan
+        // that follows reads the raw text and finds nothing.
+        let escaped = CompilePreamble::from_source(
+            Path::new("/app/entry.ts"),
+            PathBuf::from("/nub/runtime"),
+            String::new(),
+        );
+        escaped.note_app_builtin_usage("/app/entry.ts", r#"require("child\u005fprocess").fork(m)"#);
+        assert!(
+            escaped.app_uses_child_process.load(AtomicOrdering::Relaxed)
+                && escaped.app_uses_worker.load(AtomicOrdering::Relaxed),
+            "an escaped builtin spelling must keep every eager load"
+        );
+    }
+
+    /// The bootstrap keeps an eager builtin load exactly when the app graph names
+    /// it, and the two regions are independent.
+    ///
+    /// The KEPT direction is the one that matters. Dropping the `childprocess`
+    /// region when the payload does use `fork`/`cluster` produces an artifact whose
+    /// child processes silently re-run the executable itself — a wrong answer with
+    /// no error — so every uncertain case must land on "keep".
+    #[test]
+    fn the_bootstrap_keeps_a_builtin_load_the_app_graph_names() {
+        let src = b"\
+before
+let needsChildProcess = false;
+let needsWorker = false;
+// #region nub:compile:childprocess
+needsChildProcess = true;
+// #endregion
+// #region nub:compile:worker
+needsWorker = true;
+// #endregion
+after
+";
+        let text = |v: Vec<u8>| String::from_utf8(v).expect("stripper must emit UTF-8");
+
+        let neither = text(strip_unused_bootstrap_regions(src, false, false));
+        assert!(
+            !neither.contains("needsChildProcess = true")
+                && !neither.contains("needsWorker = true"),
+            "a payload naming neither builtin must carry neither eager load"
+        );
+
+        let both = text(strip_unused_bootstrap_regions(src, true, true));
+        assert_eq!(
+            both,
+            String::from_utf8(src.to_vec()).unwrap(),
+            "a payload naming both must be left exactly as written"
+        );
+
+        // Independence: stripping one region must not disturb the other.
+        let cp_only = text(strip_unused_bootstrap_regions(src, true, false));
+        assert!(
+            cp_only.contains("needsChildProcess = true") && !cp_only.contains("needsWorker = true"),
+            "child_process usage alone must keep only that region"
+        );
+        let worker_only = text(strip_unused_bootstrap_regions(src, false, true));
+        assert!(
+            !worker_only.contains("needsChildProcess = true")
+                && worker_only.contains("needsWorker = true"),
+            "Worker usage alone must keep only that region"
+        );
+
+        // Every variant must still assign the flags and keep surrounding code, or
+        // the assertions above could pass by the stripper eating the whole file and
+        // leaving an undefined binding behind.
+        for out in [&neither, &both, &cp_only, &worker_only] {
+            assert!(
+                out.contains("let needsChildProcess = false")
+                    && out.contains("let needsWorker = false"),
+                "the `false` initializers are what make a region removable"
+            );
             assert!(
                 out.contains("before") && out.contains("after"),
                 "the stripper must only remove its own regions"
