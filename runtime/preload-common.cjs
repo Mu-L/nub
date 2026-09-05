@@ -293,6 +293,7 @@ function cliAsyncLoaderPresent() {
         if (
           a === "--loader" || a.startsWith("--loader=") ||
           a === "--experimental-loader" || a.startsWith("--experimental-loader=") ||
+          a === "--experimental_loader" || a.startsWith("--experimental_loader=") ||
           a === "--import" || a.startsWith("--import=")
         ) { present = true; break; }
       }
@@ -316,9 +317,10 @@ function cliAsyncLoaderPresent() {
 // against a user async loader, and Node rejected the `commonjs-sync`+null-source pair
 // (#669). That helper also excludes nub's OWN preload chainer, which rides NODE_OPTIONS
 // as `--import`; a raw scan here would read it as a user loader and silently decline
-// the relabel for every chained project.
-function userAsyncLoaderActive() {
-  return __userAsyncLoaderRegistered || foreignAsyncLoaderFlagPresent();
+// the relabel for every chained project. The standalone loader supplies its
+// value-aware flag scan instead, excluding its own --import entrypoint too.
+function userAsyncLoaderActive(foreignLoaderFlagPresent) {
+  return __userAsyncLoaderRegistered || foreignLoaderFlagPresent;
 }
 
 // The Node band where the async `module.register` loader's `resolveSync`/`loadSync`
@@ -369,7 +371,7 @@ function computeForeignAsyncLoaderFlagPresent() {
   if (cliAsyncLoaderPresent()) return true; // execArgv channel
   const opts = process.env.NODE_OPTIONS;
   if (typeof opts !== "string" || opts === "") return false;
-  const re = /(?:^|\s)--(?:experimental-)?(?:import|loader)(?:=|\s)("[^"]*"|\S*)/g;
+  const re = /(?:^|\s)--(?:experimental[-_])?(?:import|loader)(?:=|\s)("[^"]*"|\S*)/g;
   for (const match of opts.matchAll(re)) {
     const value = (match[1] || "").replace(/^"|"$/g, "");
     if (!NUB_CHAIN_MARKER.test(value)) return true;
@@ -634,7 +636,7 @@ function restoreSchemeOnlyBuiltinURL(result) {
   }
 }
 
-function makeHooks(core, watchReporting) {
+function makeHooks(core, watchReporting, foreignLoaderFlagPresent = foreignAsyncLoaderFlagPresent()) {
   installUserHookDetector();
   installUserAsyncLoaderDetector();
 
@@ -894,7 +896,7 @@ function makeHooks(core, watchReporting) {
       typeof url === "string" && url.startsWith("file:") &&
       Array.isArray(context && context.conditions) &&
       context.conditions.includes("import") &&
-      !__userHooksRegistered && !userAsyncLoaderActive()
+      !__userHooksRegistered && !userAsyncLoaderActive(foreignLoaderFlagPresent)
     ) {
       return { ...r, format: "commonjs-sync" };
     }
