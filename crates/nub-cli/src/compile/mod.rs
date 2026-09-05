@@ -235,6 +235,8 @@ pub fn run(mut opts: CompileOptions) -> Result<i32> {
         gate_version.0.minor,
         gate_version.0.patch,
     ));
+    opts.bundle.eager_startup =
+        bundle::eager_startup_compilation_supported(opts.bundle.target_node);
 
     // 2. Bundle (Rolldown, in-process). The target's platform/arch are baked in
     //    as defines UNDER the user's, so a cross-compiled `process.platform`
@@ -479,6 +481,10 @@ pub fn run(mut opts: CompileOptions) -> Result<i32> {
         // giving one to the Node it spawns.
         hide_console: opts.hide_console,
         inline_app,
+        // An inline payload runs the bootstrap as `-e` and has no preload to save.
+        standalone_preamble: !inline_app
+            && bundled.bootstrap_optional
+            && supports_standalone_preamble(opts.bundle.target_node),
     };
     let payload = encode_with_license(&manifest, &app_files, &node.blob, &node.license);
 
@@ -1582,6 +1588,15 @@ fn load_icon(icon: Option<&Path>, target: &TargetPlatform) -> Result<Option<Vec<
 /// The HOST is not checked, only the target. Everything the flag does is byte
 /// editing plus one payload field, so a hidden Windows binary cross-compiles
 /// from macOS or Linux exactly like an icon does.
+/// Whether every Node this artifact accepts has `process.getBuiltinModule`, which
+/// is how a standalone preamble reaches builtins without the bootstrap's early CJS
+/// `require` (`runtime/compile-record.mjs`). Landed at 22.3.0 with a 20.16 backport;
+/// the 20.x band is left out because a `--smol` floor there admits 21.x, which
+/// never had it, and the bootstrap preload is only ~1 ms.
+fn supports_standalone_preamble(target: Option<(u64, u64, u64)>) -> bool {
+    matches!(target, Some((major, minor, _)) if major > 22 || (major == 22 && minor >= 3))
+}
+
 fn reject_non_windows_hide_console(hide_console: bool, target: &TargetPlatform) -> Result<()> {
     if hide_console && target.format() != ContainerFormat::Pe {
         bail!(
@@ -4210,6 +4225,7 @@ mod tests {
                 drop_debugger: false,
                 metafile: false,
                 target_node: None,
+                eager_startup: false,
             },
         }
     }
@@ -4237,6 +4253,7 @@ mod tests {
             sealed_module_graph: false,
             hide_console: false,
             inline_app: false,
+            standalone_preamble: false,
         };
         let app = vec![AppFile::plain("main.js", b"app".to_vec())];
         let missing = nub_core::compile::encode_with_license(&manifest, &app, b"node", &[]);
@@ -5250,6 +5267,7 @@ mod tests {
             native_files: Vec::new(),
             support_files: Vec::new(),
             root_support_files: Vec::new(),
+            bootstrap_optional: false,
             dynamic_import_sites: 0,
             native_addons: Vec::new(),
             external_imports: Vec::new(),
@@ -5325,6 +5343,7 @@ mod tests {
             native_files: Vec::new(),
             support_files: Vec::new(),
             root_support_files: Vec::new(),
+            bootstrap_optional: false,
             dynamic_import_sites: 0,
             native_addons: Vec::new(),
             external_imports: Vec::new(),
@@ -5377,6 +5396,7 @@ mod tests {
                 name: COMPILE_BOOTSTRAP_NAME.into(),
                 bytes: b"require('module');".to_vec(),
             }],
+            bootstrap_optional: false,
             dynamic_import_sites: 0,
             native_addons: Vec::new(),
             external_imports: Vec::new(),
@@ -5446,6 +5466,7 @@ mod tests {
                 name: "a\\..\\escaped.cjs".into(),
                 bytes: Vec::new(),
             }],
+            bootstrap_optional: false,
             dynamic_import_sites: 0,
             native_addons: Vec::new(),
             external_imports: Vec::new(),
@@ -5487,6 +5508,7 @@ mod tests {
             native_files: Vec::new(),
             support_files: Vec::new(),
             root_support_files: Vec::new(),
+            bootstrap_optional: false,
             dynamic_import_sites: 0,
             native_addons: Vec::new(),
             external_imports: Vec::new(),
@@ -5535,6 +5557,7 @@ mod tests {
                 native_files: Vec::new(),
                 support_files: Vec::new(),
                 root_support_files: Vec::new(),
+                bootstrap_optional: false,
                 dynamic_import_sites: 0,
                 native_addons: Vec::new(),
                 external_imports: Vec::new(),

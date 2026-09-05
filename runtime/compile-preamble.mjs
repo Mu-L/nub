@@ -1,5 +1,7 @@
 // Runtime globals compiled artifacts need without Nub's loader or installed runtime.
-const bootstrap = process[Symbol.for("nub.compile.bootstrap")];
+// First import, and it stays first: it publishes the record when the launcher skipped
+// the bootstrap preload, and the modules below read that record as they evaluate.
+import { bootstrap } from "./compile-record.mjs";
 const COMPILED_WORKER_STATE = "nub.compile.worker-state";
 // Loading node:worker_threads costs ~1.4 ms on every run of the artifact, so it is
 // skipped when the payload's sealed graph never reaches Worker or worker_threads.
@@ -70,26 +72,25 @@ if (
 // the matching regions from this source before bundling — so the polyfill is never
 // pulled into the graph at all. Measured on Node 26, where Temporal, URLPattern,
 // Float16Array and navigator are all native: ~195 KB of the 206 KB bundle was dead
-// weight, and constructing it cost ~18 ms on every launch.
+// weight, and constructing it cost ~18 ms on every launch. A region that SURVIVES
+// — an older target, or an unknown one under `--smol` — installs a lazy global
+// instead: the package is bundled, but evaluated on the first read of the global
+// rather than at start (compile-lazy-*.cjs), as the run-time preload has always
+// done for Temporal.
 //
 // Keep an import and its use in regions of the SAME name, and keep every region
 // independently removable — stripping one must leave valid syntax behind.
 // #region nub:polyfill:urlpattern
-import { URLPattern } from "urlpattern-polyfill/urlpattern";
+import { installCompiledUrlPatternLazyGlobal } from "./compile-lazy-urlpattern.cjs";
 // #endregion
 // #region nub:polyfill:float16
-import * as float16 from "@petamoriken/float16";
+import { installCompiledFloat16LazyGlobals } from "./compile-lazy-float16.cjs";
 // #endregion
 // #region nub:polyfill:temporal
-import { Temporal, toTemporalInstant } from "@js-temporal/polyfill";
+import { installCompiledTemporalLazyGlobal } from "./compile-lazy-temporal.cjs";
 // #endregion
 import { installSyncPolyfills } from "./polyfills.cjs";
-import {
-  installCompiledChildProcess,
-  // #region nub:polyfill:temporal
-  installTemporalGlobal,
-  // #endregion
-} from "./preload-common.cjs";
+import { installCompiledChildProcess } from "./preload-common.cjs";
 // #region nub:polyfill:navigator
 import {
   installNavigatorShim,
@@ -136,14 +137,15 @@ export function installCompilePreamble() {
     process.argv[0] = compiledExecPath;
   }
 
-  installSyncPolyfills({
-    // #region nub:polyfill:urlpattern
-    urlpattern: { URLPattern },
-    // #endregion
-    // #region nub:polyfill:float16
-    float16,
-    // #endregion
-  });
+  // Handed no packages: the bundled polyfills become LAZY globals below, each
+  // evaluated on its first read and never at start (compile-lazy-*.cjs).
+  installSyncPolyfills({});
+  // #region nub:polyfill:urlpattern
+  installCompiledUrlPatternLazyGlobal();
+  // #endregion
+  // #region nub:polyfill:float16
+  installCompiledFloat16LazyGlobals();
+  // #endregion
   // #region nub:polyfill:navigator
   installNavigatorShim();
   // #endregion
@@ -183,7 +185,7 @@ export function installCompilePreamble() {
     });
   }
   // #region nub:polyfill:temporal
-  installTemporalGlobal({ Temporal, toTemporalInstant });
+  installCompiledTemporalLazyGlobal();
   // #endregion
 }
 

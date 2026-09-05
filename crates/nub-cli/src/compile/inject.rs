@@ -727,6 +727,7 @@ mod tests {
             sealed_module_graph: false,
             hide_console: false,
             inline_app: false,
+            standalone_preamble: false,
         };
         nub_core::compile::encode(
             &manifest,
