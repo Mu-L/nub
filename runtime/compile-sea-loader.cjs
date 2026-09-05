@@ -163,6 +163,91 @@
     },
   });
 
+  // The backstop for the one thing the build-time scan cannot promise.
+  //
+  // Which payloads reach `child_process`/`cluster` is decided by reading the
+  // emitted chunks for what they RESOLVE, and that decision keeps such a payload
+  // on the launcher, which has a real Node to hand a fork. The scan is syntactic,
+  // so it is a heuristic and not a proof: it follows a require through a rename
+  // and through an alias binding, and it cannot follow one passed as an argument,
+  // stored on an object, or picked out of an array. Completing it would take
+  // interprocedural dataflow over the whole bundle.
+  //
+  // What matters is therefore not that the scan is complete but what happens when
+  // it is wrong, and without this the answer was the worst available. A fork here
+  // spawns `process.execPath`, which is the artifact; Node discards a
+  // single-executable's `argv[1]` (`FixupArgsForSEA`), so the child re-runs the
+  // whole application and forks again. Measured: a two-line fixture printed its
+  // first line until it was killed. One line of guard turns that into an error
+  // naming the cause, at the call, with a stack.
+  //
+  // Installed HERE rather than in the bootstrap because it is true of this
+  // container alone, and before the entry because Node's own
+  // `internal/cluster/primary` destructures `fork` into a module-local const the
+  // first time cluster is required — which is inside the application's graph, so
+  // a patch applied later would never reach it.
+  //
+  // It is a runtime patch and therefore revocable, which bounds what it can be:
+  // a `NODE_OPTIONS` preload runs BEFORE this main and can keep the original
+  // function or hand it back afterwards. That limit is not closable — it is true
+  // of every runtime patch in every JavaScript program — and the alternative of
+  // keeping any payload that MIGHT fork on the launcher is the same undecidable
+  // question the scan already answers as well as it can. What is closable is the
+  // one route a preload takes without meaning to, and the branch below takes it.
+  {
+    const childProcess = boot.getBuiltin("node:child_process");
+    // Reaching either of these means the build's scan missed this payload, which
+    // is the part the reader can act on and the part they cannot infer.
+    const REPORT =
+      " The build is meant to detect a program that forks and produce a different kind of " +
+      "executable, so this is a bug worth reporting.";
+    childProcess.fork = (modulePath) => {
+      throw new Error(
+        `child_process.fork(${JSON.stringify(String(modulePath))}) cannot run in this ` +
+          "executable: the child would re-run the whole application instead of that module." +
+          REPORT,
+      );
+    };
+
+    // The one case where replacing `child_process.fork` is already too late. A
+    // preload that loaded `node:cluster` gave `internal/cluster/primary` its
+    // module-local `fork` before this ran, and nothing reaches that const —
+    // but every use of it goes through `cluster.fork`, which is still ours to
+    // take. Conditional because reading the module would otherwise LOAD it,
+    // which costs every artifact a builtin it does not use and would capture
+    // the original itself.
+    //
+    // Its own message rather than the one above: `cluster.fork` takes an
+    // environment, not a module path, so rendering the argument prints
+    // `[object Object]` and "instead of that module" names nothing the caller
+    // wrote.
+    if (process.moduleLoadList.some((entry) => entry.endsWith("internal/cluster/primary"))) {
+      boot.getBuiltin("node:cluster").fork = () => {
+        throw new Error(
+          "cluster.fork() cannot run in this executable: the worker would re-run the whole " +
+            "application rather than starting a worker." +
+            REPORT,
+        );
+      };
+    }
+  }
+
+  // `nub compile`'s build-time self-check, the counterpart to the launcher's
+  // probe mode and deliberately the LAST thing before the app would start: every
+  // line above has already run, so reaching here proves Node accepted the blob,
+  // found the main, and got the whole loader installed. Reading the entry asset
+  // proves the chunks are in the blob and reachable through the official
+  // `getRawAsset` — which is what a drift in Node's blob layout would break, and
+  // what nothing static can check, because the layout is Node's rather than ours.
+  //
+  // Placed after the hooks rather than beside the licenses gate for exactly that
+  // reason: an early return would prove only that Node ran SOMETHING.
+  if (process.env.__NUB_COMPILED_LAUNCHER_MODE === "probe" && process.argv.length === 2) {
+    const bytes = sea.getRawAsset(ENTRY);
+    process.stdout.write(`nub-probe ok ${ENTRY} ${bytes.byteLength}\n`);
+    return;
+  }
+
   // The one line a SEA needs that no other shape does. `import()` from here is the
   // embedder's and throws ERR_UNKNOWN_BUILTIN_MODULE for anything that is not a
   // builtin — the hooks above are irrelevant to it, because the rejection happens
