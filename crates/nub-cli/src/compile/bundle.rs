@@ -322,7 +322,11 @@ fn bundle_inner(
         // ONLY for `(Node, Cjs)` and leaves verbatim everywhere else — and under a
         // CJS format Rolldown already declares both globals, so the plugin is
         // redundant there and should simply be skipped.
-        format: Some(OutputFormat::Esm),
+        format: Some(if compile_emits_cjs() {
+            OutputFormat::Cjs
+        } else {
+            OutputFormat::Esm
+        }),
         platform: Some(Platform::Node),
         // An authored ESM module has no `require` binding. Rolldown's Node ESM
         // default installs `createRequire(import.meta.url)` for every unbound
@@ -343,8 +347,24 @@ fn bundle_inner(
         // Compiled chunks always execute as ESM, regardless of the source
         // package's `type` field. Keeping that fact in their extension lets Node
         // load extracted artifacts without a synthetic package boundary.
-        entry_filenames: Some("[name].mjs".to_string().into()),
-        chunk_filenames: Some("[name]-[hash].mjs".to_string().into()),
+        entry_filenames: Some(
+            if compile_emits_cjs() {
+                "[name].cjs"
+            } else {
+                "[name].mjs"
+            }
+            .to_string()
+            .into(),
+        ),
+        chunk_filenames: Some(
+            if compile_emits_cjs() {
+                "[name]-[hash].cjs"
+            } else {
+                "[name]-[hash].mjs"
+            }
+            .to_string()
+            .into(),
+        ),
         minify: Some(minify_options(opts)),
         // The ONLY keep-names switch we touch. Rolldown threads this single flag
         // into both the finalizer's `__name` helper and the minifier's
@@ -1622,7 +1642,22 @@ fn is_node_commonjs_module(module: &rolldown_common::ModuleInfo) -> bool {
 /// first statement, and reaching a property means calling into the loader
 /// earlier than the loader's own chunk starts.
 fn compile_commonjs_require_intro() -> String {
+    let intro = compile_commonjs_require_intro_esm();
+    if compile_emits_cjs() {
+        // `import.meta` is a syntax error in a CommonJS chunk. Rolldown polyfills
+        // it for (Node, Cjs) in USER code, but this intro is spliced in verbatim
+        // and never passes through that transform.
+        return intro.replace("import.meta.url", "__filename");
+    }
+    intro
+}
+
+fn compile_commonjs_require_intro_esm() -> String {
     let loader = COMPILE_COMMONJS_LOADER;
+    // `import.meta` is a syntax error in a CommonJS chunk. Rolldown polyfills it
+    // for (Node, Cjs) in USER code, but this intro is spliced in verbatim and
+    // never passes through that transform.
+
     format!(
         "{COMPILE_COMMONJS_REQUIRE_MARKER}\n\
          {loader}.resolve = (id, options) => __nubRequire().resolve(id, options);\n\
@@ -1695,6 +1730,55 @@ fn compile_commonjs_require_intro() -> String {
 const ROLLDOWN_MODULE_WRAPPERS: [&str; 4] = ["__commonJS", "__commonJSMin", "__esm", "__esmMin"];
 const ROLLDOWN_COMMONJS_WRAPPERS: [&str; 2] = ["__commonJS", "__commonJSMin"];
 
+/// Whether this build emits CommonJS chunks instead of ESM.
+///
+/// A V8 startup snapshot is the only mechanism that skips module EVALUATION
+/// rather than compilation, and Node runs a snapshot main through
+/// `minimalRunCjs` — an ESM entry is rejected outright. Bun has the identical
+/// constraint (`--format` "defaults to esm, or cjs with --bytecode"), so a
+/// CommonJS shape is the prerequisite for precompilation on either runtime.
+///
+/// Env-gated while the surface is settled; the intended trigger is a `--snapshot`
+/// flag with the format an implementation detail the user never names.
+fn compile_emits_cjs() -> bool {
+    std::env::var_os("__NUB_COMPILE_CJS").is_some()
+}
+
+/// The re-entrancy guard nub wraps every ASYNC module initializer in, and the
+/// reason it exists: Rolldown lowers each import edge into its own `await`, which
+/// is correct for a DAG and wrong inside a cycle.
+///
+/// Real ESM never has a module wait on another module in its own strongly
+/// connected component. `InnerModuleEvaluation` only registers a pending async
+/// dependency when the required module has already left the stack; a requirement
+/// that is still EVALUATING is in the same SCC, so the spec records a
+/// `[[DFSAncestorIndex]]` and moves on. The whole SCC's top-level awaits are then
+/// joined at its cycle root.
+///
+/// Rolldown's lowering has no such rule, so `a -> b -> c -> a` compiles to three
+/// initializers that each await the next. By the time the third calls back into
+/// the first, the memo holds the first's IN-FLIGHT PROMISE, and awaiting it is a
+/// deadlock: the program exits 13 with "Detected unsettled top-level await" and
+/// nothing else. Plain Node runs the same source.
+///
+/// This restores the spec's rule dynamically. An initializer that is re-entered
+/// while its own promise is still pending is, by construction, being reached
+/// through a cycle, so the guard returns `undefined` rather than the promise the
+/// caller would deadlock on. The first caller still holds the real promise, so
+/// the SCC completes before anything downstream of it runs.
+///
+/// The guard returns the initializer's OWN promise and only attaches a settled
+/// observer to it. Returning a `.then()` chain instead would be equivalent, and
+/// measured 1.19x slower over a 318-chunk app (0 of 15 paired rounds won): every
+/// initializer await would pay an extra microtask hop, and there are hundreds of
+/// them before `main`. Rejections still reach the caller, because the promise
+/// handed back is the unaltered one.
+///
+/// It is applied ONLY to async wrappers. A synchronous initializer must finish
+/// synchronously — its callers do not await it — so routing one through a promise
+/// would let them run before it had.
+const COMPILE_CYCLE_INIT_HELPER: &str = "function __nubCycleInit(state, run) { if (state.s === 2) return state.p; if (state.s === 1) return; state.s = 1; var p = run(); p.then(() => { state.s = 2 }, () => { state.s = 2 }); return state.p = p; }\n";
+
 /// Rewrite every top-level Rolldown module wrapper in one chunk. Returns `None`
 /// when the chunk has none, so an untouched chunk keeps its original bytes.
 ///
@@ -1717,6 +1801,7 @@ fn hoist_module_wrappers(code: &str) -> Result<Option<String>> {
 
     let mut magic = MagicString::new(code.to_owned());
     let mut rewrote = false;
+    let mut needs_cycle_helper = false;
     for statement in &parsed.program.body {
         let Statement::VariableDeclaration(decl) = statement else {
             continue;
@@ -1745,28 +1830,50 @@ fn hoist_module_wrappers(code: &str) -> Result<Option<String>> {
         } else {
             String::new()
         };
+        // Only an ASYNC wrapper can deadlock a cycle, and only an async one may
+        // be routed through a promise — see [`COMPILE_CYCLE_INIT_HELPER`].
+        let is_async = call
+            .arguments
+            .first()
+            .and_then(|argument| argument.as_expression())
+            // oxc keeps parentheses in the tree, and Rolldown emits the wrapper
+            // argument parenthesized, so the arrow is one level down.
+            .map(|expression| expression.get_inner_expression())
+            .is_some_and(|expression| match expression {
+                Expression::ArrowFunctionExpression(arrow) => arrow.r#async,
+                Expression::FunctionExpression(function) => function.r#async,
+                _ => false,
+            });
         // `var <lazy>; function <name>() { [const require = …;] return (<lazy> ??= `
         // replaces everything up to the wrapper call, dropping the
         // `/* @__PURE__ */` with it — tree-shaking has already run by
         // render_chunk, so the annotation has no reader left. The spans come from
         // this same parse, so a failed range is a bug, and it surfaces as one.
-        magic
-            .update(
-                decl.span.start,
-                call.span.start,
-                format!("var {lazy}; function {name}() {{ {bind_require}return ({lazy} ??= "),
+        let (open, close) = if is_async {
+            let state = format!("__nub_cycle_{name}");
+            (
+                format!(
+                    "var {lazy}; var {state} = {{ s: 0, p: void 0 }};                      function {name}() {{ {bind_require}return __nubCycleInit({state}, () => ({lazy} ??= "
+                ),
+                ").apply(this, arguments)) }".to_string(),
             )
-            .and_then(|magic| {
-                magic.update(
-                    call.span.end,
-                    decl.span.end,
-                    ").apply(this, arguments) }".to_string(),
-                )
-            })
+        } else {
+            (
+                format!("var {lazy}; function {name}() {{ {bind_require}return ({lazy} ??= "),
+                ").apply(this, arguments) }".to_string(),
+            )
+        };
+        needs_cycle_helper |= is_async;
+        magic
+            .update(decl.span.start, call.span.start, open)
+            .and_then(|magic| magic.update(call.span.end, decl.span.end, close))
             .map_err(|err| {
                 anyhow!("rewriting the module wrapper `{name}` in a compiled chunk: {err}")
             })?;
         rewrote = true;
+    }
+    if needs_cycle_helper {
+        magic.prepend(COMPILE_CYCLE_INIT_HELPER.to_string());
     }
     Ok(rewrote.then(|| magic.to_string()))
 }
@@ -8249,6 +8356,58 @@ mod tests {
             unique.len(),
             2,
             "three roots for @opentui/core are one package: {unique:?}"
+        );
+    }
+
+    #[test]
+    fn an_async_module_cycle_is_guarded_against_re_entry() {
+        // Every member of this cycle has a real top-level await, which is what
+        // makes each initializer async and the cycle a deadlock without the
+        // guard: config -> migrate -> back to config, with the memo holding an
+        // in-flight promise by the time the second edge is taken. Plain Node
+        // runs this source; before the guard the compiled binary exited 13 with
+        // "Detected unsettled top-level await".
+        let dir = fixture_dir("async-cycle");
+        std::fs::write(
+            dir.join("config.mjs"),
+            "import { migrate } from './migrate.mjs';\n             export const settings = { name: 'cfg' };\n             await Promise.resolve();\n             export function load() { return settings.name + ':' + migrate() }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("migrate.mjs"),
+            "import { settings } from './config.mjs';\n             await Promise.resolve();\n             export function migrate() { return 'm(' + settings.name + ')' }\n",
+        )
+        .unwrap();
+        let entry = dir.join("entry.mjs");
+        std::fs::write(
+            &entry,
+            "import { load } from './config.mjs'; console.log(load());\n",
+        )
+        .unwrap();
+
+        let mut o = opts();
+        o.minify = false;
+        let res = bundle(&entry, &o).expect("a cyclic async graph must compile");
+        let all = res
+            .files
+            .iter()
+            .map(|file| String::from_utf8_lossy(&file.bytes).into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            all.contains("function __nubCycleInit(state, run)"),
+            "a chunk with async initializers must carry the cycle guard:\n{all}"
+        );
+        assert!(
+            all.contains("__nubCycleInit(__nub_cycle_init_config"),
+            "the async initializer for a cycle member must be guarded:\n{all}"
+        );
+        // The preamble initializer is synchronous and its callers do not await
+        // it, so routing it through a promise would let them run before it had.
+        assert!(
+            !all.contains("__nubCycleInit(__nub_cycle_init__nub_compile_preamble"),
+            "a synchronous initializer must not be routed through a promise:\n{all}"
         );
     }
 
