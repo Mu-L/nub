@@ -151,12 +151,37 @@ pub enum Decline {
     /// summary would have claimed "nothing is written to disk" beside a 28 MB Node
     /// being unpacked.
     EmbeddedNode,
-    /// The build asked for source maps. Measured on Node 26.7: `--enable-source-maps`
-    /// does not apply an inline map to a `data:` URL module at all — with or without
-    /// a `//# sourceURL` — so an inline artifact would report unmapped frames where
-    /// the extracted one reports `app.ts:1`. Extracting is what keeps the maps the
-    /// build was asked to produce, so a build that wants them gets exactly today's
-    /// behavior.
+    /// The build asked for a source map this container cannot honour. Which maps
+    /// those are is per container and per mode, and the answer is measured rather
+    /// than argued — the same throwing `app.ts`, compiled six ways on Node 26.8:
+    ///
+    /// | `--sourcemap=` | extracted (the control) | `Mode::Sea` | `Mode::Inline` |
+    /// | --- | --- | --- | --- |
+    /// | `inline` | `app.ts:2:13` | `app.ts:2:13` | `app.mjs:3:10743` |
+    /// | `linked` | `app.ts:2:13` | needs a file | needs a file |
+    /// | `external` | `app.mjs:2:10743` | `app.mjs:2:10743` | `app.mjs:3:10743` |
+    ///
+    /// `linked` ships a `.map` beside the chunks and names it in a
+    /// `sourceMappingURL`, which neither container can resolve; it is caught by
+    /// [`Decline::NonChunkFile`] too, and kept here only because this reason reads
+    /// better.
+    ///
+    /// `Mode::Inline` declines EVERY map, and the reason is not that it cannot find
+    /// one — it is that no map made by the bundler still describes what that
+    /// container runs. [`rewrite_chunk`] edits each chunk AFTER bundling: it
+    /// prepends one generated line and rewrites cross-chunk specifiers in place,
+    /// which moves every line by one and moves columns on the lines it touches. The
+    /// map is made before that. The shift is visible in the table above — the same
+    /// frame is line 2 under a container that runs the bundler's bytes and line 3
+    /// under the one that rewrites them. An unresolvable map is a missing map, which
+    /// a reader notices; a map that resolves to the WRONG line is worse, because
+    /// nothing reports it. Composing `rewrite_chunk`'s edit into each map would
+    /// admit both `inline` and `external` here, and is what that would take.
+    ///
+    /// `Mode::Sea` rewrites nothing — it serves the emitted chunk verbatim through
+    /// a `registerHooks` `load` hook, where V8 honours the `sourceMappingURL` it
+    /// finds (`sea.rs`: "`EVAL_GLOBAL_CLEANUP` has no counterpart here"). So its
+    /// maps still describe its code, and only `linked` is out of reach.
     SourceMap,
     /// The payload names `child_process`, so the bootstrap installs its `fork()`
     /// identity fix-up — which sets the fork's executable to the Node the artifact
@@ -196,8 +221,10 @@ pub struct Inputs<'a> {
     /// Statically traced worker roots, plus the public wrappers written for them.
     pub worker_roots: usize,
     pub worker_wrappers: usize,
-    /// Whether any source map was asked for.
-    pub sourcemap: bool,
+    /// Which source map the build asked for. The MODE rather than a yes/no,
+    /// because the three differ in what has to be reachable at run time and only
+    /// one of them is out of reach here — see [`Decline::SourceMap`].
+    pub sourcemap: bundle::SourcemapMode,
     /// Whether the artifact carries a Node of its own — everything but `--smol`.
     pub embeds_node: bool,
     /// `BundleResult::app_computes_module_specifier`.
@@ -301,7 +328,13 @@ pub fn classify(
     if inputs.worker_roots != 0 || inputs.worker_wrappers != 0 {
         return Ok(Err(Decline::StaticWorker));
     }
-    if inputs.sourcemap {
+    // `Linked` needs a file no container can reach. Everything else is a question
+    // of whether the map still describes the code: `Mode::Inline` rewrites its
+    // chunks after the map is made, so none of them does. See
+    // [`Decline::SourceMap`].
+    if matches!(inputs.sourcemap, bundle::SourcemapMode::Linked)
+        || (mode == Mode::Inline && !matches!(inputs.sourcemap, bundle::SourcemapMode::None))
+    {
         return Ok(Err(Decline::SourceMap));
     }
     // Cheap and last of the caller-supplied checks, so a payload that could never
@@ -751,7 +784,7 @@ mod tests {
             sealed_module_graph: true,
             worker_roots: 0,
             worker_wrappers: 0,
-            sourcemap: false,
+            sourcemap: bundle::SourcemapMode::None,
             embeds_node: false,
             computes_module_specifier: false,
             entry,
@@ -792,6 +825,74 @@ mod tests {
         classify(&files, &inputs, Mode::Sea)
             .expect("classification succeeds")
             .err()
+    }
+
+    /// Which source maps each container can honour — one cell per measured row of
+    /// the table on [`Decline::SourceMap`].
+    ///
+    /// The two `Inline` cells are the whole point. The same mode is reachable from
+    /// the single-executable container and not from the no-extract launcher, so a
+    /// test that checked one of them would read as coverage whichever way the code
+    /// went.
+    ///
+    /// `External` pins the correction that a review caught: it looked admissible
+    /// everywhere, because its map is never named by the bundle and its frames come
+    /// back unmapped in every shape. But `Mode::Inline` publishes a DETACHED map
+    /// made before [`rewrite_chunk`] shifts the code it describes, so admitting it
+    /// there hands an error tracker a map that resolves to the wrong line and says
+    /// nothing about it.
+    #[test]
+    fn each_container_declines_only_the_source_maps_it_cannot_honour() {
+        use bundle::SourcemapMode::{External, Inline as InlineMap, Linked, None as NoMap};
+
+        let files = vec![
+            AppFile::plain(
+                nub_core::compile::COMPILE_BOOTSTRAP_NAME.to_string(),
+                b"// bootstrap\n".to_vec(),
+            ),
+            AppFile::plain("main.mjs".to_string(), b"console.log(1);\n".to_vec()),
+        ];
+        let decline = |map, mode| {
+            let mut inputs = sealed("main.mjs");
+            inputs.sourcemap = map;
+            classify(&files, &inputs, mode)
+                .expect("classification succeeds")
+                .err()
+        };
+
+        for (map, sea, inline, why) in [
+            (NoMap, None, None, "no map was asked for"),
+            (
+                InlineMap,
+                None,
+                Some(Decline::SourceMap),
+                "an inline map is honoured through the blob's load hook, and not from a `data:` URL",
+            ),
+            (
+                Linked,
+                Some(Decline::SourceMap),
+                Some(Decline::SourceMap),
+                "a linked map is a file neither container can reach",
+            ),
+            (
+                External,
+                None,
+                Some(Decline::SourceMap),
+                "an external map is published unchanged, so the container that rewrites its \
+                 chunks would describe them with a map made before the rewrite",
+            ),
+        ] {
+            assert_eq!(
+                decline(map, Mode::Sea),
+                sea,
+                "{map:?} in a single-executable: {why}"
+            );
+            assert_eq!(
+                decline(map, Mode::Inline),
+                inline,
+                "{map:?} in a no-extract launcher: {why}"
+            );
+        }
     }
 
     /// A single-executable artifact's `process.execPath` is the artifact, and Node
