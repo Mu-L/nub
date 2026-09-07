@@ -265,6 +265,10 @@ function classifyRun(json: string): Verdict {
   }
   const c = (d.conclusion || "").toUpperCase();
   if (OK_CONCLUSIONS.has(c)) return { kind: "success", reason: `${jobs.length} job(s) green (${c})` };
+  // A run whose every job was gated off concludes SKIPPED. It verified nothing, so it
+  // is not success — the routine shape now that PR CI is opt-in and a `labeled` event
+  // for some OTHER label still creates a run with all jobs skipped.
+  if (c === "SKIPPED") return { kind: "failure", reason: "run concluded SKIPPED — no job ran (PR CI is opt-in: request a run with `gh pr edit <n> --add-label ci`)" };
   return { kind: "failure", reason: `run concluded ${c || "no-conclusion"}` };
 }
 

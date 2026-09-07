@@ -2,7 +2,7 @@
 // Pure classifier/resolver only (no gh, no real clock). Run: node --test scripts/ci-watch.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyRollup, verdictForBuckets, classifyPr, signatureOf, resolvePendingExit } from "./ci-watch.ts";
+import { classifyRollup, verdictForBuckets, classifyPr, classifyRun, signatureOf, resolvePendingExit } from "./ci-watch.ts";
 
 const NP_MS = 8 * 60_000;
 // Config with a far-future overall deadline so tests exercise the no-progress
@@ -139,4 +139,41 @@ test("deadline fires during a gh-failure streak: chunk cap on a null verdict →
   const exit = resolvePendingExit(null, "pr 9", 10, { lastSig: null, lastProgressAt: 0 }, cfg({ chunkDeadline: 0, chunkMin: 9 }));
   assert.equal(exit.code, 2);
   assert.match(exit.summary, /RERUN/);
+});
+
+// ---- opt-in PR CI: a SKIPPED check verifies nothing -------------------------
+// Every PR-gated workflow now guards its jobs on the `ci` label, so a pull request
+// nobody requested CI for produces skipped checks rather than green ones. These pin
+// the carve-out that keeps that from reading as a pass.
+
+test("all checks SKIPPED → pending 'no check has run', never success", () => {
+  const v = verdictForBuckets(classifyRollup([check("CI gate", "SKIPPED"), check("Check", "SKIPPED")], new Set()), false);
+  assert.equal(v.kind, "pending", "an unrequested PR must never classify green");
+  assert.match(v.reason, /no check has run/);
+  assert.match(v.reason, /--add-label ci/, "the reason must carry the command that fixes it");
+  assert.equal(v.greenNamed, 0);
+});
+
+test("all checks SKIPPED alongside a ghost → NOT ghostsOnly (never 'safe to --admin merge')", () => {
+  const v = verdictForBuckets(classifyRollup([check("CI gate", "SKIPPED"), ghost()], new Set()), false);
+  assert.equal(v.kind, "pending");
+  assert.equal(v.ghostsOnly, false, "exit 4 means every real check is green — a skipped rollup is not that");
+});
+
+test("--required mode: a SKIPPED required gate blocks the merge, it does not satisfy it", () => {
+  const v = verdictForBuckets(classifyRollup([check("CI gate", "SKIPPED")], new Set(["CI gate"])), true);
+  assert.equal(v.kind, "pending");
+  assert.deepEqual(v.realPending, ["CI gate"]);
+});
+
+test("path-gated skips alongside a real pass still SUCCEED (docs-only PR that DID opt in)", () => {
+  const rollup = [check("CI gate", "SUCCESS"), check("Check", "SKIPPED"), check("Clippy", "SKIPPED")];
+  assert.equal(verdictForBuckets(classifyRollup(rollup, new Set()), false).kind, "success");
+  assert.equal(verdictForBuckets(classifyRollup(rollup, new Set(["CI gate"])), true).kind, "success");
+});
+
+test("a run whose every job was gated off (conclusion SKIPPED) is not green", () => {
+  const v = classifyRun(JSON.stringify({ status: "completed", conclusion: "skipped", jobs: [] }));
+  assert.equal(v.kind, "failure");
+  assert.match(v.reason, /no job ran/);
 });
