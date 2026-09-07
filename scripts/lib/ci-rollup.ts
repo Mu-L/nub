@@ -15,6 +15,12 @@
 // modern `node` type-strips it with no build step — same constraint as its
 // importers.
 
+// The aggregate check every requested CI run ends on. It is the ONLY rollup item
+// that proves nub's own CI ran: a pull request carries third-party app checks
+// (Vercel, review bots) that go green entirely on their own, so "some check is
+// green" stopped meaning anything once PR CI became opt-in.
+const CI_GATE_CHECK = "CI gate";
+
 const FAILURE_CONCLUSIONS = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"]);
 // SKIPPED is deliberately NOT here. A skipped check ran nothing, so it verifies
 // nothing — and since PR CI became opt-in (a `labeled` trigger plus a per-job guard;
@@ -153,5 +159,5 @@ function verdictForBuckets(b: Buckets, hasRequired: boolean): Verdict {
   return { kind: "success", reason: `${b.greenNamed} check(s) green${b.skipped.length > 0 ? `, ${b.skipped.length} skipped` : ""} (of ${b.total} total)` };
 }
 
-export { FAILURE_CONCLUSIONS, OK_CONCLUSIONS, itemName, itemState, classifyRollup, joinCapped, verdictForBuckets };
+export { CI_GATE_CHECK, FAILURE_CONCLUSIONS, OK_CONCLUSIONS, itemName, itemState, classifyRollup, joinCapped, verdictForBuckets };
 export type { RollupItem, Buckets, Verdict };

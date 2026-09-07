@@ -11,7 +11,7 @@ const cfg = (over = {}) => ({ deadline: Date.now() + 60 * 60_000, chunkDeadline:
 
 const check = (name, conclusion) => ({ __typename: "CheckRun", name, status: "COMPLETED", conclusion, startedAt: "t", completedAt: "t" });
 const ghost = () => ({ __typename: "CheckRun", status: "IN_PROGRESS" }); // nameless, never-terminating (the #327 shape)
-const the327 = () => [...Array.from({ length: 51 }, (_, i) => check(`check ${i}`, "SUCCESS")), ghost()];
+const the327 = () => [check("CI gate", "SUCCESS"), ...Array.from({ length: 50 }, (_, i) => check(`check ${i}`, "SUCCESS")), ghost()];
 
 test("#327 shape: 51 green named checks + 1 nameless ghost → ghostsOnly, not success/failure", () => {
   const v = verdictForBuckets(classifyRollup(the327(), new Set()), false);
@@ -96,7 +96,7 @@ test("empty rollup → pending 'no checks registered yet' (wait-for-existence pr
 });
 
 test("all checks terminal + green, no ghost → clean SUCCESS (exit 0 path)", () => {
-  const v = classifyPr(JSON.stringify({ statusCheckRollup: [check("a", "SUCCESS"), check("b", "NEUTRAL"), check("c", "SKIPPED")] }), new Set());
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [check("CI gate", "SUCCESS"), check("b", "NEUTRAL"), check("c", "SKIPPED")] }), new Set());
   assert.equal(v.kind, "success");
 });
 
@@ -177,3 +177,43 @@ test("a run whose every job was gated off (conclusion SKIPPED) is not green", ()
   assert.equal(v.kind, "failure");
   assert.match(v.reason, /no job ran/);
 });
+
+// ---- opt-in PR CI: third-party app checks cannot stand in for the gate --------
+// Measured on the probe pull request that verified the opt-in change: a PR nobody
+// requested CI for still carries Vercel + review-bot checks, and they go green on
+// their own. Before this rule those three greens were a clean `success`.
+
+test("app checks green but no `CI gate` → pending, never success", () => {
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [
+    check("Vercel Preview Comments", "SUCCESS"), check("Vercel", "SUCCESS"), check("pullfrog", "SUCCESS"),
+  ] }), new Set());
+  assert.equal(v.kind, "pending");
+  assert.match(v.reason, /CI gate` is not green/);
+  assert.match(v.reason, /--add-label ci/);
+});
+
+test("app checks green + a green `CI gate` → success", () => {
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [
+    check("Vercel", "SUCCESS"), check("pullfrog", "SUCCESS"), check("CI gate", "SUCCESS"),
+  ] }), new Set());
+  assert.equal(v.kind, "success");
+});
+
+test("app checks green + a SKIPPED `CI gate` → pending (the unrequested-PR shape)", () => {
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [
+    check("Vercel", "SUCCESS"), check("CI gate", "SKIPPED"),
+  ] }), new Set());
+  assert.equal(v.kind, "pending");
+});
+
+test("no gate + a ghost is NOT ghostsOnly — exit 4 must never fire without the gate", () => {
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [check("Vercel", "SUCCESS"), ghost()] }), new Set());
+  assert.equal(v.kind, "pending");
+  assert.equal(v.ghostsOnly, false, "exit 4 tells the caller it is safe to --admin merge");
+});
+
+test("an explicit --required set still decides on its own (no implicit gate on top)", () => {
+  const v = classifyPr(JSON.stringify({ statusCheckRollup: [check("lat check", "SUCCESS")] }), new Set(["lat check"]));
+  assert.equal(v.kind, "success");
+});
+
