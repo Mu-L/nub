@@ -124,12 +124,30 @@ fi
 untracked=$(git -C "$root" ls-files --others --exclude-standard -- \
   vendor/aube vendor/libsui crates runtime $leaves 2>/dev/null || true)
 
+# Digest binary, resolved EXPLICITLY rather than off PATH. A PATH-resolved
+# `shasum` can be a third-party perl build that HANGS rather than failing: on
+# the maintainer's Mac, MacPorts' `/opt/local/bin/shasum` never returns and
+# ignores SIGTERM, so even `timeout` cannot kill it. The `|| true` below guards
+# a non-zero exit and is no help against a hang — this wedged `make install-dev`
+# for three hours, twice, with the script producing no output at all because it
+# blocks before its own banner. Prefer coreutils `sha1sum` (a C binary, present
+# on the Linux builders and in CI), then the system perl `shasum` on macOS.
+# Every candidate is SHA-1 over the same bytes and prints `<hash>  -`, so the
+# 12-char key is unchanged and existing warm buckets stay valid.
+if command -v sha1sum >/dev/null 2>&1; then
+  digest=sha1sum
+elif [ -x /usr/bin/shasum ]; then
+  digest=/usr/bin/shasum
+else
+  digest=shasum
+fi
+
 # The content key names the bucket AND, when isolating, names the seed to clone
 # from — so it is computed unconditionally. `ls-files -s` emits the staged blob
 # OIDs, so this is a pure content hash of the depended-on crates. ~0.2s.
 # shellcheck disable=SC2086
 key=$(git -C "$root" ls-files -s -- vendor/aube vendor/libsui crates runtime $leaves 2>/dev/null \
-  | shasum 2>/dev/null | cut -c1-12 || true)
+  | "$digest" 2>/dev/null | cut -c1-12 || true)
 if [ "$keyed" = 1 ]; then
   bucket="$shared${key:+-$key}"
 else
