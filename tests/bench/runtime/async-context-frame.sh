@@ -1,7 +1,11 @@
 #!/bin/bash
-# AsyncLocalStorage on AsyncContextFrame: Node 22 default vs the flag Nub injects on 22.9–23.x.
-#   node 22 (default)  |  node 22 --experimental-async-context-frame  |  nub (augmented)  |  nub --node
+# AsyncLocalStorage on AsyncContextFrame: the implementation Node 24 made the default, which Nub
+# switches on for Node 22.9–23.x with --experimental-async-context-frame.
+#   node (default)  |  node with the other implementation  |  nub (augmented)  |  nub --node
 # on (a) a request-shaped AsyncLocalStorage loop and (b) Fastify 5 + OpenTelemetry SDK under autocannon.
+# The "other implementation" control is the frame on Node 22/23 and the legacy path
+# (--no-async-context-frame) on 24+, where nub injects nothing and node equals nub by construction;
+# a run there is the control that shows the figure is a Node 22 LTS claim, not a Node 26 one.
 #
 # Runs at the repo root with NUB_BIN set, which is the `remote-build --job adhoc` contract:
 #   nub scripts/remote-build.ts --job adhoc --script tests/bench/runtime/async-context-frame.sh --detach
@@ -10,12 +14,14 @@
 set -u
 echo "NUB_BIN=$NUB_BIN"; "$NUB_BIN" --version
 ARCH=$(uname -m); case "$ARCH" in x86_64) NA=x64;; aarch64|arm64) NA=arm64;; *) echo "unknown arch $ARCH"; exit 1;; esac
-NV=${NODE_VERSION:-v22.23.2}
+NV=${NODE_VERSION:-v26.8.1}
 W=$(mktemp -d /tmp/acf.XXXX); cd "$W" || exit 1; pwd
 curl -fsSL "https://nodejs.org/dist/$NV/node-$NV-linux-$NA.tar.xz" -o node.tar.xz || exit 1
 mkdir n22 && tar -xJf node.tar.xz -C n22 --strip-components=1 || exit 1
 N22="$W/n22/bin"; "$N22/node" --version
 nproc; uptime
+MAJOR=${NV#v}; MAJOR=${MAJOR%%.*}
+if [ "$MAJOR" -ge 24 ]; then OTHER=--no-async-context-frame; OTHER_LABEL=node-legacy; else OTHER=--experimental-async-context-frame; OTHER_LABEL=node+flag; fi
 
 cat > als.mjs <<'EOF'
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -44,7 +50,7 @@ loop() { # loop <label> <cmd...>
 }
 for r in 1 2 3; do
   loop "node" "$N22/node"
-  loop "node+flag" "$N22/node" --experimental-async-context-frame
+  loop "$OTHER_LABEL" "$N22/node" "$OTHER"
   loop "nub" "$NUB_BIN"
   loop "nub--node" "$NUB_BIN" --node
 done
@@ -85,7 +91,7 @@ bench() { # bench <label> <cmd...>
 for r in 1 2 3; do
   echo "--- round $r ---"
   PATH="$N22:$PATH" bench "node" "$N22/node"
-  PATH="$N22:$PATH" bench "node+flag" "$N22/node" --experimental-async-context-frame
+  PATH="$N22:$PATH" bench "$OTHER_LABEL" "$N22/node" "$OTHER"
   PATH="$N22:$PATH" bench "nub" "$NUB_BIN"
   PATH="$N22:$PATH" bench "nub--node" "$NUB_BIN" --node
 done

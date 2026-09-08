@@ -4,8 +4,10 @@ Measurements of the augmentations Nub applies to a running Node process, each ag
 
 | Script | What it measures |
 |--------|------------------|
-| `async-context-frame.sh` | `AsyncLocalStorage` on Node 22 with and without `--experimental-async-context-frame` (the flag Nub injects on 22.9–23.x): a request-shaped store/await loop, and Fastify 5 + OpenTelemetry SDK under autocannon. |
+| `async-context-frame.sh` | `AsyncLocalStorage` with and without the context-frame implementation (Node 24's default, which Nub switches on for 22.9–23.x): a request-shaped store/await loop, and Fastify 5 + OpenTelemetry SDK under autocannon. |
 | `threadpool.sh` | `UV_THREADPOOL_SIZE` at Node's fixed 4 versus the core count Nub installs: Fastify 5 routes that queue on the pool (pbkdf2, gzip, file read, stat) under autocannon, then a `dns.lookup` burst. Plain `node` with the variable set, so only the pool size varies. |
+
+Both run on the latest Node by default (`NODE_VERSION=v22.x` overrides it). An augmentation that applies to every Node is measured on the latest major, so the figure is about Nub and not about an old Node. A version-gated one, like the context-frame flag, is measured on the line it applies to and the figure names that line; the latest-Node run is then the control that shows the two conditions equal where the gate is closed.
 
 Both run on a Linux box at the repo root with `NUB_BIN` set, which is what `remote-build --job adhoc` provides:
 

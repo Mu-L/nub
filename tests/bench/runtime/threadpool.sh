@@ -1,5 +1,6 @@
 #!/bin/bash
-# libuv threadpool size: Node's fixed 4 vs the core count Nub installs (UV_THREADPOOL_SIZE=max(4, cores)).
+# libuv threadpool size: Node's fixed 4 vs the core count Nub installs (UV_THREADPOOL_SIZE=max(4, cores)). Runs on the
+# latest Node by default; the augmentation is version-independent, so the figure is drawn from that run.
 # Fastify 5 routes that queue on the pool (pbkdf2, async gzip, a file read, a stat) under autocannon,
 # then a dns.lookup burst. Plain `node` with the variable set on the command line, so the measurement is
 # of the pool size alone and not of any other augmentation.
@@ -10,11 +11,11 @@
 # reads the run's output rather than numbers typed by hand (see .claude/skills/nub-charts).
 set -u
 ARCH=$(uname -m); case "$ARCH" in x86_64) NA=x64;; aarch64|arm64) NA=arm64;; *) echo "unknown arch $ARCH"; exit 1;; esac
-NV=${NODE_VERSION:-v22.23.2}
+NV=${NODE_VERSION:-v26.8.1}
 ROUNDS=${ROUNDS:-5}
 W=$(mktemp -d /tmp/tp.XXXX); cd "$W" || exit 1; pwd; nproc; uptime
 curl -fsSL "https://nodejs.org/dist/$NV/node-$NV-linux-$NA.tar.xz" -o node.tar.xz || exit 1
-mkdir n22 && tar -xJf node.tar.xz -C n22 --strip-components=1 || exit 1
+mkdir n22 && tar -xJf node.tar.xz -C n22 --strip-components=1 || exit 1  # n22 is the dir name, whatever $NV is
 N22="$W/n22/bin"; NP=$(nproc)
 export NODE_NO_WARNINGS=1
 cat > package.json <<'EOF'
