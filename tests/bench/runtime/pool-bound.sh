@@ -1,12 +1,12 @@
 #!/bin/bash
 # Workloads that queue CPU-heavy work on libuv's threadpool, where Node's fixed 4 threads cap
 # throughput at 4 concurrent tasks whatever the core count: password hashing (bcrypt, scrypt,
-# pbkdf2 at the OWASP iteration count), sharp thumbnails and gzip of a JSON response. Fastify 5 endpoints under autocannon,
+# pbkdf2 at the OWASP iteration count), sharp thumbnails and gzip of a 1 MB response. Fastify 5 endpoints under autocannon,
 # plain `node` (4 threads) against `nub` (the core count). Meant for a box with many cores; on 4 or
 # fewer nub sets nothing different (max(4, cores)), so there is nothing to measure there.
 #
 # Runs at the repo root with NUB_BIN set, which is the `remote-build --job adhoc` contract:
-#   nub scripts/remote-build.ts --job adhoc --script tests/bench/runtime/pool-bound.sh --machine c4-standard-16 --detach
+#   nub scripts/remote-build.ts --job adhoc --script tests/bench/runtime/pool-bound.sh --machine c3d-standard-16 --detach
 # Every measurement is also printed as one machine-readable `ROW {...}` line.
 set -u
 echo "NUB_BIN=$NUB_BIN"; "$NUB_BIN" --version
@@ -31,8 +31,10 @@ import compress from "@fastify/compress";
 import { scrypt, pbkdf2 } from "node:crypto";
 const app = Fastify({ logger: false });
 await app.register(compress, { global: false, threshold: 0 });
-// a ~270 KB JSON API response, gzipped per request (zlib runs on the threadpool)
-const payload = { rows: Array.from({ length: 3000 }, (_, i) => ({ id: i, name: "user" + i, email: "user" + i + "@example.com", tags: ["a", "b", "c"], score: i * 1.5 })) };
+// a ~1 MB JSON body, built once and gzipped per request (zlib runs on the threadpool). Serialized
+// ahead of time: at 270 KB, serializing on the main thread cost more than the compression, so the
+// route measured the event loop and not the pool (16 vCPU: 881 vs 844 req/s).
+const payload = Buffer.from(JSON.stringify({ rows: Array.from({ length: 11000 }, (_, i) => ({ id: i, name: "user" + i, email: "user" + i + "@example.com", tags: ["a", "b", "c"], score: i * 1.5 })) }));
 app.get("/gzip", { compress: { threshold: 0 } }, async (req, reply) => { reply.header("content-type", "application/json"); return payload; });
 const hash = await bcrypt.hash("correct horse battery staple", 12);
 app.get("/bcrypt", async () => ({ ok: await bcrypt.compare("correct horse battery staple", hash) }));
