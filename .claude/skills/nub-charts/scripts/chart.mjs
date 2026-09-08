@@ -118,8 +118,22 @@ function heading_(s, t, X0, padY, heading, headingNote) {
 export function pairedChart({ groups, heading, headingNote, aLabel = "node", bLabel = "nub", accent = "ember", title, theme = "light", opaque = false }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
-  const W = 720, X0 = 200, XMAX = 640, rowH = 44, barH = 12, gap = 3;
+  const W = 720, X0 = 200, rowH = 44, barH = 12, gap = 3;
   const padY = 22;
+  // The bar column ends at 640 unless the longest bar's value label and note would run off the
+  // canvas, in which case the column shrinks to fit them: a clipped "+3%" is invisible in the
+  // source and the first thing a reader sees.
+  const overhang = Math.max(0, ...groups.flatMap((g) => {
+    const unit = g.unit ?? fmtReq;
+    const max = Math.max(...g.rows.flatMap((r) => [r.a, r.b]));
+    return g.rows.map((r) => {
+      const v = Math.max(r.a, r.b);
+      const label = v === r.b ? unit(r.b) : unit(r.a);
+      const note = v === r.b && r.note ? 8 + textW(r.note, 11) : 0;
+      return X0 + (v / axisFor(max).max) * (640 - X0) + 7 + textW(label, 11) + note - (W - padY);
+    });
+  }));
+  const XMAX = 640 - Math.ceil(overhang);
   const headH = heading ? 20 : 0;
   const legendH = aLabel && bLabel ? 22 : 0;
   const groupTitleH = 24, axisH = 30, groupGap = 18;
