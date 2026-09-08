@@ -40,7 +40,7 @@ A chart is the last step, never the first. The number comes from a benchmark und
 
 A chart makes a number look settled, so check it is before you commit it to a figure.
 
-- **Run several rounds and look at the spread before picking a statistic.** For a time, the per-cell minimum across rounds is the closest estimate of the noise floor. For a throughput under a load generator, the rounds cluster and the mean is the honest figure; state the round count in the footnote. One round is an anecdote.
+- **Run several rounds and look at the spread before picking a statistic.** For a time, the per-cell minimum across rounds is the closest estimate of the noise floor. For a throughput under a load generator, the rounds cluster and the mean is the honest figure; state the round count in the page caption. One round is an anecdote.
 - **Interleave the conditions.** Alternate node and nub on every round rather than running all of one then all of the other, so a drift in the box lands on both sides equally. The threadpool file-read question was settled only by an interleaved rerun: two back-to-back rounds read 4–8% apart, five interleaved rounds read 1.9%.
 - **Watch which side of a comparison is unstable.** When the ratio swings but one series is rock-steady, the noise is entirely in the other one, and that usually names the mechanism.
 - **Look for a control inside your own data.** `nub --node` in the same run is plain Node with nothing injected; if it does not match `node`, the harness is measuring something other than the augmentation. `node` with the flag set by hand is the other control: if `nub` does not match it, the augmentation is not what is being measured.
