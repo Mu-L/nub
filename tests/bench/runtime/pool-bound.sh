@@ -29,6 +29,9 @@ import bcrypt from "bcrypt";
 import sharp from "sharp";
 import compress from "@fastify/compress";
 import { scrypt, pbkdf2 } from "node:crypto";
+import { gzip } from "node:zlib";
+import { promisify } from "node:util";
+const gzipAsync = promisify(gzip);
 const app = Fastify({ logger: false });
 await app.register(compress, { global: false, threshold: 0 });
 // a ~1 MB JSON body, built once and gzipped per request (zlib runs on the threadpool). Serialized
@@ -36,6 +39,9 @@ await app.register(compress, { global: false, threshold: 0 });
 // route measured the event loop and not the pool (16 vCPU: 881 vs 844 req/s).
 const payload = Buffer.from(JSON.stringify({ rows: Array.from({ length: 11000 }, (_, i) => ({ id: i, name: "user" + i, email: "user" + i + "@example.com", tags: ["a", "b", "c"], score: i * 1.5 })) }));
 app.get("/gzip", { compress: { threshold: 0 } }, async (req, reply) => { reply.header("content-type", "application/json"); return payload; });
+// the same body gzipped in one call: one pool task per request, where the streaming compressor
+// above queues one task per 16 KB chunk with an event-loop round trip between them
+app.get("/gzip-once", async (req, reply) => { reply.header("content-type", "application/json").header("content-encoding", "gzip"); return gzipAsync(payload); });
 const hash = await bcrypt.hash("correct horse battery staple", 12);
 app.get("/bcrypt", async () => ({ ok: await bcrypt.compare("correct horse battery staple", hash) }));
 app.get("/scrypt", async () => new Promise((res, rej) => scrypt("correct horse battery staple", "salt", 64, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, k) => e ? rej(e) : res({ k: k.length }))));
@@ -63,7 +69,7 @@ bench() { # bench <label> <route> <conns> <cmd...>
   kill $pid; wait $pid 2>/dev/null
 }
 echo "=== pool-bound routes, node (4 threads) vs nub ($NP cores), Node $NV, autocannon -d 15, $ROUNDS interleaved rounds ==="
-for r in $(seq 1 "$ROUNDS"); do echo "--- round $r ---"; for route in /bcrypt /scrypt /pbkdf2 /thumb /gzip; do
+for r in $(seq 1 "$ROUNDS"); do echo "--- round $r ---"; for route in /bcrypt /scrypt /pbkdf2 /thumb /gzip /gzip-once; do
   PATH="$N:$PATH" bench node "$route" 64 "$N/node"
   PATH="$N:$PATH" bench nub "$route" 64 "$NUB_BIN"
 done; done
