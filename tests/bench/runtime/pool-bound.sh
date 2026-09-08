@@ -1,12 +1,12 @@
 #!/bin/bash
 # Workloads that queue CPU-heavy work on libuv's threadpool, where Node's fixed 4 threads cap
 # throughput at 4 concurrent tasks whatever the core count: password hashing (bcrypt, scrypt,
-# pbkdf2 at the OWASP iteration count) and sharp thumbnails. Fastify 5 endpoints under autocannon,
+# pbkdf2 at the OWASP iteration count), sharp thumbnails and gzip of a JSON response. Fastify 5 endpoints under autocannon,
 # plain `node` (4 threads) against `nub` (the core count). Meant for a box with many cores; on 4 or
 # fewer nub sets nothing different (max(4, cores)), so there is nothing to measure there.
 #
 # Runs at the repo root with NUB_BIN set, which is the `remote-build --job adhoc` contract:
-#   nub scripts/remote-build.ts --job adhoc --script tests/bench/runtime/pool-bound.sh --machine c3-standard-22 --detach
+#   nub scripts/remote-build.ts --job adhoc --script tests/bench/runtime/pool-bound.sh --machine c4-standard-16 --detach
 # Every measurement is also printed as one machine-readable `ROW {...}` line.
 set -u
 echo "NUB_BIN=$NUB_BIN"; "$NUB_BIN" --version
@@ -21,14 +21,19 @@ export NODE_NO_WARNINGS=1
 cat > package.json <<'EOF'
 { "name": "pool-bound", "private": true, "type": "module" }
 EOF
-PATH="$N:$PATH" "$N/npm" install --silent --no-audit --no-fund fastify@5 bcrypt sharp autocannon > npm.log 2>&1 || { echo "npm install failed"; tail -20 npm.log; exit 1; }
+PATH="$N:$PATH" "$N/npm" install --silent --no-audit --no-fund fastify@5 @fastify/compress bcrypt sharp autocannon > npm.log 2>&1 || { echo "npm install failed"; tail -20 npm.log; exit 1; }
 
 cat > server.mjs <<'EOF'
 import Fastify from "fastify";
 import bcrypt from "bcrypt";
 import sharp from "sharp";
+import compress from "@fastify/compress";
 import { scrypt, pbkdf2 } from "node:crypto";
 const app = Fastify({ logger: false });
+await app.register(compress, { global: false, threshold: 0 });
+// a ~270 KB JSON API response, gzipped per request (zlib runs on the threadpool)
+const payload = { rows: Array.from({ length: 3000 }, (_, i) => ({ id: i, name: "user" + i, email: "user" + i + "@example.com", tags: ["a", "b", "c"], score: i * 1.5 })) };
+app.get("/gzip", { compress: { threshold: 0 } }, async (req, reply) => { reply.header("content-type", "application/json"); return payload; });
 const hash = await bcrypt.hash("correct horse battery staple", 12);
 app.get("/bcrypt", async () => ({ ok: await bcrypt.compare("correct horse battery staple", hash) }));
 app.get("/scrypt", async () => new Promise((res, rej) => scrypt("correct horse battery staple", "salt", 64, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, k) => e ? rej(e) : res({ k: k.length }))));
@@ -50,13 +55,13 @@ bench() { # bench <label> <route> <conns> <cmd...>
   # nub must have sized the pool, or this run compares node with node: the binary under test
   # has to come from a tree that carries the threadpool augmentation.
   if [ "$label" = nub ] && [ "$pool" = unset ]; then echo "FATAL: nub did not set UV_THREADPOOL_SIZE (built from a tree without the augmentation?)"; kill $pid; exit 1; fi
-  local res; res=$(PATH="$N:$PATH" ./node_modules/.bin/autocannon -c "$conns" -d 15 --json "http://127.0.0.1:$port$route" 2>/dev/null | "$N/node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(JSON.stringify({rps:Math.round(j.requests.average*10)/10,p50:j.latency.p50,p99:j.latency.p99,errors:j.errors,non2xx:j.non2xx}))})')
+  local res; res=$(PATH="$N:$PATH" ./node_modules/.bin/autocannon -c "$conns" -d 15 -H "accept-encoding: gzip" --json "http://127.0.0.1:$port$route" 2>/dev/null | "$N/node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(JSON.stringify({rps:Math.round(j.requests.average*10)/10,p50:j.latency.p50,p99:j.latency.p99,errors:j.errors,non2xx:j.non2xx}))})')
   echo "$label pool=$pool $route: $res"
   echo "ROW {\"bench\":\"pool-bound\",\"label\":\"$label\",\"pool\":\"$pool\",\"route\":\"$route\",\"result\":$res}"
   kill $pid; wait $pid 2>/dev/null
 }
 echo "=== pool-bound routes, node (4 threads) vs nub ($NP cores), Node $NV, autocannon -d 15, $ROUNDS interleaved rounds ==="
-for r in $(seq 1 "$ROUNDS"); do echo "--- round $r ---"; for route in /bcrypt /scrypt /pbkdf2 /thumb; do
+for r in $(seq 1 "$ROUNDS"); do echo "--- round $r ---"; for route in /bcrypt /scrypt /pbkdf2 /thumb /gzip; do
   PATH="$N:$PATH" bench node "$route" 64 "$N/node"
   PATH="$N:$PATH" bench nub "$route" 64 "$NUB_BIN"
 done; done
