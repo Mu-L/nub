@@ -31,7 +31,7 @@ import { scrypt, pbkdf2 } from "node:crypto";
 const app = Fastify({ logger: false });
 const hash = await bcrypt.hash("correct horse battery staple", 12);
 app.get("/bcrypt", async () => ({ ok: await bcrypt.compare("correct horse battery staple", hash) }));
-app.get("/scrypt", async () => new Promise((res, rej) => scrypt("correct horse battery staple", "salt", 64, { N: 2 ** 15, r: 8, p: 1 }, (e, k) => e ? rej(e) : res({ k: k.length }))));
+app.get("/scrypt", async () => new Promise((res, rej) => scrypt("correct horse battery staple", "salt", 64, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (e, k) => e ? rej(e) : res({ k: k.length }))));
 app.get("/pbkdf2", async () => new Promise((res, rej) => pbkdf2("correct horse battery staple", "salt", 600000, 32, "sha256", (e, k) => e ? rej(e) : res({ k: k.length }))));
 // a 4000x3000 photo-like source, generated once; every request resizes it to a 320px JPEG
 const source = await sharp({ create: { width: 4000, height: 3000, channels: 3, noise: { type: "gaussian", mean: 128, sigma: 40 } } }).jpeg({ quality: 90 }).toBuffer();
@@ -47,6 +47,9 @@ bench() { # bench <label> <route> <conns> <cmd...>
   local port; port=$(sed -n 's/PORT=\([0-9]*\).*/\1/p' server.out | head -1)
   if [ -z "$port" ]; then echo "$label $route: server failed"; cat server.out; kill $pid 2>/dev/null; return; fi
   local pool; pool=$(sed -n 's/.*UV_THREADPOOL_SIZE=\([^ ]*\).*/\1/p' server.out | head -1)
+  # nub must have sized the pool, or this run compares node with node: the binary under test
+  # has to come from a tree that carries the threadpool augmentation.
+  if [ "$label" = nub ] && [ "$pool" = unset ]; then echo "FATAL: nub did not set UV_THREADPOOL_SIZE (built from a tree without the augmentation?)"; kill $pid; exit 1; fi
   local res; res=$(PATH="$N:$PATH" ./node_modules/.bin/autocannon -c "$conns" -d 15 --json "http://127.0.0.1:$port$route" 2>/dev/null | "$N/node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(JSON.stringify({rps:Math.round(j.requests.average*10)/10,p50:j.latency.p50,p99:j.latency.p99,errors:j.errors,non2xx:j.non2xx}))})')
   echo "$label pool=$pool $route: $res"
   echo "ROW {\"bench\":\"pool-bound\",\"label\":\"$label\",\"pool\":\"$pool\",\"route\":\"$route\",\"result\":$res}"
