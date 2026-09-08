@@ -87,22 +87,6 @@ function fmtTick(v, unitLabel, last, axisMax) {
 /** Approximate rendered width of 12px Encode Sans, for placing things that must not collide. */
 const textW = (s, size = 12) => String(s).length * size * 0.54;
 
-/** Greedy wrap at a character budget — the charts use one font size for footnotes, so characters track width closely enough. */
-function wrapText(text, maxChars) {
-  const lines = [];
-  let line = "";
-  for (const word of String(text).split(/\s+/)) {
-    if (!line) line = word;
-    else if (line.length + 1 + word.length <= maxChars) line += ` ${word}`;
-    else {
-      lines.push(line);
-      line = word;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
 function frame({ theme, opaque, W, H, title }) {
   const t = THEMES[theme];
   let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${SANS}" font-size="13">`;
@@ -111,48 +95,41 @@ function frame({ theme, opaque, W, H, title }) {
   return s;
 }
 
-/** Where a right-aligned legend of two swatches starts, so a caption can tell whether it collides. */
-function legendStart(x, aLabel, bLabel) {
-  return x - (14 + textW(bLabel)) - 16 - (14 + textW(aLabel));
-}
-
+/** A two-swatch legend, left-aligned with the bar column on its own line under the heading. */
 function legend(s, t, x, y, aLabel, bLabel, barFill) {
-  const bx = x - (14 + textW(bLabel));
-  const ax = bx - 16 - (14 + textW(aLabel));
-  s += `<rect x="${ax.toFixed(1)}" y="${y - 10}" width="10" height="10" rx="2" fill="${t.track}"/><text x="${(ax + 14).toFixed(1)}" y="${y - 1}" fill="${t.muted}" font-size="12">${esc(aLabel)}</text>`;
+  s += `<rect x="${x}" y="${y - 10}" width="10" height="10" rx="2" fill="${t.track}"/><text x="${x + 14}" y="${y - 1}" fill="${t.muted}" font-size="12">${esc(aLabel)}</text>`;
+  const bx = x + 14 + textW(aLabel) + 18;
   s += `<rect x="${bx.toFixed(1)}" y="${y - 10}" width="10" height="10" rx="2" fill="${barFill}"/><text x="${(bx + 14).toFixed(1)}" y="${y - 1}" fill="${t.muted}" font-size="12">${esc(bLabel)}</text>`;
   return s;
+}
+
+function heading_(s, t, X0, padY, heading, headingNote) {
+  if (!heading) return s;
+  return s + `<text x="${X0}" y="${padY + 16}" fill="${t.text}" font-weight="700" font-size="14">${esc(heading)}${headingNote ? `<tspan dx="9" fill="${t.muted}" font-weight="400">${esc(headingNote)}</tspan>` : ""}</text>`;
 }
 
 /**
  * groups: [{ title?, unit?, unitLabel?, rows: [{ label, a, b, note? }] }] — `a` is the baseline
  * (plain node, drawn as a track-colored bar), `b` the subject (nub, drawn in the accent). Each
  * group has its own axis, so `unit`/`unitLabel` are per group; pass one group when everything
- * shares a unit. Rows are drawn in the order given.
+ * shares a unit. Every group in a figure reads in the SAME direction — a figure never mixes
+ * "higher is better" with "lower is better"; that is two figures. Rows are drawn in the order given.
  */
-export function pairedChart({ groups, heading, headingNote, caption, footnote, aLabel = "node", bLabel = "nub", accent = "ember", title, theme = "light", opaque = false }) {
+export function pairedChart({ groups, heading, headingNote, aLabel = "node", bLabel = "nub", accent = "ember", title, theme = "light", opaque = false }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
-  const W = 720, X0 = 230, XMAX = 620, rowH = 44, barH = 12, gap = 3;
+  const W = 720, X0 = 200, XMAX = 640, rowH = 44, barH = 12, gap = 3;
   const padY = 22;
   const headH = heading ? 20 : 0;
-  // the legend shares the caption line unless the caption would run into it, in which case it drops to its own line
-  const hasLegend = Boolean(aLabel && bLabel);
-  const legendWraps = hasLegend && caption && X0 + textW(caption) + 16 > legendStart(XMAX, aLabel, bLabel);
-  const capH = (caption || hasLegend ? 18 : 0) + (legendWraps ? 18 : 0);
+  const legendH = aLabel && bLabel ? 22 : 0;
   const groupTitleH = 24, axisH = 30, groupGap = 18;
-  const footLines = footnote ? wrapText(footnote, 122) : [];
-  const footH = footLines.length ? 14 + footLines.length * 14 : 0;
-  const top = padY + headH + capH + 10;
+  const top = padY + headH + legendH + 8;
   const plotH = groups.reduce((h, g) => h + (g.title ? groupTitleH : 0) + g.rows.length * rowH + axisH, 0) + (groups.length - 1) * groupGap;
-  const H = top + plotH + footH + padY;
+  const H = top + plotH + padY - 8;
 
   let s = frame({ theme, opaque, W, H, title: title ?? heading });
-  if (heading)
-    s += `<text x="${X0}" y="${padY + 16}" fill="${t.text}" font-weight="700" font-size="14">${esc(heading)}${headingNote ? `<tspan dx="9" fill="${t.muted}" font-weight="400">&#8212; ${esc(headingNote)}</tspan>` : ""}</text>`;
-  const capY = padY + headH + 16;
-  if (caption) s += `<text x="${X0}" y="${capY}" fill="${t.muted}" font-size="12">${esc(caption)}</text>`;
-  if (hasLegend) s = legend(s, t, XMAX, legendWraps ? capY + 18 : capY, aLabel, bLabel, barFill);
+  s = heading_(s, t, X0, padY, heading, headingNote);
+  if (legendH) s = legend(s, t, X0, padY + headH + 16, aLabel, bLabel, barFill);
 
   let y = top;
   for (const g of groups) {
@@ -183,10 +160,6 @@ export function pairedChart({ groups, heading, headingNote, caption, footnote, a
     });
     y = axisY + axisH + groupGap;
   }
-
-  footLines.forEach((line, li) => {
-    s += `<text x="${padY}" y="${H - padY - (footLines.length - 1 - li) * 14 - 2}" fill="${t.muted}" font-size="11">${esc(line)}</text>`;
-  });
   return `${s}</svg>`;
 }
 
@@ -196,31 +169,23 @@ export function pairedChart({ groups, heading, headingNote, caption, footnote, a
  * monotone). Only for a measurement where the SMALLER number is the subject: a time, never a
  * throughput — use pairedChart for those.
  */
-export function overlapChart({ rows, heading, headingNote, caption, footnote, trackLabel, barLabel, legendCorner, title, axisMax, ticks, unit = fmtNs, unitLabel = "ns", accent = "ember", theme = "light", opaque = false, callout }) {
+export function overlapChart({ rows, heading, headingNote, trackLabel, barLabel, title, axisMax, ticks, unit = fmtNs, unitLabel = "ns", accent = "ember", theme = "light", opaque = false, callout }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
   const W = 720, X0 = 250, XMAX = 610, rowH = 34, barH = 20;
-  const headH = heading ? 20 : 0;
   const padY = 22; // breathing room above the heading and below the axis labels; without it the figure reads as cropped
-  // the footnote spans the full canvas rather than the plot column: it captions the whole figure and needs the width
-  const footLines = footnote ? wrapText(footnote, 122) : [];
-  const footH = footLines.length ? 16 + footLines.length * 14 : 0;
-  const top = 30 + headH + padY;
-  const H = top + rows.length * rowH + 34 + footH + padY;
+  const headH = heading ? 20 : 0;
+  const legendH = trackLabel && barLabel ? 22 : 0;
+  const top = padY + headH + legendH + 12;
+  const H = top + rows.length * rowH + 34 + padY;
   const axis = axisMax ? { max: axisMax, ticks: ticks ?? axisFor(axisMax).ticks } : axisFor(Math.max(...rows.map((r) => r.track)));
   const sx = (v) => Math.max((v / axis.max) * (XMAX - X0), 3);
 
-  let s = frame({ theme, opaque, W, H, title: title ?? caption });
-  if (heading)
-    s += `<text x="${X0}" y="${16 + padY}" fill="${t.text}" font-weight="700" font-size="14">${esc(heading)}${headingNote && !legendCorner ? `<tspan dx="9" fill="${t.muted}" font-weight="400">&#8212; ${esc(headingNote)}</tspan>` : ""}</text>`;
-  const capY = 16 + headH + padY;
-  if (caption) s += `<text x="${X0}" y="${capY}" fill="${t.muted}" font-size="12">${esc(caption)}</text>`;
-  if (trackLabel && !legendCorner) s = legend(s, t, XMAX, capY, trackLabel, barLabel, barFill);
+  let s = frame({ theme, opaque, W, H, title: title ?? heading });
+  s = heading_(s, t, X0, padY, heading, headingNote);
+  if (legendH) s = legend(s, t, X0, padY + headH + 16, trackLabel, barLabel, barFill);
 
   const axisY = top + rows.length * rowH + 6;
-  footLines.forEach((line, li) => {
-    s += `<text x="${padY}" y="${axisY + 40 + li * 14}" fill="${t.muted}" font-size="11">${esc(line)}</text>`;
-  });
   // A callout needs an empty wedge to sit in, which only exists when the short rows are much
   // shorter than the long ones. Grid lines break around it so they never cross the numeral.
   const block = callout ? { x0: callout.x - 96, x1: XMAX + 6, y0: top + 128, y1: top + 244 } : null;
@@ -247,22 +212,6 @@ export function overlapChart({ rows, heading, headingNote, caption, footnote, tr
     }
   });
 
-  if (trackLabel && legendCorner) {
-    // bottom-right, in the wedge the short rows leave empty; headingNote captions the block instead of the title
-    const lx = 452;
-    const baseY = top + (rows.length - 1) * rowH + (rowH - barH) / 2 + 14;
-    const line = (i) => baseY - (2 - i) * 17;
-    // an opaque plate under the block: it sits over the plot, and muted text on a track bar is unreadable
-    const plateW = Math.max(headingNote ? headingNote.length * 6.9 : 0, 15 + trackLabel.length * 6.4, 15 + barLabel.length * 6.4);
-    const plateX = lx - 10;
-    const plateTop = (headingNote ? line(0) - 17 : line(1)) - 13;
-    s += `<rect x="${plateX}" y="${plateTop.toFixed(1)}" width="${Math.min(plateW + 20, W - plateX - 6).toFixed(1)}" height="${(line(2) + 7 - plateTop).toFixed(1)}" rx="6" fill="${t.page}"/>`;
-    if (headingNote)
-      s += `<text x="${lx}" y="${line(0) - 17}" fill="${t.text}" font-weight="600" font-size="12">${esc(headingNote)}</text>`;
-    s += `<rect x="${lx}" y="${line(1) - 9}" width="10" height="10" rx="2" fill="${t.track}"/><text x="${lx + 15}" y="${line(1)}" fill="${t.muted}" font-size="12">${esc(trackLabel)}</text>`;
-    s += `<rect x="${lx}" y="${line(2) - 9}" width="10" height="10" rx="2" fill="${barFill}"/><text x="${lx + 15}" y="${line(2)}" fill="${t.muted}" font-size="12">${esc(barLabel)}</text>`;
-  }
-
   if (callout) {
     s += `<text x="${callout.x}" y="${top + 150}" text-anchor="middle" fill="${t.muted}" font-size="16">${esc(callout.pre ?? "up to")}</text>`;
     s += `<text x="${callout.x}" y="${top + 208}" text-anchor="middle" fill="${barFill}" font-weight="800" font-size="62">${esc(callout.value)}</text>`;
@@ -276,7 +225,7 @@ export function overlapChart({ rows, heading, headingNote, caption, footnote, tr
  * largest value in the whole chart. `highlight: true` paints nub's bars in the accent, "alt" in
  * the sky accent (a second nub configuration); everything else is the track color.
  */
-export function rankedChart({ groups, caption, title, unit = fmtOps, accent = "ember", theme = "light", opaque = false }) {
+export function rankedChart({ groups, heading, title, unit = fmtOps, accent = "ember", theme = "light", opaque = false }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
   const W = 720, X0 = 160, XMAX = 640, rowH = 30, barH = 18, top = 44, groupGap = 44;
@@ -284,8 +233,8 @@ export function rankedChart({ groups, caption, title, unit = fmtOps, accent = "e
   const H = top + groups.reduce((h, g) => h + g.rows.length * rowH + (multi ? groupGap : 4), 0);
   const max = Math.max(...groups.flatMap((g) => g.rows.map((r) => r.value)));
 
-  let s = frame({ theme, opaque, W, H, title: title ?? caption });
-  if (caption) s += `<text x="${X0}" y="22" fill="${t.text}" font-weight="700" font-size="16">${esc(caption)}</text>`;
+  let s = frame({ theme, opaque, W, H, title: title ?? heading });
+  if (heading) s += `<text x="${X0}" y="22" fill="${t.text}" font-weight="700" font-size="16">${esc(heading)}</text>`;
   let y = top;
   for (const g of groups) {
     if (multi && g.title) {

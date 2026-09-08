@@ -7,6 +7,15 @@ description: Build a performance chart for nubjs.com — the SVG bar figures in 
 
 Every performance figure on nubjs.com is a hand-generated SVG, not a charting library. They share one visual system with the homepage's `<Bench>` panel, and a new chart that does not match it looks broken next to the others.
 
+## The four rules (maintainer, 2026-09-08)
+
+The first charts drawn with this skill broke all four, so they come before anything else.
+
+1. **One direction per figure.** A figure is either "higher is better" or "lower is better", never both. A throughput and a latency from the same benchmark are two figures with two stems.
+2. **No footnotes and no caption line inside the image.** A block of small text under the axis reads as a disclaimer, as if the number needed excusing. The fixture and the method go in the page caption, the tweet, or the benchmark README, never in the SVG.
+3. **The legend is left-aligned with the bar column, on its own line under the heading.** Everything at the top of a figure starts at the same x; a right-justified legend under left-justified text reads as misplaced.
+4. **Cut the words.** A heading of two or three words, a muted note of at most a version and the direction, row labels of one or two words. The post or the page supplies the context; the figure supplies the numbers. If a label needs a sentence, the row needs a better name.
+
 A chart is the last step, never the first. The number comes from a benchmark under `tests/bench/` that survives the methodology in `AGENTS.md` and the `benchmarking` skill; the chart only draws it. **A figure built on numbers from a loaded machine is worse than no figure**, because it ships a claim nobody will re-check.
 
 ## Where things live
@@ -41,7 +50,7 @@ A chart makes a number look settled, so check it is before you commit it to a fi
 
 ## The three forms
 
-**`pairedChart`** — the same measurement under two conditions, one bar each per row: a track-colored bar for plain `node`, an ember bar for `nub`. Groups carry their own axis, unit and direction, so a throughput group (higher is better) and a latency group (lower is better) share one figure without sharing a scale. This is the form for a runtime augmentation, where the subject is often the LARGER number: req/s under nub against req/s under node. Sort rows by the size of the effect when the effect is the story, by a natural order (the routes as listed in the benchmark) when the spread is.
+**`pairedChart`** — the same measurement under two conditions, one bar each per row: a track-colored bar for plain `node`, an ember bar for `nub`. Groups carry their own axis and unit, so two magnitudes of the same direction can share a figure without sharing a scale; a figure never mixes directions. This is the form for a runtime augmentation, where the subject is often the LARGER number: req/s under nub against req/s under node. Sort rows by the size of the effect when the effect is the story, by a natural order (the routes as listed in the benchmark) when the spread is.
 
 **`overlapChart`** — one measurement against another on a shared axis where the subject is the SMALLER number. The slower series is a track; the faster one is an ember bar drawn *inside* it, so the gap between them is the win. Right for a time under two conditions (cold vs warm, before vs after). **Sort by the ember bar**, not the track: ember is the subject, and a subject series that jumps around is the first thing a reader notices. Never use it for a throughput: the subject bar would cover the track and the comparison vanishes.
 
@@ -53,14 +62,13 @@ Pick by whether the two numbers are the *same measurement under two conditions*.
 
 - **720px wide.** Height follows from the row count. Never widen; `Figure` scales to the content column, and a wider SVG just renders smaller.
 - **Keep the vertical padding.** The renderer leaves 22px above the heading and below the axis labels. Without it the figure reads as cropped, which is obvious the moment it sits on a page or in a tweet rather than on a preview.
-- **Row labels are monospace, right-aligned, in a left gutter** — route names, workloads, tool names. The bar column starts at x=230 for `pairedChart`, x=250 for `overlapChart`, x=160 for `rankedChart`.
-- **The caption line and legend sit at the top, aligned with the bar column, not with the left edge of the SVG.** This is the single most common mistake. Any heading inside a chart follows the same rule.
-- **The headline is the comparison itself**, not the configuration: `libuv threadpool: 4 threads vs the core count`, bold, on its own line above the caption and aligned with the bars. A reader who sees only the image has to learn what is being compared from the image.
-- **The configuration is a `headingNote`** — the muted qualifier after the em dash (`Node 22.23.2, 8-core VM`). Two charts that differ only in that note read as a pair.
-- **The caption must stay short**, because the legend shares its line. Anything longer belongs in the heading.
-- **`footnote` states the fixture and the method**, wrapped across the full canvas width under the axis. Right for a docs figure that has to stand alone; too heavy for a social one, where the post copy carries it instead.
+- **Row labels are monospace, right-aligned, in a left gutter** — `pbkdf2`, `320k awaits`, a tool name. The bar column starts at x=200 for `pairedChart`, x=250 for `overlapChart`, x=160 for `rankedChart`.
+- **Heading, then legend, both aligned with the bar column, not with the left edge of the SVG.** Any text at the top of a chart starts at that x.
+- **The heading names the thing measured**, in two or three words: `libuv threadpool`, `AsyncLocalStorage`, `Fastify + OpenTelemetry`. The comparison is what the two bars and the legend say.
+- **`headingNote` carries the direction and, when it matters, the Node line** — `Node 22, lower is better`. Nothing else goes there.
+- **The legend names the two conditions**, with the parameter that differs when there is one: `node, 4 threads` / `nub, 8 threads`, else just `node` / `nub`.
 - **One accent color per chart, ember by default.** Ember is the subject; everything else is the track. The other four accents (`acid`, `sky`, `orchid`, `pink`) exist for a figure that sits next to a homepage section already using one of them — pass `accent`. `alt` (sky) exists only for a second nub configuration in a ranked chart.
-- **The value label is bold on the subject bar, muted for the comparison.** A trailing muted note (`+23%`, `2.0× faster`) goes after the subject's label.
+- **The value label is bold on the subject bar, muted for the comparison.** A trailing muted note (`+23%`, `1.9× faster`, `flat`) after the subject's label is the only commentary a figure carries.
 
 Both themes come from `THEMES` in `scripts/chart.mjs`, and every value there is a token from [`site/src/app/global.css`](../../../site/src/app/global.css): the fumadocs page and text pair, and the accent quintet in its darkened light-mode and bright dark-mode variants. Do not invent colors — a chart with an off-palette gray reads as a screenshot from somewhere else. The type is Encode Sans and Geist Mono, the site's own faces, with the same system fallbacks the CSS names.
 
@@ -84,15 +92,13 @@ Wire the pair in with `Figure` (already used in the blog posts that carry an ima
 
 **The alt text carries the whole data table**, not a description of the picture: it names every row, both values and the multiplier, then closes on the headline. A screen reader user gets the same numbers a sighted reader does.
 
-**The caption says what is measured and which direction is good**, then links the benchmark file on `main`. "lower is better" / "higher is better" is not optional — half these charts are times and half are throughputs, and a paired chart can carry both.
+**The page caption says what is measured and how**, then links the benchmark file on `main`. This is where the fixture, the round count and the box go: the sentence that would have been a footnote inside the image belongs here, next to the figure rather than in it.
 
 ## Charts for social rather than the docs
 
 Not every figure is destined for a page. When the target is a tweet or a slide, the opaque `<stem>.svg` is the one to use, rasterized at 2x — `rsvg-convert -z 2 in.svg -o out@2x.png`. It carries its own background, so it survives whatever theme the reader's client uses. The dark rendering on its page color (`-b '#100f0d'`) is the other option and matches the homepage's dark bench panel.
 
-**Strip the words.** A docs figure sits next to prose that frames it; a social figure has only the post copy, which the author writes separately. So drop the caption line and any footnote, keep the headline and the data, and let the qualifier ride the heading note.
-
-**The caveat moves to the copy, it does not vanish.** When the fixture note comes off the image, whoever writes the post owns it. Hand them the sentence along with the file.
+**The caveat lives in the copy.** The image never carried the fixture note, so whoever writes the post owns it: hand them the sentence (what was measured, how many rounds, what box, what shared it) along with the file.
 
 **A chart with no page pointing at it does not belong in `site/public/blog/`.** That directory is for published assets. Leave a social-only figure in your scratch directory and hand over the path; unreferenced SVGs in the site tree are somebody's future cleanup.
 
@@ -105,7 +111,7 @@ The benchmark and its saved run are tracked, reviewed, and linked from the capti
 - **A callout needs an empty wedge.** The big `2.0×` numeral only works when the short rows are much shorter than the long ones, leaving the lower right of the plot empty. When every bar is long there is nowhere to put it, and it lands on top of the bars. Drop it; the per-row notes already say it.
 - **A renderer collapses leading whitespace inside a `<tspan>`**, and a `&#160;` entity does not save you. To put a gap between a heading and a muted qualifier, set `dx` on the tspan — an explicit offset is the only thing that survives.
 - **Legend text collides silently.** A long series label runs straight into a lengthened caption. Both faults are invisible in the source and obvious in the render, so check the render.
-- **Mixed units belong in separate groups, never on one axis.** A paired chart with a req/s group above an ms group is fine because each group draws its own axis; two rows with different units in one group draw one of them at the wrong scale with no error.
+- **Mixed units belong in separate figures.** Two rows with different units in one group draw one of them at the wrong scale with no error, and a req/s group above an ms group is the direction mix rule 1 forbids.
 - **Do not fold two comparisons into one figure.** Separate charts, separate files. To make a pair comparable instead, give both the same axis, the same rows and the same row order, and distinguish them only by the `heading`.
 - **Do not pick rows to flatter the result.** Include the shape where the win is smallest, or negative; it is what makes the rest credible, and it tells the reader where the effect comes from.
 - **`Figure` renders the image at the column width regardless of its aspect ratio.** A very tall chart still works, but 8–10 rows is the practical limit before the type gets small in the content column.
