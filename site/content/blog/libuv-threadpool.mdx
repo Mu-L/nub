@@ -44,7 +44,7 @@ libuv is Node's I/O library. It keeps a pool of worker threads for the calls tha
 UV_THREADPOOL_SIZE=16 node server.js
 ```
 
-Most deployments never set it. Nub sets it when it starts Node, on every launcher: the direct file run, `nub run`, `nubx`, `nub watch` and lifecycle scripts. The value is the larger of four and the cores available to the process. A container gets its cgroup quota, not the host's core count.
+Most deployments never set it. Nub sets it when it starts Node, on every launcher: the direct file run, `nub run`, `nubx`, `nub watch` and lifecycle scripts. The value is the larger of four and the cores available to the process. A container gets its cgroup quota, not the host's core count. On four cores or fewer, nothing changes.
 
 ## Node's own attempt
 
