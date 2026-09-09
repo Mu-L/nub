@@ -22,6 +22,20 @@ Node sends async `fs`, `dns.lookup`, `zlib` and `crypto` calls to a pool of four
   caption={<>Fastify routes on a c3d-standard-16 (16 vCPU), Node 26.8.1, autocannon at 64 connections for 15 seconds, mean of three rounds; <code>node</code> is the same binary with the pool left at four (<a href="https://github.com/nubjs/nub/blob/main/tests/bench/runtime/pool-bound.sh">benchmark</a>).</>}
 />
 
+<details>
+<summary>The same routes on an 8-vCPU box</summary>
+
+<Figure
+  src="/blog/threadpool-8vcpu-light.svg"
+  darkSrc="/blog/threadpool-8vcpu-dark.svg"
+  alt="The same three routes on an 8 vCPU box, node with 4 threads against nub with 8. bcrypt: 18 to 33 requests per second, 1.8 times faster. sharp: 55 to 91 requests per second, 1.7 times faster. gzip of a 1 MB body: 627 to 759 requests per second, 1.2 times faster."
+  caption={<>The same routes on a c3d-standard-8 (8 vCPU, 4 physical cores), same method (<a href="https://github.com/nubjs/nub/blob/main/tests/bench/runtime/pool-bound.sh">benchmark</a>).</>}
+/>
+
+</details>
+
+Routes that use the pool lightly are unchanged. Five interleaved rounds of a 270 KB file read, a `stat` and a 55 KB gzip on the 16-vCPU box read within noise of plain Node. A burst of 400 `dns.lookup` calls finished in 59 ms instead of 84 ms.
+
 ## The threadpool
 
 libuv is Node's I/O library. It keeps a pool of worker threads for the calls that block. Node's own [`UV_THREADPOOL_SIZE`](https://nodejs.org/api/cli.html#uv_threadpool_sizesize) environment variable sets the size. libuv reads it once, the first time the pool is used, so only the environment can change it. The usual fix is a line in a Dockerfile:
@@ -78,19 +92,6 @@ A `cluster` worker, a PM2 fork or any `child_process` spawn starts with Node's f
 ### Windows stops at eight
 
 Each pool thread commits its full stack up front on Windows. The pool is capped at eight there instead of sized to the machine.
-
-## An 8-vCPU box
-
-An 8-vCPU box is four physical cores on the cloud shapes measured. The pool goes from four threads to eight.
-
-<Figure
-  src="/blog/threadpool-8vcpu-light.svg"
-  darkSrc="/blog/threadpool-8vcpu-dark.svg"
-  alt="The same three routes on an 8 vCPU box, node with 4 threads against nub with 8. bcrypt: 18 to 33 requests per second, 1.8 times faster. sharp: 55 to 91 requests per second, 1.7 times faster. gzip of a 1 MB body: 627 to 759 requests per second, 1.2 times faster."
-  caption={<>The same routes on a c3d-standard-8 (8 vCPU, 4 physical cores), same method (<a href="https://github.com/nubjs/nub/blob/main/tests/bench/runtime/pool-bound.sh">benchmark</a>).</>}
-/>
-
-Routes that use the pool lightly are unchanged. Five interleaved rounds of a 270 KB file read, a `stat` and a 55 KB gzip on the 16-vCPU box read within noise of plain Node. A burst of 400 `dns.lookup` calls finished in 59 ms instead of 84 ms.
 
 ## Opting out
 
