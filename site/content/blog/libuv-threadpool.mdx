@@ -18,7 +18,7 @@ Node sends async `fs`, `dns.lookup`, `zlib` and `crypto` calls to a pool of four
 <Figure
   src="/blog/threadpool-16vcpu-light.svg"
   darkSrc="/blog/threadpool-16vcpu-dark.svg"
-  alt="Three pool-bound routes on a 16 vCPU box, node with 4 threads against nub with 16. Password hashing with bcrypt: 18 to 66 requests per second, 3.7 times faster. Image thumbnails with sharp: 57 to 181 requests per second, 3.2 times faster. Response compression, gzip of a 1 MB body: 701 to 1,075 requests per second, 1.5 times faster."
+  alt="Four pool-bound routes on a 16 vCPU box, node against nub. bcrypt hashing: 18 to 66 requests per second, 3.7 times faster. sharp thumbnails: 57 to 179 requests per second, 3.1 times faster. pbkdf2 derivation: 46 to 131 requests per second, 2.9 times faster. RSA keygen: 89 to 201 requests per second, 2.3 times faster."
   caption={<>Fastify routes on a c3d-standard-16 (16 vCPU), Node 26.8.1, autocannon at 64 connections for 15 seconds, mean of three rounds; <code>node</code> is the same binary with the pool left at four (<a href="https://github.com/nubjs/nub/blob/main/tests/bench/runtime/pool-bound.sh">benchmark</a>).</>}
 />
 
@@ -28,7 +28,7 @@ Node sends async `fs`, `dns.lookup`, `zlib` and `crypto` calls to a pool of four
 <Figure
   src="/blog/threadpool-8vcpu-light.svg"
   darkSrc="/blog/threadpool-8vcpu-dark.svg"
-  alt="The same three routes on an 8 vCPU box, node with 4 threads against nub with 8. bcrypt: 18 to 33 requests per second, 1.8 times faster. sharp: 55 to 91 requests per second, 1.7 times faster. gzip of a 1 MB body: 627 to 759 requests per second, 1.2 times faster."
+  alt="The same four routes on an 8 vCPU box, node against nub. bcrypt hashing: 18 to 33 requests per second, 1.8 times faster. sharp thumbnails: 55 to 91 requests per second, 1.7 times faster. pbkdf2 derivation: 47 to 65 requests per second, 1.4 times faster. RSA keygen: 87 to 100 requests per second, 1.2 times faster."
   caption={<>The same routes on a c3d-standard-8 (8 vCPU, 4 physical cores), same method (<a href="https://github.com/nubjs/nub/blob/main/tests/bench/runtime/pool-bound.sh">benchmark</a>).</>}
 />
 
