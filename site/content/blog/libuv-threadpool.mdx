@@ -34,13 +34,13 @@ Most deployments never set it. Nub sets it when it starts Node, on every launche
 
 ## Node's own attempt
 
-In January, a member of Node's performance team proposed the same default for Node itself. The pull request collected eight approvals over six months.
+In January, a member of Node's performance team proposed the same default for Node itself, in [nodejs/node#61533](https://github.com/nodejs/node/pull/61533). The pull request collected eight approvals over six months.
 
 <Figure
   src="/blog/uv-threadpool-pr-61533.png"
   alt="The header of nodejs/node pull request 61533, titled src: set UV_THREADPOOL_SIZE based on available parallelism, in the Closed state, with several approving reviewers in the sidebar."
   href="https://github.com/nodejs/node/pull/61533"
-  caption="nodejs/node#61533 by Rafael Gonzaga, opened January 2026."
+  caption={<><a href="https://github.com/nodejs/node/pull/61533">nodejs/node#61533</a> by <a href="https://github.com/RafaelGSS">Rafael Gonzaga</a>, opened January 2026, under <a href="https://github.com/nodejs/performance/issues/193">nodejs/performance#193</a>.</>}
 />
 
 The author closed it in August.
@@ -49,10 +49,10 @@ The author closed it in August.
   src="/blog/uv-threadpool-pr-61533-closed.png"
   alt="A GitHub comment by RafaelGSS: After talking with @mcollina, we agreed that this is not ideal. Just because there are many CPUs in a host, it doesn't mean they are free. Saturating the CPU is worse than queuing I/O tasks."
   href="https://github.com/nodejs/node/pull/61533#issuecomment-5244734518"
-  caption="The closing comment, August 2026."
+  caption={<><a href="https://github.com/nodejs/node/pull/61533#issuecomment-5244734518">The closing comment</a>, August 2026.</>}
 />
 
-A pool sized to the host takes every core it can see. On a box shared with other processes, that is a regression for them. The thread also reports a file-read benchmark at −15% with sixteen threads on 16 vCPU. On Windows, each pool thread commits about 8 MB of stack. The objection is not to the size. It is to taking the cores unconditionally.
+A pool sized to the host takes every core it can see. On a box shared with other processes, that is a regression for them. The thread also [reports](https://github.com/nodejs/node/pull/61533#issuecomment-3861852577) a file-read benchmark at −15% with sixteen threads on 16 vCPU. On Windows, each pool thread [commits about 8 MB of stack](https://github.com/nodejs/node/issues/57911). The objection is not to the size. It is to taking the cores unconditionally.
 
 ## The mitigations
 
@@ -60,7 +60,7 @@ The size is the one Node's team proposed. Three things around it answer the obje
 
 ### Extra threads run at a lower priority
 
-On Linux, the threads beyond Node's four run at [nice](https://man7.org/linux/man-pages/man7/sched.7.html) 10. Node's four keep their normal priority. A nice 10 thread has about a tenth of the scheduler weight of a normal one. On an idle box it runs at full speed. Under contention it yields most of the CPU to the other work on the machine. Chromium uses the same level for its background threads.
+On Linux, the threads beyond Node's four run at [nice](https://man7.org/linux/man-pages/man7/sched.7.html) 10. Node's four keep their normal priority. A nice 10 thread has about a tenth of the scheduler weight of a normal one. On an idle box it runs at full speed. Under contention it yields most of the CPU to the other work on the machine. Chromium [uses the same level](https://chromium.googlesource.com/chromium/src/+/main/base/threading/platform_thread_linux.cc) for its background threads.
 
 <Figure
   src="/blog/threadpool-busy-host-light.svg"
