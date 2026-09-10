@@ -1757,6 +1757,90 @@ function installVersionMarker() {
   } catch {}
 }
 
+// ── libuv threadpool policy ──────────────────────────────────────────
+// The launcher sized the pool (`UV_THREADPOOL_SIZE = max(4, cores)`, spawn.rs) and
+// Node read it at startup, so the variable has done its work for THIS process.
+// Two things remain, both about the cores the extra threads would take:
+//
+//  1. Children keep Node's default. A `cluster` or PM2 fork, or any `child_process`
+//     spawn, inherits `process.env`; N workers each carrying a cores-sized pool is
+//     the oversubscription Node's own maintainers closed nodejs/node#61533 over.
+//     So nub's OWN value is deleted from `process.env`. Ownership is two markers
+//     the launcher stamps (spawn.rs `RestorableVar`): the value equals the
+//     `__NUB_AUGMENTED_*` record of what the launcher handed Node, AND the compat
+//     presence mask says the variable was ABSENT before the outermost nub ran (bit
+//     1 << 5 is this variable's slot). A shell value, an env-file value, or a value
+//     the launcher merely passed through fails one of the two and inherits as it
+//     would under plain Node. The markers themselves stay, which is how a nested
+//     `nub` knows to size its child again. libuv reads the variable LAZILY, at the
+//     first pool use, and a `process.env` delete reaches the C environment, so the
+//     pool is created (one `fs.access`) before the variable goes; otherwise libuv
+//     would find nothing and build Node's four. A pool of four is Node's default,
+//     so the variable goes at once and nothing is demoted.
+//  2. The threads beyond Node's four run at a lower priority on Linux, so they only
+//     take cycles nothing else on the box wants (Chromium's best-effort tier, nice
+//     10). Measured on 16 vCPU beside twelve busy processes: the neighbours keep
+//     98.6% of their CPU instead of 92.5%, the server still gains 20% over four
+//     threads, and an idle box loses nothing. libuv creates every worker
+//     synchronously inside the first pool submit, so one `fs.access` call makes
+//     them all exist (`access` never takes the io_uring path that lets stat, read
+//     and open skip the pool); the new thread ids (or the `libuv-worker` name) name
+//     them, and `os.setPriority(tid)` targets one thread on Linux. The thread ids
+//     are exact only across the call that builds the pool: the fast tier's
+//     `--require` preload runs before any pool use and builds it here, but the
+//     compat tier's `--import` preload is itself read through the pool, so the
+//     launcher `--require`s threadpool-snapshot.cjs ahead of it to build the pool
+//     and record its threads there.
+const THREADPOOL_ENV = "UV_THREADPOOL_SIZE";
+const THREADPOOL_MARK_ENV = "__NUB_AUGMENTED_UV_THREADPOOL_SIZE";
+const COMPAT_PRESENT_ENV = "__NUB_COMPAT_PRESENT";
+const THREADPOOL_PRESENT_BIT = 1 << 5;
+const THREADPOOL_NODE_DEFAULT = 4;
+const THREADPOOL_EXTRA_NICE = 10;
+const THREADPOOL_WORKERS = Symbol.for("nub.threadpool.workers");
+
+function installThreadpoolPolicy() {
+  const size = process.env[THREADPOOL_ENV];
+  if (size === undefined || size !== process.env[THREADPOOL_MARK_ENV]) return;
+  if ((Number(process.env[COMPAT_PRESENT_ENV]) || 0) & THREADPOOL_PRESENT_BIT) return;
+  if (!(Number(size) > THREADPOOL_NODE_DEFAULT)) {
+    // Node's own size: nothing to demote, and libuv builds the same four whether
+    // it still finds the variable or not, so it goes at once.
+    delete process.env[THREADPOOL_ENV];
+    return;
+  }
+  try {
+    // The `--require` preload re-runs inside every loader worker; the pool is
+    // process-wide, so only the main thread touches it.
+    if (!require("node:worker_threads").isMainThread) return;
+    const fs = require("node:fs");
+    const linux = process.platform === "linux";
+    const tids = () => fs.readdirSync("/proc/self/task").map(Number).filter(Boolean);
+    let workers = linux ? process[THREADPOOL_WORKERS] : undefined;
+    if (workers === undefined) {
+      const before = linux ? new Set(tids()) : null;
+      fs.access("/", () => {});
+      const isWorker = (t) => {
+        if (!before.has(t)) return true;
+        try {
+          return fs.readFileSync(`/proc/self/task/${t}/comm`, "latin1").trim() === "libuv-worker";
+        } catch {
+          return false;
+        }
+      };
+      if (linux) workers = tids().filter(isWorker);
+    }
+    delete process.env[THREADPOOL_ENV];
+    if (!linux) return;
+    const os = require("node:os");
+    for (const t of workers.sort((a, b) => a - b).slice(THREADPOOL_NODE_DEFAULT)) {
+      try {
+        os.setPriority(t, THREADPOOL_EXTRA_NICE);
+      } catch {}
+    }
+  } catch {}
+}
+
 // ── User preloads (`nub.jsonc` `preload`) ───────────────────────────
 // nub loads the user's preload entries HERE rather than emitting one NODE_OPTIONS
 // token per entry. Two reasons, and the first is a correctness bug in the wild:
@@ -1808,6 +1892,7 @@ async function importUserPreloadChain() {
 
 module.exports = {
   installVersionMarker,
+  installThreadpoolPolicy,
   installWatchReporting,
   registerLoaderWorker,
   makeHooks,

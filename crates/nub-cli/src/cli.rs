@@ -258,7 +258,7 @@ fn overlay_env_file_vars(env_map: &mut HashMap<String, String>) {
     }
     if let Some(vars) = ENV_FILE_VARS.get() {
         for (k, v) in vars {
-            if env::var_os(k).is_none() {
+            if nub_core::workspace::env::env_file_may_set(k) {
                 env_map.insert(k.clone(), v.clone());
             }
         }
@@ -300,7 +300,7 @@ fn merge_child_env(
     // Overlay the explicit vars: shell env still wins; `--env-file` overrides any
     // `.env` value that survives (only relevant when no flag was passed).
     for (k, v) in explicit_vars {
-        if env::var_os(k).is_none() {
+        if nub_core::workspace::env::env_file_may_set(k) {
             env_map.insert(k.clone(), v.clone());
         }
     }
@@ -572,11 +572,22 @@ fn apply_env_file_vars(cmd: &mut std::process::Command) {
     }
     if let Some(vars) = ENV_FILE_VARS.get() {
         for (k, v) in vars {
-            if env::var_os(k).is_none() {
+            if nub_core::workspace::env::env_file_may_set(k) {
                 cmd.env(k, v);
             }
         }
     }
+}
+
+/// Whether the explicit `--env-file` layer sets `key` for the child. A launcher
+/// that installs nub's threadpool default checks this first: the file's value is
+/// the user's, and the default must not land on top of it.
+fn env_file_sets(key: &str) -> bool {
+    !no_env_file()
+        && ENV_FILE_VARS.get().is_some_and(|vars| {
+            vars.keys()
+                .any(|k| nub_core::workspace::env::env_keys_equal(k, key))
+        })
 }
 
 /// Build the fetched tool's env overlay. The engine spawns the tool itself, so
@@ -601,7 +612,7 @@ pub(crate) fn dlx_child_env(compat_mode: bool) -> BTreeMap<String, String> {
         return values;
     }
     for (key, value) in ENV_FILE_VARS.get().into_iter().flatten() {
-        if env::var_os(key).is_none() {
+        if nub_core::workspace::env::env_file_may_set(key) {
             values.insert(key.clone(), value.clone());
         }
     }
@@ -3992,6 +4003,7 @@ fn prepare_preload_chain(
             } else {
                 path.to_string_lossy().into_owned()
             },
+            sidecar: None,
         }),
     )
 }
@@ -4428,7 +4440,7 @@ fn load_runtime_env_sources_raw(paths: &[PathBuf]) -> Result<HashMap<String, Str
             )
         })?;
         for (key, value) in nub_core::workspace::env::parse_env(&content) {
-            if env::var_os(&key).is_some()
+            if !nub_core::workspace::env::env_file_may_set(&key)
                 || runtime_env_keys_equal(&key, "NODE_ENV", cfg!(windows))
             {
                 continue;
@@ -6105,6 +6117,13 @@ fn build_script_command(
         aug.apply_localstorage_env(|k, v| {
             command.env(k, v);
         });
+        // An explicit `--env-file` pool size (in `env_vars`, applied below) is
+        // the user's; nub's default and its ownership marker stand down.
+        if !env_file_sets(nub_core::node::spawn::THREADPOOL_SIZE_ENV) {
+            aug.apply_threadpool_size(|k, v| {
+                command.env(k, v);
+            });
+        }
     }
     if let Some(runtime_json) = runtime_json {
         command.env(crate::project_config::RUNTIME_CONFIG_ENV, runtime_json);
@@ -7159,8 +7178,12 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
     // observable preload order — and BEFORE the project-config preloads, so
     // those load with nub's hooks already active. Both `NODE_OPTIONS` assemblies
     // below place the token accordingly, matching the non-watch spawn order.
+    // Every token the injection carries (the compat tier's threadpool sidecar rides
+    // ahead of the preload), joined as one part; the parts are space-joined below.
     let nub_preload_token = preload_path.as_deref().map(|preload| {
-        nub_core::node::spawn::preload_injection(preload, &node.version).node_options_token()
+        nub_core::node::spawn::preload_injection(preload, &node.version)
+            .node_options_tokens()
+            .join(" ")
     });
 
     let mut node_args = vec!["--watch".to_string(), "--watch-preserve-output".to_string()];
@@ -7353,6 +7376,44 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
                 launcher_owned_env_keys.push(key.to_string());
             },
         );
+        // libuv threadpool sizing, the same install every other augmented launcher
+        // makes (spawn.rs THREADPOOL_SIZE_ENV); watch's supervisor re-execs the
+        // child with this environment, so it survives every restart. An env-file
+        // value is the user's: a forwarded file reaches Node as `--env-file`,
+        // which never overrides a value already in the command environment, so
+        // the install stands down — and an inherited nub default (a `nub run`
+        // script running `nub watch`) is removed so the file's value can land.
+        {
+            use nub_core::node::spawn::THREADPOOL_SIZE_ENV;
+            let file_sets_pool = env_vars
+                .keys()
+                .any(|k| nub_core::workspace::env::env_keys_equal(k, THREADPOOL_SIZE_ENV));
+            let nub_default = nub_core::node::spawn::threadpool_size_is_nub_default();
+            let expected = if file_sets_pool {
+                if nub_default {
+                    cmd.env_remove(THREADPOOL_SIZE_ENV);
+                }
+                None
+            } else if env::var_os(THREADPOOL_SIZE_ENV).is_none() {
+                Some(nub_core::node::spawn::threadpool_size().to_string())
+            } else {
+                None
+            };
+            if let Some(size) = &expected {
+                cmd.env(THREADPOOL_SIZE_ENV, size);
+                launcher_owned_env_keys.push(THREADPOOL_SIZE_ENV.to_string());
+            }
+            if file_sets_pool || expected.is_some() {
+                nub_core::node::spawn::apply_expected_augmentation_marker(
+                    THREADPOOL_SIZE_ENV,
+                    expected.as_deref().map(std::ffi::OsStr::new),
+                    |key, value| {
+                        cmd.env(key, value);
+                        launcher_owned_env_keys.push(key.to_string());
+                    },
+                );
+            }
+        }
     }
     // Node's Windows watch supervisor first registers the long-spelled env-file
     // directory, then registers module paths reported by the watched child. If
@@ -7406,6 +7467,7 @@ fn run_watch(file: &str, args: &[String]) -> Result<i32> {
         let token = nub_core::node::spawn::PreloadInjection {
             flag: "--require",
             value: cleanup_preload.to_string(),
+            sidecar: None,
         }
         .node_options_token();
 
@@ -7815,6 +7877,14 @@ fn apply_exec_augmentation(cmd: &mut std::process::Command, cwd: &Path) -> Resul
     aug.apply_localstorage_env(|k, v| {
         cmd.env(k, v);
     });
+    // `apply_env_file_vars` staged the explicit `--env-file` values before this
+    // augmentation, and a pool size among them is the user's: nub's default must
+    // not overwrite it (the other augmentation vars deliberately do, A19).
+    if !env_file_sets(nub_core::node::spawn::THREADPOOL_SIZE_ENV) {
+        aug.apply_threadpool_size(|k, v| {
+            cmd.env(k, v);
+        });
+    }
     cmd.env(crate::project_config::RUNTIME_CONFIG_ENV, runtime_json);
     // Stamp the env-owner markers wherever the adapter is injected — without them
     if let Some((k, val)) = force_async_tier {
