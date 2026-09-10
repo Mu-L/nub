@@ -45,6 +45,8 @@ A global virtual store moves the importing package outside the project. Node fol
 
 For the last several years, the Yarn-maintained `@yarnpkg/extensions` package has been used by [Yarn](https://github.com/yarnpkg/berry/pull/733) to improve module resolution for Plug'n'Play. More recently, this package now undergirds the [Aube](https://github.com/aubepkg/aube/pull/1369) and [pnpm v12](https://github.com/pnpm/pnpm/pull/12372) global virtual stores.
 
+> Bun 1.4 shipped an opt-in [global virtual store](https://github.com/oven-sh/bun/pull/29489), but it ships without no extension-based patching at all. Packages with undeclared dependencies can install successfully, only to fail with `MODULE_NOT_FOUND` at runtime.
+
 Here's the problem: it's woefully incomplete and minimally maintained—just a few in the last three years.
 
 | Database | Packages |
@@ -56,9 +58,7 @@ The new `@nubjs/extensions` package serves as a modern, 100%-compatible drop-in 
 
 - **Every Yarn rule is preserved**, including its dependency ranges and peer metadata.
 - **The export format is unchanged:** `packageExtensions`, an array of `[selector, extension]` pairs.
-- **CommonJS and ESM are supported**, with no runtime dependencies.
-
-Bun's opt-in [global virtual store](https://github.com/oven-sh/bun/pull/29489) ships without extension-based patching at all. Packages with undeclared dependencies can install successfully, only to fail with `MODULE_NOT_FOUND` at runtime. Bun [disabled the store by default](https://github.com/oven-sh/bun/pull/30473) partly because of this breakage.
+- **CommonJS and ESM are supported.**
 
 ### How can other tools use this?
 
