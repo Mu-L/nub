@@ -24,6 +24,11 @@ export function PostArticle({
   const MDXContent = page.data.body;
 
   const hasToc = page.data.toc.length > 0;
+  const rootDepth = hasToc ? Math.min(...page.data.toc.map((item) => item.depth)) : 2;
+  const toc = page.data.toc.map((item) => ({
+    ...item,
+    depth: item.depth - rootDepth + 2,
+  }));
 
   return (
     /* Centered shell. At lg+ it widens to make room for a right gutter that
@@ -64,7 +69,7 @@ export function PostArticle({
         {/* Below lg there's no gutter, so keep the collapsible in-body TOC as
             the fallback; hide it once the sticky gutter TOC takes over. */}
         {hasToc ? (
-          <InlineTOC items={page.data.toc} className="mt-8 lg:hidden" />
+          <InlineTOC items={toc} className="mt-8 lg:hidden" />
         ) : null}
 
         <article className="prose blog-prose mt-10">
@@ -75,7 +80,7 @@ export function PostArticle({
       {/* Sticky right-gutter TOC — lg+ only (no room for a gutter below that). */}
       {hasToc ? (
         <aside className="sticky top-24 hidden h-[calc(100vh-8rem)] flex-col overflow-hidden lg:flex">
-          <BlogTOC toc={page.data.toc} />
+          <BlogTOC toc={toc} />
         </aside>
       ) : null}
     </div>
