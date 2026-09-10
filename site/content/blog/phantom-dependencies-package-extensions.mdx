@@ -45,7 +45,7 @@ A global virtual store moves the importing package outside the project. Node fol
 
 For the last several years, the Yarn-maintained `@yarnpkg/extensions` package has been used by [Yarn](https://github.com/yarnpkg/berry/pull/733) to improve module resolution for Plug'n'Play. More recently, this package now undergirds the [Aube](https://github.com/aubepkg/aube/pull/1369) and [pnpm v12](https://github.com/pnpm/pnpm/pull/12372) global virtual stores.
 
-> Bun 1.4 shipped an opt-in [global virtual store](https://github.com/oven-sh/bun/pull/29489), but it ships without no extension-based patching at all. Packages with undeclared dependencies can install successfully, only to fail with `MODULE_NOT_FOUND` at runtime.
+> Bun 1.4 shipped an opt-in [global virtual store](https://github.com/oven-sh/bun/pull/29489), but it ships without extension-based patching at all. Packages with undeclared dependencies can install successfully, only to fail with `MODULE_NOT_FOUND` at runtime.
 
 Here's the problem: it's woefully incomplete and minimally maintained—just a few in the last three years.
 
@@ -81,6 +81,5 @@ Nub already uses the database to repair known omissions during resolution. Its i
 
 The database combines generated results with a fixed, handwritten core:
 
-- **Yarn's existing rules survive every rebuild.** Additional handwritten rules can be submitted by PR.
 - **Dynamic imports can need handwritten rules** when the package name is computed at runtime, as in `import(packageName)` or `require(packageName)`.
 - **Most generated additions are optional peers.** A React adapter should declare its relationship with React without forcing every user of the package to install it.
