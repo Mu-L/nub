@@ -92,21 +92,24 @@ const textW = (s, size = 12) => String(s).length * size * 0.54;
 /** The same for the monospace labels: Geist Mono and Menlo both advance 0.6em per glyph. */
 const monoW = (s, size = 12) => String(s).length * size * 0.6;
 
-// The breathing room on every side. Without it the figure reads as cropped, and the two
+// The breathing room around the ink. Without it the figure reads as cropped, and the two
 // horizontal margins are what the eye compares: a figure with 140px of nothing to the left of
 // its labels and 40px to the right of its notes reads as pushed off-center however carefully
 // each element is aligned (maintainer, 2026-09-12). The gutter and the bar column are sized
-// from the content so that both margins come out at PAD.
-const PAD = 22;
+// from the content so that both side margins come out at PAD_X. The sides get more than the
+// top and bottom on purpose: in a frame this wide, equal margins all round look tight at the
+// sides, and 22px there read as cramped even once they matched (same day).
+const PAD_X = 56;
+const PAD_Y = 30;
 /** Left edge of the bar column: the widest label, right-aligned, plus its gap, after the padding. */
-const gutterFor = (labels) => PAD + Math.ceil(Math.max(0, ...labels.map((l) => monoW(l)))) + 12;
+const gutterFor = (labels) => PAD_X + Math.ceil(Math.max(0, ...labels.map((l) => monoW(l)))) + 12;
 /**
  * Right edge of the bar column: the widest column such that every piece of text anchored to a
  * bar still ends inside the padding. Each anchor is text placed at X0 + f·(XMAX − X0) + c, where
  * f is the bar's share of the axis and c the text's offset plus width, so the binding one is
  * the row whose bar-plus-label runs longest — not necessarily the longest bar.
  */
-const fitRight = (W, X0, anchors) => Math.floor(Math.min(W - PAD, ...anchors.filter((a) => a.f > 0).map((a) => X0 + (W - PAD - X0 - a.c) / a.f)));
+const fitRight = (W, X0, anchors) => Math.floor(Math.min(W - PAD_X, ...anchors.filter((a) => a.f > 0).map((a) => X0 + (W - PAD_X - X0 - a.c) / a.f)));
 
 function frame({ theme, opaque, W, H, title }) {
   const t = THEMES[theme];
@@ -140,7 +143,7 @@ export function pairedChart({ groups, heading, headingNote, aLabel = "node", bLa
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
   const W = 720, rowH = 44, barH = 12, gap = 3;
-  const padY = PAD;
+  const padY = PAD_Y;
   const X0 = gutterFor(groups.flatMap((g) => g.rows.map((r) => r.label)));
   // The column runs as wide as the value labels and notes allow: a clipped "+3%" is invisible
   // in the source and the first thing a reader sees, so the row whose bar-plus-text runs
@@ -209,7 +212,7 @@ export function overlapChart({ rows, heading, headingNote, trackLabel, barLabel,
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
   const W = 720, rowH = 34, barH = 20;
-  const padY = PAD;
+  const padY = PAD_Y;
   const headH = heading ? 20 : 0;
   const legendH = trackLabel && barLabel ? 22 : 0;
   const top = padY + headH + legendH + 12;
