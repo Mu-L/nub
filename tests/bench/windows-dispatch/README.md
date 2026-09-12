@@ -19,7 +19,7 @@ Each cell is timed by hyperfine under its default Windows shell (`cmd.exe`; hype
 
 ## Running it
 
-The harness is Windows-only and runs under Git Bash. The workflow [`bench-windows-dispatch.yml`](../../../.github/workflows/bench-windows-dispatch.yml) runs it on `windows-latest` against the published `@nubjs/nub` and uploads the results JSON as an artifact; a run worth keeping is committed under `results/`.
+The harness is Windows-only and runs under Git Bash. The workflow [`bench-windows-dispatch.yml`](../../../.github/workflows/bench-windows-dispatch.yml) runs it on `windows-latest` against the published `@nubjs/nub` and uploads the results JSON as the `windows-dispatch-results` artifact. It runs on demand only: `gh workflow run bench-windows-dispatch.yml`, then `gh run download <id> -n windows-dispatch-results -D tests/bench/windows-dispatch/results`, and commit a run worth keeping.
 
 ```sh
 npm install -g @nubjs/nub

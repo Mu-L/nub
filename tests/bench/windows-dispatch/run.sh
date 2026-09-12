@@ -88,7 +88,7 @@ done
 NUB_VERSION="$(MSYS_NO_PATHCONV=1 cmd.exe /C "nub --version" 2>/dev/null | tr -d '\r' | head -1)"
 NODE_VERSION="$(node --version | tr -d '\r')"
 HF_VERSION="$(hyperfine --version | tr -d '\r' | awk '{print $2}')"
-CPU="$(powershell.exe -NoProfile -Command '(Get-CimInstance Win32_Processor).Name' 2>/dev/null | tr -d '\r' | head -1)"
+CPU="$(powershell.exe -NoProfile -Command '(Get-CimInstance Win32_Processor).Name' 2>/dev/null | tr -d '\r' | head -1 | sed 's/ *$//')"
 OS="$(powershell.exe -NoProfile -Command '[System.Environment]::OSVersion.VersionString' 2>/dev/null | tr -d '\r' | head -1)"
 DATE_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

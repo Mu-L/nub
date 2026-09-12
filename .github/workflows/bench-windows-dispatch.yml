@@ -1,14 +1,12 @@
 # Times a `nub` call from cmd.exe through npm's `nub.cmd` shim against the real
-# `nub.exe` the launcher hardlinks beside it. Runs on demand, never on a pull
-# request: `tests/bench/windows-dispatch/README.md` says what it measures.
+# `nub.exe` the launcher hardlinks beside it. Runs on demand only, never on a
+# push or a pull request: `gh workflow run bench-windows-dispatch.yml`, then
+# download the `windows-dispatch-results` artifact and commit a run worth
+# keeping under tests/bench/windows-dispatch/results/. The README there says
+# what it measures.
 name: bench windows dispatch
 
 on:
-  push:
-    branches: [bench/windows-dispatch]
-    paths:
-      - 'tests/bench/windows-dispatch/**'
-      - '.github/workflows/bench-windows-dispatch.yml'
   workflow_dispatch:
 
 jobs:
