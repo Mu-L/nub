@@ -7,14 +7,15 @@ description: Build a performance chart for nubjs.com — the SVG bar figures in 
 
 Every performance figure on nubjs.com is a hand-generated SVG, not a charting library. They share one visual system with the homepage's `<Bench>` panel, and a new chart that does not match it looks broken next to the others.
 
-## The four rules (maintainer, 2026-09-08)
+## The five rules (maintainer, 2026-09-08 and 2026-09-12)
 
-The first charts drawn with this skill broke all four, so they come before anything else.
+The first charts drawn with this skill broke the first four, and the next one broke the fifth, so they come before anything else.
 
 1. **One direction per figure.** A figure is either "higher is better" or "lower is better", never both. A throughput and a latency from the same benchmark are two figures with two stems.
 2. **No footnotes and no caption line inside the image.** A block of small text under the axis reads as a disclaimer, as if the number needed excusing. The fixture and the method go in the page caption, the tweet, or the benchmark README, never in the SVG.
 3. **The legend is left-aligned with the bar column, on its own line under the heading.** Everything at the top of a figure starts at the same x; a right-justified legend under left-justified text reads as misplaced.
 4. **Cut the words.** A heading of two or three words, a muted note of at most a version and the direction, row labels of one or two words. The post or the page supplies the context; the figure supplies the numbers. If a label needs a sentence, the row needs a better name.
+5. **The ink is optically balanced in the frame: no dead space on the left.** The eye compares the two horizontal margins, and a figure with 140px of nothing before its labels and 40px after its notes reads as pushed off-center however carefully each element is aligned (maintainer, 2026-09-12: *"TOO MUCH dead space on the left"*, on a two-row chart whose short labels sat in a gutter sized for long ones). The renderer now sizes the gutter from the longest label and the bar column from the longest trailing text, so both margins come out at the same 22px — never hardcode where the bars start or end, and never pad a label to fill a gutter. Check it on the raster: the leftmost label and the rightmost note or tick should sit the same distance from their edges.
 
 A chart is the last step, never the first. The number comes from a benchmark under `tests/bench/` that survives the methodology in `AGENTS.md` and the `benchmarking` skill; the chart only draws it. **A figure built on numbers from a loaded machine is worse than no figure**, because it ships a claim nobody will re-check.
 
@@ -62,7 +63,7 @@ Pick by whether the two numbers are the *same measurement under two conditions*.
 
 - **720px wide.** Height follows from the row count. Never widen; `Figure` scales to the content column, and a wider SVG just renders smaller.
 - **Keep the vertical padding.** The renderer leaves 22px above the heading and below the axis labels. Without it the figure reads as cropped, which is obvious the moment it sits on a page or in a tweet rather than on a preview.
-- **Row labels are monospace, right-aligned, in a left gutter** — `pbkdf2`, `320k awaits`, a tool name. The bar column starts at x=200 for `pairedChart`, x=250 for `overlapChart`, x=160 for `rankedChart`.
+- **Row labels are monospace, right-aligned, in a left gutter** — `pbkdf2`, `320k awaits`, a tool name. The gutter is exactly as wide as the longest label plus its gap, and the bar column runs to wherever the longest value label, note or tick label meets the right padding: the renderer computes both from the rows (rule 5), so a figure with short labels gets a wider bar column, not an empty margin.
 - **Heading, then legend, both aligned with the bar column, not with the left edge of the SVG.** Any text at the top of a chart starts at that x.
 - **The heading names the thing measured**, in two or three words: `libuv threadpool`, `AsyncLocalStorage`, `Fastify + OpenTelemetry`. The comparison is what the two bars and the legend say.
 - **`headingNote` carries the direction and, when it matters, the Node line** — `Node 22, lower is better`. Nothing else goes there.
@@ -115,6 +116,7 @@ The benchmark and its saved run are tracked, reviewed, and linked from the capti
 - **Do not fold two comparisons into one figure.** Separate charts, separate files. To make a pair comparable instead, give both the same axis, the same rows and the same row order, and distinguish them only by the `heading`.
 - **Do not pick rows to flatter the result.** Include the shape where the win is smallest, or negative; it is what makes the rest credible, and it tells the reader where the effect comes from.
 - **`Figure` renders the image at the column width regardless of its aspect ratio.** A very tall chart still works, but 8–10 rows is the practical limit before the type gets small in the content column.
+- **Measure the margins, do not eyeball them.** The leftmost ink is the longest label's start (`X0 − 12 − 0.6 × 12 × chars`), the rightmost is the longest note's end or half the last tick label past the column edge; both should be 22px from the frame. A one-line script over the SVG's `<rect>` and `<text>` positions settles it in seconds, and it is the check the renderer's own sizing is verified against.
 
 ## Regenerating an existing figure
 

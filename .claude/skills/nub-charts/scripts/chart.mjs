@@ -1,6 +1,9 @@
 // House chart renderer for nubjs.com blog and docs figures.
 //
-// Three forms, all 720px wide with a monospace label gutter on the left:
+// Three forms, all 720px wide, with a monospace label gutter on the left that is exactly as
+// wide as the longest label and a bar column that ends where the longest trailing text meets
+// the right padding — so the ink sits centered in the frame with the same 22px on either side
+// whatever the labels are. Nothing here hardcodes where the bars start or end.
 //   pairedChart  — the same measurement under two conditions, one bar each per row (node vs nub).
 //                  Groups carry their own axis, unit and direction, so a throughput group and a
 //                  latency group can share one figure without sharing a scale.
@@ -86,6 +89,24 @@ function fmtTick(v, unitLabel, last, axisMax) {
 
 /** Approximate rendered width of 12px Encode Sans, for placing things that must not collide. */
 const textW = (s, size = 12) => String(s).length * size * 0.54;
+/** The same for the monospace labels: Geist Mono and Menlo both advance 0.6em per glyph. */
+const monoW = (s, size = 12) => String(s).length * size * 0.6;
+
+// The breathing room on every side. Without it the figure reads as cropped, and the two
+// horizontal margins are what the eye compares: a figure with 140px of nothing to the left of
+// its labels and 40px to the right of its notes reads as pushed off-center however carefully
+// each element is aligned (maintainer, 2026-09-12). The gutter and the bar column are sized
+// from the content so that both margins come out at PAD.
+const PAD = 22;
+/** Left edge of the bar column: the widest label, right-aligned, plus its gap, after the padding. */
+const gutterFor = (labels) => PAD + Math.ceil(Math.max(0, ...labels.map((l) => monoW(l)))) + 12;
+/**
+ * Right edge of the bar column: the widest column such that every piece of text anchored to a
+ * bar still ends inside the padding. Each anchor is text placed at X0 + f·(XMAX − X0) + c, where
+ * f is the bar's share of the axis and c the text's offset plus width, so the binding one is
+ * the row whose bar-plus-label runs longest — not necessarily the longest bar.
+ */
+const fitRight = (W, X0, anchors) => Math.floor(Math.min(W - PAD, ...anchors.filter((a) => a.f > 0).map((a) => X0 + (W - PAD - X0 - a.c) / a.f)));
 
 function frame({ theme, opaque, W, H, title }) {
   const t = THEMES[theme];
@@ -118,22 +139,23 @@ function heading_(s, t, X0, padY, heading, headingNote) {
 export function pairedChart({ groups, heading, headingNote, aLabel = "node", bLabel = "nub", accent = "ember", title, theme = "light", opaque = false }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
-  const W = 720, X0 = 200, rowH = 44, barH = 12, gap = 3;
-  const padY = 22;
-  // The bar column ends at 640 unless the longest bar's value label and note would run off the
-  // canvas, in which case the column shrinks to fit them: a clipped "+3%" is invisible in the
-  // source and the first thing a reader sees.
-  const overhang = Math.max(0, ...groups.flatMap((g) => {
+  const W = 720, rowH = 44, barH = 12, gap = 3;
+  const padY = PAD;
+  const X0 = gutterFor(groups.flatMap((g) => g.rows.map((r) => r.label)));
+  // The column runs as wide as the value labels and notes allow: a clipped "+3%" is invisible
+  // in the source and the first thing a reader sees, so the row whose bar-plus-text runs
+  // longest sets the edge. The last tick label is centered on it and counts too.
+  const XMAX = fitRight(W, X0, groups.flatMap((g) => {
     const unit = g.unit ?? fmtReq;
-    const max = Math.max(...g.rows.flatMap((r) => [r.a, r.b]));
-    return g.rows.map((r) => {
-      const v = Math.max(r.a, r.b);
-      const label = v === r.b ? unit(r.b) : unit(r.a);
-      const note = v === r.b && r.note ? 8 + textW(r.note, 11) : 0;
-      return X0 + (v / axisFor(max).max) * (640 - X0) + 7 + textW(label, 11) + note - (W - padY);
-    });
+    const axis = axisFor(Math.max(...g.rows.flatMap((r) => [r.a, r.b])));
+    return [
+      { f: 1, c: textW(fmtTick(axis.max, g.unitLabel, true, axis.max), 11) / 2 },
+      ...g.rows.flatMap((r) => [
+        { f: r.a / axis.max, c: 7 + textW(unit(r.a), 11) },
+        { f: r.b / axis.max, c: 7 + unit(r.b).length * 6.6 + (r.note ? 8 + textW(r.note, 11) : 0) },
+      ]),
+    ];
   }));
-  const XMAX = 640 - Math.ceil(overhang);
   const headH = heading ? 20 : 0;
   const legendH = aLabel && bLabel ? 22 : 0;
   const groupTitleH = 24, axisH = 30, groupGap = 18;
@@ -186,13 +208,25 @@ export function pairedChart({ groups, heading, headingNote, aLabel = "node", bLa
 export function overlapChart({ rows, heading, headingNote, trackLabel, barLabel, title, axisMax, ticks, unit = fmtNs, unitLabel = "ns", accent = "ember", theme = "light", opaque = false, callout }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
-  const W = 720, X0 = 250, XMAX = 610, rowH = 34, barH = 20;
-  const padY = 22; // breathing room above the heading and below the axis labels; without it the figure reads as cropped
+  const W = 720, rowH = 34, barH = 20;
+  const padY = PAD;
   const headH = heading ? 20 : 0;
   const legendH = trackLabel && barLabel ? 22 : 0;
   const top = padY + headH + legendH + 12;
   const H = top + rows.length * rowH + 34 + padY;
   const axis = axisMax ? { max: axisMax, ticks: ticks ?? axisFor(axisMax).ticks } : axisFor(Math.max(...rows.map((r) => r.track)));
+  const X0 = gutterFor(rows.map((r) => r.label));
+  // A note clears whichever runs longer, the track or the bold value label, so both are anchors.
+  const XMAX = fitRight(W, X0, [
+    { f: 1, c: textW(fmtTick(axis.max, unitLabel, true, axis.max), 11) / 2 },
+    ...rows.flatMap((r) => {
+      const lead = unit(r.bar);
+      return [
+        { f: r.bar / axis.max, c: 7 + lead.length * 7 },
+        ...(r.note ? [{ f: r.track / axis.max, c: 8 + textW(r.note) }, { f: r.bar / axis.max, c: 7 + lead.length * 7 + 10 + textW(r.note) }] : []),
+      ];
+    }),
+  ]);
   const sx = (v) => Math.max((v / axis.max) * (XMAX - X0), 3);
 
   let s = frame({ theme, opaque, W, H, title: title ?? heading });
@@ -242,10 +276,12 @@ export function overlapChart({ rows, heading, headingNote, trackLabel, barLabel,
 export function rankedChart({ groups, heading, title, unit = fmtOps, accent = "ember", theme = "light", opaque = false }) {
   const t = THEMES[theme];
   const barFill = t.accents[accent] ?? t.bar;
-  const W = 720, X0 = 160, XMAX = 640, rowH = 30, barH = 18, top = 44, groupGap = 44;
+  const W = 720, rowH = 30, barH = 18, top = 44, groupGap = 44;
   const multi = groups.length > 1;
   const H = top + groups.reduce((h, g) => h + g.rows.length * rowH + (multi ? groupGap : 4), 0);
   const max = Math.max(...groups.flatMap((g) => g.rows.map((r) => r.value)));
+  const X0 = gutterFor(groups.flatMap((g) => g.rows.map((r) => r.label)));
+  const XMAX = fitRight(W, X0, groups.flatMap((g) => g.rows.map((r) => ({ f: r.value / max, c: 8 + textW(unit(r.value)) * (r.highlight ? 1.08 : 1) }))));
 
   let s = frame({ theme, opaque, W, H, title: title ?? heading });
   if (heading) s += `<text x="${X0}" y="22" fill="${t.text}" font-weight="700" font-size="16">${esc(heading)}</text>`;
