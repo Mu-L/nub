@@ -4269,7 +4269,7 @@ pub(crate) fn runtime_node_options_with(
     // condition set. Conditions are a SET: this only ever offers a branch a package
     // opted into, and a package with no `nub` key resolves as it does under plain Node.
     //
-    // Scoped to the CLI on purpose. The standalone `@nubjs/loader` installs the same
+    // Scoped to the CLI on purpose. The standalone `@nubjs/runner` installs the same
     // transform hooks but deliberately does NOT add this, because its contract is that
     // a file resolves identically under it, under tsx, and under plain Node — the brand
     // stays in the outer invocation and out of the user's import graph.

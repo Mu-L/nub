@@ -69,7 +69,7 @@ git commit -m "v<ver>" -- Cargo.lock Cargo.toml \
   crates/nub-launcher/Cargo.lock crates/nub-phantom/Cargo.lock \
   npm/*/package.json runtime/version.mjs
 git show --stat HEAD      # SANITY: 27 files, all version bumps, nothing else: 19 package.json
-                          # (10 nub + 9 loader), 3 Cargo.toml, 4 Cargo.lock, runtime/version.mjs.
+                          # (10 nub + 9 runner), 3 Cargo.toml, 4 Cargo.lock, runtime/version.mjs.
                           # crates/nub-phantom/Cargo.lock is the one that gets missed — its
                           # workspace is excluded from the root, ci.yml checks it `--locked`,
                           # and v0.9.1 shipped without it (main went red, fixed in a follow-up).
