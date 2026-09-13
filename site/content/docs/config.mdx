@@ -230,8 +230,15 @@ Name the Node binary to run, instead of letting Nub resolve a version.
 
 ```jsonc title="nub.jsonc"
 {
-  // ...
-  // a command in $(...) runs, and its output is the path
+  // an absolute path to a Node binary
+  "nodeExecutable": "/path/to/node"
+}
+```
+
+Or a command in `$(...)`, whose output is the path:
+
+```jsonc title="nub.jsonc"
+{
   "nodeExecutable": "$(mise which node)"
 }
 ```
@@ -240,7 +247,7 @@ The command runs through the platform shell (`sh -c`, or `cmd /C` on Windows) in
 
 To ignore the project's pins and take the first Node on `PATH`, use `"$(which node)"`, or `"$(where node)"` on Windows. Only the first line of output is read, so a tool that lists every match still names one binary.
 
-A path is also accepted. An absolute path hardcodes one binary:
+An absolute path hardcodes one binary:
 
 ```jsonc title="~/.config/nub/nub.jsonc"
 {
