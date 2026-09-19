@@ -107,6 +107,8 @@ CI's `stable-immutable-release` job creates the prerelease with `generate_releas
 
 Build the notes from the **full** `git log "$PREV"..HEAD` changeset (Step 1), not just the headline fixes — every user-affecting change ships.
 
+**Leave out what the maintainer is holding back.** Read `internal/release-holds.md` before drafting. A change listed there ships in the binary but is not announced: it gets no line in the curated notes, its PR comes out of the generated `## What's Changed` list, the blog post (Step 4b) does not mention it, and its docs page keeps `unpublished: true`. Only the maintainer lifts a hold.
+
 **Notes must be SCANNABLE, not paragraph-dense.** A reader skims headings, tables, and the heads-up callout and gets the whole release at a glance — they should never have to read a run-on paragraph to find what changed. The cross-project prose/tone guide for all public-facing copy — including the release-notes shape — is the `prose-writing` skill's guide. The concrete rules:
 
 - **One-line intro** stating what the release is about (the dominant theme).
@@ -182,6 +184,7 @@ Every release also ships as a blog post under `site/content/blog/`. This is a st
 - **End every post with the get-started block** — a final `## Get started` heading followed by `<GetStarted />`, which renders the install tabs plus the pointer at the agent adoption prompt. Every existing post carries it; a new one without it is the odd one out.
 - **Catch up a cold reader with `<NubIntro />`** near the top when the post leads with feature news rather than an introduction. Both components live in `site/src/components/` and are registered globally in `site/mdx-components.tsx`; their copy is maintainer-authored, so edit the component, never a single `.mdx`.
 - **Scale to the release:** a small patch gets a short post; a milestone opens with the thing working.
+- **Nothing held back appears in the post** — the holds in `internal/release-holds.md` (Step 4) apply here too.
 
 Exemplars: `site/content/blog/nub-0-7-0.mdx` (feature-carrying, full structure), `nub-0-2-0.mdx` (milestone), `nub-0-2-5.mdx` (small patch).
 
