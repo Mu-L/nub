@@ -6,3 +6,5 @@ Fixtures for `.github/workflows/action-smoke.yml`, which exercises the GitHub Ac
 - `install/fixture-pnpm/` — the same project pinned to `pnpm@10.15.1` in `packageManager`, with a `pnpm-lock.yaml`, for the job that installs through the shims.
 
 Both lockfiles make the fixture its own project root; the repository's `nub.lock` above them is not read.
+
+Every job installs a RELEASED Nub, the one the `nub-version` input names (`latest` unless a job pins one; `setup-node` resolves it from npm itself, `npm-ci` through `nubjs/setup-nub`), so the smoke verifies the actions' own shape against the engine users get today and cannot gate an engine change that has not shipped yet. That gate is `tests/npm-corpus/`, whose workflow builds Nub from the branch and runs every project in `npm-ci` mode too, and the shim tests under `crates/nub-cli/tests/`.
