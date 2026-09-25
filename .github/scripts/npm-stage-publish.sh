@@ -14,7 +14,9 @@
 set -euo pipefail
 dir="${1:?usage: npm-stage-publish.sh <package-dir>}"
 version="${VERSION:?VERSION must name the version being released}"
-name="$(node -p "require('$dir/package.json').name")"
+# A relative directory is resolved to a path first: a bare `require('artifacts/x/package.json')`
+# is a package lookup in node_modules, and it took v0.9.5's first staging run down.
+name="$(node -p "require(require('node:path').resolve('$dir', 'package.json')).name")"
 if [ "$(npm view "$name@$version" version 2>/dev/null)" = "$version" ]; then
   echo "✓ $name@$version already published — skipping"
   exit 0
