@@ -2233,44 +2233,6 @@ jobs:
           fi
           echo "✓ all ${#EXPECTED[@]} release assets present on $TAG"
 
-      - name: Smoke immutable stable cross-target launcher fetch
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Copy only nub: locating from this directory cannot use the packaged
-          # host sibling, and the empty cache forces the exact release fetch.
-          SMOKE_DIR="$RUNNER_TEMP/nub-stable-template-fetch"
-          rm -rf "$SMOKE_DIR"
-          mkdir -p "$SMOKE_DIR"
-          cp artifacts/nub-linux-x64/bin/nub "$SMOKE_DIR/nub"
-          chmod +x "$SMOKE_DIR/nub"
-          printf '%s\n' 'console.log("immutable launcher fetch smoke")' > "$SMOKE_DIR/fixture.js"
-          NODE_VERSION="$(node --version)"
-          NODE_VERSION="${NODE_VERSION#v}"
-          # The COMPILER's template cache is `discovery::cache_dir()`, which reads
-          # XDG_CACHE_HOME and appends a `nub` segment. `__NUB_COMPILE_CACHE_DIR`
-          # is read only by the compiled artifact's launcher
-          # (crates/nub-launcher/src/cache.rs), so pointing this smoke at it left
-          # the fetch landing in the real ~/.cache/nub and made both the
-          # cache-was-empty precondition vacuous and the cache-entry assertion
-          # fail on every release.
-          CACHE_LAUNCHER="$SMOKE_DIR/cache/nub/compile-launchers/$VERSION/nub-launcher-win32-x64.exe"
-          test ! -e "$SMOKE_DIR/nub-launcher-win32-x64.exe" && test ! -e "$SMOKE_DIR/nub-launcher-win32-x64" \
-            || { echo "::error::immutable stable launcher-fetch smoke has a foreign sibling template"; exit 1; }
-          test ! -e "$CACHE_LAUNCHER" \
-            || { echo "::error::immutable stable launcher-fetch smoke cache was not empty"; exit 1; }
-          env -u __NUB_LAUNCHER_TEMPLATE -u NUB_RELEASE_BASE_URL -u GH_TOKEN -u GITHUB_TOKEN \
-            XDG_CACHE_HOME="$SMOKE_DIR/cache" \
-            "$SMOKE_DIR/nub" compile --smol --target "$NODE_VERSION" \
-              --platform win32-x64 --out "$SMOKE_DIR/fetch-smoke.exe" "$SMOKE_DIR/fixture.js"
-          test -f "$SMOKE_DIR/fetch-smoke.exe" \
-            || { echo "::error::immutable stable cross-target launcher fetch produced no artifact"; exit 1; }
-          test -f "$CACHE_LAUNCHER" \
-            || { echo "::error::immutable stable launcher fetch did not create the versioned cache entry"; exit 1; }
-          cmp -s "$CACHE_LAUNCHER" "release-archives/nub-launcher-win32-x64.exe" \
-            || { echo "::error::immutable stable launcher cache bytes differ from the reconciled release asset"; exit 1; }
-          echo "✓ copied packaged CLI fetched the immutable stable win32-x64 template (no sibling fallback)"
-
   github-release:
     name: Publish stable GitHub Release
     # npm can stage only after the immutable draft above is asset-complete, and
@@ -2316,6 +2278,51 @@ jobs:
           [ "$LATEST" = "$TAG" ] \
             || { echo "::error::releases/latest is $LATEST, not $TAG — the upgrade channel is serving the wrong release"; exit 1; }
           echo "✓ releases/latest serves $TAG"
+      - name: Smoke the public cross-target launcher fetch
+        # The anonymous user path: a copied `nub` with an empty cache compiles for
+        # another platform and must fetch that platform's launcher template from
+        # `releases/download/<tag>/`. That URL exists only for a PUBLISHED release,
+        # and the release is a draft until the promotion above (v0.9.5 failed this
+        # smoke with a 404 while it still sat in stable-immutable-release), so it
+        # runs here, against the assets the public now sees. Only `nub` is copied:
+        # locating from this directory cannot use the packaged host sibling.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.publish_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          SMOKE_DIR="$RUNNER_TEMP/nub-stable-template-fetch"
+          rm -rf "$SMOKE_DIR"
+          mkdir -p "$SMOKE_DIR/dl"
+          gh release download "$TAG" -D "$SMOKE_DIR/dl" -p nub-linux-x64.tar.gz -p nub-launcher-win32-x64.exe
+          tar -xzf "$SMOKE_DIR/dl/nub-linux-x64.tar.gz" -C "$SMOKE_DIR/dl" bin/nub
+          cp "$SMOKE_DIR/dl/bin/nub" "$SMOKE_DIR/nub"
+          chmod +x "$SMOKE_DIR/nub"
+          printf '%s\n' 'console.log("public launcher fetch smoke")' > "$SMOKE_DIR/fixture.js"
+          NODE_VERSION="$(node --version)"
+          NODE_VERSION="${NODE_VERSION#v}"
+          # The COMPILER's template cache is `discovery::cache_dir()`, which reads
+          # XDG_CACHE_HOME and appends a `nub` segment; `__NUB_COMPILE_CACHE_DIR` is
+          # read only by the compiled artifact's launcher, so pointing at it would
+          # leave the fetch in the real ~/.cache/nub and make both assertions vacuous.
+          CACHE_LAUNCHER="$SMOKE_DIR/cache/nub/compile-launchers/$VERSION/nub-launcher-win32-x64.exe"
+          test ! -e "$SMOKE_DIR/nub-launcher-win32-x64.exe" && test ! -e "$SMOKE_DIR/nub-launcher-win32-x64" \
+            || { echo "::error::public launcher-fetch smoke has a foreign sibling template"; exit 1; }
+          test ! -e "$CACHE_LAUNCHER" \
+            || { echo "::error::public launcher-fetch smoke cache was not empty"; exit 1; }
+          env -u __NUB_LAUNCHER_TEMPLATE -u NUB_RELEASE_BASE_URL -u GH_TOKEN -u GITHUB_TOKEN \
+            XDG_CACHE_HOME="$SMOKE_DIR/cache" \
+            "$SMOKE_DIR/nub" compile --smol --target "$NODE_VERSION" \
+              --platform win32-x64 --out "$SMOKE_DIR/fetch-smoke.exe" "$SMOKE_DIR/fixture.js"
+          test -f "$SMOKE_DIR/fetch-smoke.exe" \
+            || { echo "::error::public cross-target launcher fetch produced no artifact"; exit 1; }
+          test -f "$CACHE_LAUNCHER" \
+            || { echo "::error::public launcher fetch did not create the versioned cache entry"; exit 1; }
+          cmp -s "$CACHE_LAUNCHER" "$SMOKE_DIR/dl/nub-launcher-win32-x64.exe" \
+            || { echo "::error::public launcher cache bytes differ from the release asset"; exit 1; }
+          echo "✓ copied packaged CLI fetched the public $TAG win32-x64 template (no sibling fallback)"
 
   actions-tag:
     name: Move the floating actions tag
